@@ -6,8 +6,8 @@ question:
 > Can a Xiaomi 17-class HyperOS device act as a reliable dual-SIM cellular SMS
 > gateway?
 
-The POC does not contain cloud transport, iOS, end-to-end encryption, AI, MCP,
-contacts, MMS processing, or SMS history import.
+The POC does not contain a real cloud endpoint, iOS, end-to-end encryption,
+AI, MCP, contacts, MMS processing, or SMS history import.
 
 ## Implemented capabilities
 
@@ -34,6 +34,11 @@ contacts, MMS processing, or SMS history import.
 - Engineering UI with Dashboard, Incoming, Send, and Diagnostics pages.
 - Battery optimization, background restriction, standby bucket, permission,
   default SMS role, build, and device diagnostics.
+- Transactional local Outbox creation for each newly persisted inbound SMS.
+- SHA-256 idempotency keys that distinguish the two physical SIM lines.
+- WorkManager scheduling, retry state, exponential backoff, stale-attempt
+  recovery, and process-start recovery.
+- A no-network Mock Transport and local Outbox self-test.
 
 ## Data and safety boundaries
 
@@ -41,6 +46,9 @@ contacts, MMS processing, or SMS history import.
 - No cloud endpoint exists.
 - `READ_SMS` is not requested.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
+- The local Outbox contains a second serialized copy of an inbound event until
+  it is cleared. The UI clear operation deletes incoming, outgoing, and Outbox
+  data together.
 - Android backup and device-transfer backup are disabled for the application.
 - The Diagnostics page exposes intent extra names, types, and safe scalar
   values, but does not stringify raw SMS PDU byte arrays.
@@ -124,3 +132,22 @@ auto-start AppOps require the separate read-only acceptance check:
 See [docs/DEPLOYMENT_READINESS.md](docs/DEPLOYMENT_READINESS.md) for the
 post-install/update acceptance procedure and the boundary between verified
 device state and the explicit managed-process assumption.
+
+## Phase 2 local Outbox
+
+The first Phase 2 slice is deliberately local-only:
+
+```text
+Inbound receiver
+  -> one Room transaction: IncomingSmsEvent + OutboxEvent
+  -> WorkManager
+  -> Mock Transport
+  -> SUCCESS / RETRY / FAILED persisted in Room
+```
+
+No `INTERNET` permission is declared and the Mock Transport performs no network
+request. From Diagnostics, **Run local Outbox self-test (no network)** verifies
+the runtime queue without sending an SMS or exposing stored SMS content.
+
+See [docs/PHASE2_OUTBOX_REPORT.md](docs/PHASE2_OUTBOX_REPORT.md) for the design,
+failure handling, and verified device evidence.

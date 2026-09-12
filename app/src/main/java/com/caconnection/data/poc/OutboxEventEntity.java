@@ -10,27 +10,27 @@ public class OutboxEventEntity {
     @PrimaryKey
     @NonNull
     public String eventId;
-    
+
     @NonNull
     public String idempotencyKey;
-    
+
     @NonNull
     public String incomingEventId;
-    
+
     @NonNull
     public String status; // PENDING, IN_PROGRESS, SUCCESS, RETRY, FAILED
-    
+
     public int retryCount;
     public long nextRetryAt;
     public long createdAt;
     public long updatedAt;
-    
+
     public Integer subscriptionId;
     public Integer slotIndex;
-    
+
     public String payloadType; // INCOMING_SMS
     public String payloadData; // JSON serialized payload
-    
+
     public String lastError;
     public Integer lastResultCode;
 

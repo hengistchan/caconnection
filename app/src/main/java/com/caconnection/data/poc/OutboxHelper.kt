@@ -1,60 +1,80 @@
 package com.caconnection.data.poc
 
 import com.google.gson.Gson
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.UUID
 
-/**
- * Helper class for creating and managing outbox events.
- */
 object OutboxHelper {
-    
     private val gson = Gson()
-    
+
     /**
-     * Create an outbox event for an incoming SMS.
-     * Must be called within a database transaction with the incoming event.
+     * Creates the upload record that is committed in the same Room
+     * transaction as its incoming SMS event.
      */
     fun createOutboxForIncoming(incomingEvent: IncomingSmsEventEntity): OutboxEventEntity {
-        val idempotencyKey = generateIdempotencyKey(incomingEvent)
-        val payload = IncomingSmsPayload.fromEntity(incomingEvent)
-        val payloadJson = gson.toJson(payload)
-        
+        val now = System.currentTimeMillis()
         return OutboxEventEntity(
-            UUID.randomUUID().toString(), // eventId
-            idempotencyKey, // idempotencyKey
-            incomingEvent.eventId, // incomingEventId
-            "PENDING", // status
-            0, // retryCount
-            System.currentTimeMillis(), // nextRetryAt
-            System.currentTimeMillis(), // createdAt
-            System.currentTimeMillis(), // updatedAt
-            incomingEvent.resolvedSubscriptionId, // subscriptionId
-            incomingEvent.resolvedSlotIndex, // slotIndex
-            "INCOMING_SMS", // payloadType
-            payloadJson, // payloadData
-            null, // lastError
-            null // lastResultCode
+            UUID.randomUUID().toString(),
+            generateIdempotencyKey(incomingEvent),
+            incomingEvent.eventId,
+            OutboxStatus.PENDING.name,
+            0,
+            now,
+            now,
+            now,
+            incomingEvent.resolvedSubscriptionId,
+            incomingEvent.resolvedSlotIndex,
+            "INCOMING_SMS",
+            gson.toJson(IncomingSmsPayload.fromEntity(incomingEvent)),
+            null,
+            null
         )
     }
-    
+
+    fun createLocalSelfTest(): OutboxEventEntity {
+        val now = System.currentTimeMillis()
+        val eventId = UUID.randomUUID().toString()
+        return OutboxEventEntity(
+            eventId,
+            "selftest_$eventId",
+            "SELF_TEST",
+            OutboxStatus.PENDING.name,
+            0,
+            now,
+            now,
+            now,
+            null,
+            null,
+            "LOCAL_SELF_TEST",
+            """{"type":"LOCAL_SELF_TEST","createdAt":$now}""",
+            null,
+            null
+        )
+    }
+
     /**
-     * Generate idempotency key for an incoming SMS event.
-     * Key is based on: originating address + received timestamp + body hash
-     * This prevents duplicate processing of the same SMS.
+     * The full SHA-256 digest avoids the silent collision risk of Java's
+     * 32-bit hashCode. Slot/subscription are included so identical content
+     * received by two physical lines is not collapsed.
      */
     private fun generateIdempotencyKey(event: IncomingSmsEventEntity): String {
-        val keyComponents = listOf(
-            event.originatingAddress ?: "",
+        val canonical = listOf(
+            event.originatingAddress.orEmpty(),
             event.receivedAt.toString(),
-            event.body?.hashCode()?.toString() ?: ""
-        )
-        val rawKey = keyComponents.joinToString("|")
-        return "sms_${rawKey.hashCode().toString(16)}"
+            event.body.orEmpty(),
+            event.partCount.toString(),
+            event.resolvedSubscriptionId?.toString().orEmpty(),
+            event.resolvedSlotIndex?.toString().orEmpty()
+        ).joinToString(separator = "") { value ->
+            "${value.toByteArray(StandardCharsets.UTF_8).size}:$value"
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(StandardCharsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte) }
+        return "sms_$digest"
     }
-    
-    /**
-     * Data class representing the payload for an incoming SMS.
-     */
+
     data class IncomingSmsPayload(
         val eventId: String,
         val originatingAddress: String?,
@@ -67,8 +87,8 @@ object OutboxHelper {
         val resolutionConfidence: String?
     ) {
         companion object {
-            fun fromEntity(entity: IncomingSmsEventEntity): IncomingSmsPayload {
-                return IncomingSmsPayload(
+            fun fromEntity(entity: IncomingSmsEventEntity): IncomingSmsPayload =
+                IncomingSmsPayload(
                     eventId = entity.eventId,
                     originatingAddress = entity.originatingAddress,
                     body = entity.body,
@@ -79,7 +99,14 @@ object OutboxHelper {
                     resolutionMethod = entity.resolutionMethod,
                     resolutionConfidence = entity.resolutionConfidence
                 )
-            }
         }
     }
+}
+
+enum class OutboxStatus {
+    PENDING,
+    IN_PROGRESS,
+    SUCCESS,
+    RETRY,
+    FAILED
 }

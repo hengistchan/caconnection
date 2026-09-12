@@ -49,11 +49,11 @@ public interface PocDao {
     @Update
     void updateOutbox(OutboxEventEntity event);
 
-    @Query("SELECT * FROM outbox_events WHERE status = 'PENDING' AND nextRetryAt <= :currentTime ORDER BY createdAt ASC LIMIT :limit")
-    List<OutboxEventEntity> getPendingOutboxEvents(long currentTime, int limit);
+    @Query("SELECT * FROM outbox_events WHERE status IN ('PENDING', 'RETRY') AND nextRetryAt <= :currentTime ORDER BY nextRetryAt ASC, createdAt ASC LIMIT :limit")
+    List<OutboxEventEntity> getReadyOutboxEvents(long currentTime, int limit);
 
-    @Query("SELECT * FROM outbox_events WHERE status = 'RETRY' AND nextRetryAt <= :currentTime ORDER BY nextRetryAt ASC LIMIT :limit")
-    List<OutboxEventEntity> getRetryOutboxEvents(long currentTime, int limit);
+    @Query("UPDATE outbox_events SET status = 'IN_PROGRESS', updatedAt = :now WHERE eventId = :eventId AND status IN ('PENDING', 'RETRY') AND nextRetryAt <= :now")
+    int claimReadyOutbox(String eventId, long now);
 
     @Query("SELECT * FROM outbox_events WHERE eventId = :eventId LIMIT 1")
     OutboxEventEntity findOutbox(String eventId);
@@ -64,6 +64,18 @@ public interface PocDao {
     @Query("SELECT * FROM outbox_events WHERE status = 'PENDING' OR status = 'RETRY'")
     List<OutboxEventEntity> getAllPendingOutboxEvents();
 
+    @Query("SELECT * FROM outbox_events ORDER BY createdAt DESC LIMIT :limit")
+    List<OutboxEventEntity> getLatestOutboxEvents(int limit);
+
+    @Query("SELECT MIN(nextRetryAt) FROM outbox_events WHERE status IN ('PENDING', 'RETRY')")
+    Long getEarliestScheduledOutboxAt();
+
+    @Query("UPDATE outbox_events SET status = 'RETRY', nextRetryAt = :now, updatedAt = :now, lastError = 'Recovered interrupted delivery attempt' WHERE status = 'IN_PROGRESS' AND updatedAt <= :staleBefore")
+    int recoverStaleInProgress(long staleBefore, long now);
+
     @Query("DELETE FROM outbox_events WHERE status = 'SUCCESS'")
     void clearSuccessfulOutboxEvents();
+
+    @Query("DELETE FROM outbox_events")
+    void clearOutbox();
 }

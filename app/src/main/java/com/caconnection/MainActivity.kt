@@ -146,6 +146,14 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.clear_button).setOnClickListener {
             eventStore.clearEvents { runOnUiThread { refreshStoredEvents() } }
         }
+        findViewById<Button>(R.id.outbox_test_button).setOnClickListener {
+            eventStore.enqueueOutboxSelfTest {
+                runOnUiThread {
+                    toast("Local Outbox self-test queued")
+                    refreshStoredEvents()
+                }
+            }
+        }
     }
 
     private fun applyIntent(intent: Intent?) {
@@ -157,6 +165,7 @@ class MainActivity : AppCompatActivity() {
                 showPage(PAGE_SEND)
             }
         when (intent.getStringExtra(EXTRA_OPEN_PAGE)) {
+            PAGE_DASHBOARD -> showPage(PAGE_DASHBOARD)
             PAGE_INCOMING -> showPage(PAGE_INCOMING)
             PAGE_SEND -> showPage(PAGE_SEND)
             PAGE_DIAGNOSTICS -> showPage(PAGE_DIAGNOSTICS)
@@ -183,11 +192,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshStoredEvents() {
-        eventStore.loadLatest { subscriptions, incoming, outgoing ->
+        eventStore.loadLatest { subscriptions, incoming, outgoing, outbox ->
             runOnUiThread {
                 renderIncoming(incoming)
                 renderOutgoing(outgoing)
-                updateDashboard(subscriptions, incoming, outgoing)
+                updateDashboard(subscriptions, incoming, outgoing, outbox)
                 diagnosticsText.text = buildString {
                     append(TelephonyDiagnostics(this@MainActivity).report())
                     appendLine()
@@ -217,7 +226,8 @@ class MainActivity : AppCompatActivity() {
     private fun updateDashboard(
         storedSubscriptions: List<SubscriptionSnapshotEntity> = emptyList(),
         incoming: List<IncomingSmsEventEntity> = emptyList(),
-        outgoing: List<OutgoingSmsEventEntity> = emptyList()
+        outgoing: List<OutgoingSmsEventEntity> = emptyList(),
+        outbox: List<com.caconnection.data.poc.OutboxEventEntity> = emptyList()
     ) {
         val roleHeld = SmsRoleController(this).isRoleHeld()
         val receiverGranted = isGranted(Manifest.permission.RECEIVE_SMS)
@@ -297,6 +307,14 @@ class MainActivity : AppCompatActivity() {
             appendLine("Default SMS role    ${if (roleHeld) "YES" else "NO"}")
             appendLine("Incoming captured   ${incoming.size}")
             appendLine("Outgoing attempts   ${outgoing.size}")
+            appendLine("Outbox events       ${outbox.size}")
+            if (outbox.isNotEmpty()) {
+                appendLine(
+                    "Outbox status       " +
+                        outbox.groupingBy { it.status }.eachCount()
+                            .entries.joinToString { "${it.key}=${it.value}" }
+                )
+            }
             appendLine()
             appendLine(
                 "Run tools/gateway-readiness.sh for the complete " +

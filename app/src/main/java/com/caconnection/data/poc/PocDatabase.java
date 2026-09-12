@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
 )
 public abstract class PocDatabase extends RoomDatabase {
     private static volatile PocDatabase instance;
-    
+
     static final Migration MIGRATION_1_2 = new Migration(1, 2) {
         @Override
         public void migrate(SupportSQLiteDatabase database) {
@@ -43,7 +43,7 @@ public abstract class PocDatabase extends RoomDatabase {
                 "`lastResultCode` INTEGER, " +
                 "PRIMARY KEY(`eventId`))"
             );
-            
+
             // Create unique index on idempotencyKey
             database.execSQL(
                 "CREATE UNIQUE INDEX IF NOT EXISTS `index_outbox_events_idempotencyKey` " +

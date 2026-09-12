@@ -14,6 +14,7 @@
     <string name="send_selected_sim">Send using selected SIM</string>
     <string name="outgoing_events">Outgoing status events</string>
     <string name="clear_poc_events">Clear local POC events</string>
+    <string name="run_outbox_self_test">Run local Outbox self-test (no network)</string>
     <string name="notification_channel_name">Incoming SMS POC</string>
     <string name="notification_channel_description">Notifications for SMS events captured by the gateway POC</string>
 </resources>

@@ -4,10 +4,10 @@ package com.caconnection.transport
  * Interface for transmitting events to a remote endpoint.
  * Implementations should be stateless and thread-safe.
  */
-interface Transport {
+fun interface Transport {
     /**
      * Send an event to the remote endpoint.
-     * 
+     *
      * @param payload The serialized event data to send
      * @param idempotencyKey Unique key to prevent duplicate processing
      * @return TransportResult indicating success or failure
@@ -21,8 +21,8 @@ interface Transport {
 sealed class TransportResult {
     /** Event was successfully delivered and acknowledged. */
     object Success : TransportResult()
-    
-    /** 
+
+    /**
      * Temporary failure - event should be retried later.
      * @param retryAfterMillis Suggested delay before retry, or null for exponential backoff
      */
@@ -30,8 +30,8 @@ sealed class TransportResult {
         val error: String,
         val retryAfterMillis: Long? = null
     ) : TransportResult()
-    
-    /** 
+
+    /**
      * Permanent failure - event should not be retried.
      * @param error Description of the failure
      * @param errorCode Optional error code from the remote endpoint

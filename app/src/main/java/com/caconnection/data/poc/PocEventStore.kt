@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.telephony.SmsManager
 import com.caconnection.telephony.inbound.DefaultSmsProviderWriter
+import com.caconnection.worker.OutboxScheduler
 import java.util.concurrent.Executors
 
 class PocEventStore private constructor(private val context: Context) {
@@ -31,17 +32,24 @@ class PocEventStore private constructor(private val context: Context) {
             onComplete?.invoke()
         }
     }
-    
+
     fun insertIncomingWithOutbox(event: IncomingSmsEventEntity, onComplete: (() -> Unit)? = null) {
         executor.execute {
             database.runInTransaction {
-                // Insert the incoming event
                 dao.insertIncoming(event)
-                
-                // Create and insert the outbox event in the same transaction
                 val outboxEvent = OutboxHelper.createOutboxForIncoming(event)
                 dao.insertOutbox(outboxEvent)
             }
+            OutboxScheduler.enqueueNow(context)
+            notifyChanged()
+            onComplete?.invoke()
+        }
+    }
+
+    fun enqueueOutboxSelfTest(onComplete: (() -> Unit)? = null) {
+        executor.execute {
+            dao.insertOutbox(OutboxHelper.createLocalSelfTest())
+            OutboxScheduler.enqueueNow(context)
             notifyChanged()
             onComplete?.invoke()
         }
@@ -125,13 +133,20 @@ class PocEventStore private constructor(private val context: Context) {
     fun loadLatest(
         incomingLimit: Int = 50,
         outgoingLimit: Int = 50,
-        callback: (List<SubscriptionSnapshotEntity>, List<IncomingSmsEventEntity>, List<OutgoingSmsEventEntity>) -> Unit
+        outboxLimit: Int = 50,
+        callback: (
+            List<SubscriptionSnapshotEntity>,
+            List<IncomingSmsEventEntity>,
+            List<OutgoingSmsEventEntity>,
+            List<OutboxEventEntity>
+        ) -> Unit
     ) {
         executor.execute {
             callback(
                 dao.getSubscriptions(),
                 dao.getLatestIncoming(incomingLimit),
-                dao.getLatestOutgoing(outgoingLimit)
+                dao.getLatestOutgoing(outgoingLimit),
+                dao.getLatestOutboxEvents(outboxLimit)
             )
         }
     }
@@ -141,6 +156,9 @@ class PocEventStore private constructor(private val context: Context) {
             database.runInTransaction {
                 dao.clearIncoming()
                 dao.clearOutgoing()
+                // Outbox rows contain copies of sender/body data and must
+                // follow the same user-visible clear operation.
+                dao.clearOutbox()
             }
             notifyChanged()
             onComplete?.invoke()
