@@ -50,7 +50,7 @@ object IncomingSmsProcessor {
                     onComplete()
                 } else {
                     val (event, shouldNotify) = result
-                    PocEventStore.get(context).insertIncoming(event) {
+                    PocEventStore.get(context).insertIncomingWithOutbox(event) {
                         if (shouldNotify) NotificationHelper.notifyIncoming(context, event)
                         onComplete()
                     }

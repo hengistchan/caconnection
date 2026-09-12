@@ -42,4 +42,28 @@ public interface PocDao {
 
     @Query("DELETE FROM outgoing_sms_events")
     void clearOutgoing();
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    void insertOutbox(OutboxEventEntity event);
+
+    @Update
+    void updateOutbox(OutboxEventEntity event);
+
+    @Query("SELECT * FROM outbox_events WHERE status = 'PENDING' AND nextRetryAt <= :currentTime ORDER BY createdAt ASC LIMIT :limit")
+    List<OutboxEventEntity> getPendingOutboxEvents(long currentTime, int limit);
+
+    @Query("SELECT * FROM outbox_events WHERE status = 'RETRY' AND nextRetryAt <= :currentTime ORDER BY nextRetryAt ASC LIMIT :limit")
+    List<OutboxEventEntity> getRetryOutboxEvents(long currentTime, int limit);
+
+    @Query("SELECT * FROM outbox_events WHERE eventId = :eventId LIMIT 1")
+    OutboxEventEntity findOutbox(String eventId);
+
+    @Query("SELECT * FROM outbox_events WHERE idempotencyKey = :idempotencyKey LIMIT 1")
+    OutboxEventEntity findOutboxByIdempotencyKey(String idempotencyKey);
+
+    @Query("SELECT * FROM outbox_events WHERE status = 'PENDING' OR status = 'RETRY'")
+    List<OutboxEventEntity> getAllPendingOutboxEvents();
+
+    @Query("DELETE FROM outbox_events WHERE status = 'SUCCESS'")
+    void clearSuccessfulOutboxEvents();
 }

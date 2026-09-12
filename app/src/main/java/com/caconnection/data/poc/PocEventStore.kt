@@ -31,6 +31,21 @@ class PocEventStore private constructor(private val context: Context) {
             onComplete?.invoke()
         }
     }
+    
+    fun insertIncomingWithOutbox(event: IncomingSmsEventEntity, onComplete: (() -> Unit)? = null) {
+        executor.execute {
+            database.runInTransaction {
+                // Insert the incoming event
+                dao.insertIncoming(event)
+                
+                // Create and insert the outbox event in the same transaction
+                val outboxEvent = OutboxHelper.createOutboxForIncoming(event)
+                dao.insertOutbox(outboxEvent)
+            }
+            notifyChanged()
+            onComplete?.invoke()
+        }
+    }
 
     fun insertOutgoingAndDispatch(event: OutgoingSmsEventEntity, dispatch: () -> Unit) {
         executor.execute {
