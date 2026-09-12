@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/poc_title"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            style="?android:attr/buttonBarStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                style="?android:attr/buttonBarButtonStyle"
+                android:id="@+id/nav_dashboard"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/dashboard" />
+
+            <Button
+                style="?android:attr/buttonBarButtonStyle"
+                android:id="@+id/nav_incoming"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/incoming" />
+
+            <Button
+                style="?android:attr/buttonBarButtonStyle"
+                android:id="@+id/nav_send"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/send" />
+
+            <Button
+                style="?android:attr/buttonBarButtonStyle"
+                android:id="@+id/nav_diagnostics"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/diagnostics" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ScrollView
+            android:id="@+id/page_dashboard"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/dashboard_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:paddingVertical="12dp"
+                    android:textIsSelectable="true" />
+
+                <Button
+                    android:id="@+id/refresh_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/refresh_probe" />
+
+                <Button
+                    android:id="@+id/permission_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/grant_permissions" />
+
+                <Button
+                    android:id="@+id/role_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/request_sms_role" />
+
+                <Button
+                    android:id="@+id/battery_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/open_app_settings" />
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/page_incoming"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/incoming_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:fontFamily="monospace"
+                android:paddingVertical="12dp"
+                android:textIsSelectable="true" />
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/page_send"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <EditText
+                    android:id="@+id/recipient_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/recipient"
+                    android:importantForAutofill="no"
+                    android:inputType="phone" />
+
+                <EditText
+                    android:id="@+id/message_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="120dp"
+                    android:gravity="top|start"
+                    android:hint="@string/message"
+                    android:importantForAutofill="no"
+                    android:inputType="textCapSentences|textMultiLine" />
+
+                <Spinner
+                    android:id="@+id/sim_spinner"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp" />
+
+                <Button
+                    android:id="@+id/send_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/send_selected_sim" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingTop="16dp"
+                    android:text="@string/outgoing_events"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/outgoing_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:paddingVertical="12dp"
+                    android:textIsSelectable="true" />
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/page_diagnostics"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/diagnostics_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:paddingVertical="12dp"
+                    android:textIsSelectable="true" />
+
+                <Button
+                    android:id="@+id/clear_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/clear_poc_events" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+</LinearLayout>

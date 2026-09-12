@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace = 'com.caconnection'
+    compileSdk = 37
+
+    defaultConfig {
+        applicationId = "com.caconnection"
+        minSdk = 31
+        versionCode = 1
+        versionName = "0.1.0-poc"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas"]
+            }
+        }
+    }
+
+    flavorDimensions += "targetApi"
+    productFlavors {
+        sdk36 {
+            dimension = "targetApi"
+            targetSdk = 36
+            versionNameSuffix = "-target36"
+            buildConfigField("String", "POC_BUILD", '"targetSdk 36"')
+            manifestPlaceholders = [appLabel: "CA Gateway POC 36"]
+        }
+        sdk37 {
+            dimension = "targetApi"
+            targetSdk = 37
+            versionNameSuffix = "-target37"
+            buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
+            manifestPlaceholders = [appLabel: "CA Gateway POC 37"]
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
+        release {
+            minifyEnabled = false
+            proguardFiles(getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro')
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+
+    lint {
+        // AGP 9.4 supports Gradle up to 9.6; keep the wrapper inside that range.
+        disable += "AndroidGradlePluginVersion"
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.19.0'
+    implementation 'androidx.appcompat:appcompat:1.8.0'
+    implementation 'com.google.android.material:material:1.14.0'
+    implementation 'androidx.room:room-runtime:2.8.5'
+    annotationProcessor 'androidx.room:room-compiler:2.8.5'
+
+    testImplementation 'junit:junit:4.13.2'
+}

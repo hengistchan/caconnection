@@ -1,0 +1,283 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "5377e9f41ad6aac0b1d34516f74b80b9",
+    "entities": [
+      {
+        "tableName": "subscription_snapshots",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `capturedAt` INTEGER NOT NULL, `subscriptionId` INTEGER NOT NULL, `slotIndex` INTEGER NOT NULL, `displayName` TEXT, `carrierName` TEXT, `countryIso` TEXT, `embedded` INTEGER NOT NULL, `opportunistic` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "capturedAt",
+            "columnName": "capturedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "subscriptionId",
+            "columnName": "subscriptionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slotIndex",
+            "columnName": "slotIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "carrierName",
+            "columnName": "carrierName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "countryIso",
+            "columnName": "countryIso",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "embedded",
+            "columnName": "embedded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "opportunistic",
+            "columnName": "opportunistic",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "incoming_sms_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `action` TEXT, `originatingAddress` TEXT, `body` TEXT, `receivedAt` INTEGER NOT NULL, `persistedAt` INTEGER NOT NULL, `partCount` INTEGER NOT NULL, `resolvedSubscriptionId` INTEGER, `resolvedSlotIndex` INTEGER, `resolutionMethod` TEXT, `resolutionConfidence` TEXT, `resolutionNotes` TEXT, `rawExtras` TEXT, `providerWriteStatus` TEXT, `providerUri` TEXT, `providerWriteError` TEXT, PRIMARY KEY(`eventId`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "originatingAddress",
+            "columnName": "originatingAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "receivedAt",
+            "columnName": "receivedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "persistedAt",
+            "columnName": "persistedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "partCount",
+            "columnName": "partCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "resolvedSubscriptionId",
+            "columnName": "resolvedSubscriptionId",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "resolvedSlotIndex",
+            "columnName": "resolvedSlotIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "resolutionMethod",
+            "columnName": "resolutionMethod",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "resolutionConfidence",
+            "columnName": "resolutionConfidence",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "resolutionNotes",
+            "columnName": "resolutionNotes",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rawExtras",
+            "columnName": "rawExtras",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerWriteStatus",
+            "columnName": "providerWriteStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerUri",
+            "columnName": "providerUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerWriteError",
+            "columnName": "providerWriteError",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        }
+      },
+      {
+        "tableName": "outgoing_sms_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `recipient` TEXT, `body` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `requestedSubscriptionId` INTEGER NOT NULL, `requestedSlotIndex` INTEGER NOT NULL, `requestedCarrierName` TEXT, `status` TEXT, `partCount` INTEGER NOT NULL, `sentPartCount` INTEGER NOT NULL, `deliveredPartCount` INTEGER NOT NULL, `failedPartCount` INTEGER NOT NULL, `lastResultCode` INTEGER, `errorDetail` TEXT, `providerWriteStatus` TEXT, `providerUri` TEXT, `providerWriteError` TEXT, PRIMARY KEY(`eventId`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "recipient",
+            "columnName": "recipient",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestedSubscriptionId",
+            "columnName": "requestedSubscriptionId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestedSlotIndex",
+            "columnName": "requestedSlotIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestedCarrierName",
+            "columnName": "requestedCarrierName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "partCount",
+            "columnName": "partCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sentPartCount",
+            "columnName": "sentPartCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deliveredPartCount",
+            "columnName": "deliveredPartCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failedPartCount",
+            "columnName": "failedPartCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastResultCode",
+            "columnName": "lastResultCode",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "errorDetail",
+            "columnName": "errorDetail",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerWriteStatus",
+            "columnName": "providerWriteStatus",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerUri",
+            "columnName": "providerUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "providerWriteError",
+            "columnName": "providerWriteError",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '5377e9f41ad6aac0b1d34516f74b80b9')"
+    ]
+  }
+}

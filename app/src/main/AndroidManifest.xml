@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="true"
+        tools:ignore="UnnecessaryRequiredFeature" />
+
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Declared only so Path B can satisfy system WAP delivery requirements.
+         The POC never requests these before the user grants ROLE_SMS and it
+         deliberately does not process or persist MMS payloads. -->
+    <uses-permission android:name="android.permission.RECEIVE_MMS" />
+    <uses-permission android:name="android.permission.RECEIVE_WAP_PUSH" />
+    <application
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="${appLabel}"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Required entry point for default SMS role qualification. -->
+        <activity
+            android:name=".telephony.smsrole.ComposeSmsActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SENDTO" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </activity>
+
+        <!-- Path A: non-default app observation. -->
+        <receiver
+            android:name=".telephony.inbound.SmsReceivedReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Path B: authoritative delivery available only while holding ROLE_SMS. -->
+        <receiver
+            android:name=".telephony.inbound.SmsDeliverReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.SMS_DELIVER" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Required for ROLE_SMS qualification; MMS is intentionally not processed in Phase 1. -->
+        <receiver
+            android:name=".telephony.smsrole.MmsDeliverReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_WAP_PUSH">
+            <intent-filter>
+                <action android:name="android.provider.Telephony.WAP_PUSH_DELIVER" />
+                <data android:mimeType="application/vnd.wap.mms-message" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".telephony.outbound.SmsSentReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".telephony.outbound.SmsDeliveryReceiver"
+            android:exported="false" />
+
+        <service
+            android:name=".telephony.smsrole.RespondViaMessageService"
+            android:exported="true"
+            android:permission="android.permission.SEND_RESPOND_VIA_MESSAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.RESPOND_VIA_MESSAGE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="sms" />
+                <data android:scheme="smsto" />
+                <data android:scheme="mms" />
+                <data android:scheme="mmsto" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>
