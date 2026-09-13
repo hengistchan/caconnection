@@ -139,6 +139,40 @@ class OutboxHelperTest {
         assertTrue(!outbox.payloadData.contains("caller"))
     }
 
+    @Test
+    fun callIdentityPayloadContainsCallerAndResolvedSim() {
+        val event = CallIdentityEventEntity(
+            "identity-event",
+            "telecom-id-hash",
+            "+15551234567",
+            "Network supplied name",
+            1,
+            1,
+            "2",
+            2,
+            1,
+            "PHONE_ACCOUNT_ID",
+            "HIGH",
+            "Exact match",
+            1,
+            3_000L,
+            3_010L,
+            "ALLOW"
+        )
+
+        val outbox = OutboxHelper.createOutboxForCallIdentity(event)
+
+        assertTrue(
+            outbox.idempotencyKey.matches(Regex("call_identity_[0-9a-f]{64}"))
+        )
+        assertEquals("CALL_IDENTITY", outbox.payloadType)
+        assertEquals(2, outbox.subscriptionId)
+        assertEquals(1, outbox.slotIndex)
+        assertTrue(outbox.payloadData.contains("+15551234567"))
+        assertTrue(outbox.payloadData.contains("\"decision\":\"ALLOW\""))
+        assertTrue(outbox.payloadData.contains("\"resolutionConfidence\":\"HIGH\""))
+    }
+
     private fun incoming(
         eventId: String = UUID.randomUUID().toString(),
         originatingAddress: String = "+1234567890",

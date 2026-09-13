@@ -47,6 +47,12 @@ AI, MCP, contacts, MMS processing, or SMS history import.
   SIM subscription.
 - Per-SIM `RINGING` / `OFFHOOK` / `IDLE` events and local Outbox delivery,
   without caller number collection or a call-screening role.
+- Optional user-granted call-screening role for future incoming caller
+  addresses. The service always allows calls and never rejects, silences,
+  hides, or removes them from the system call log.
+- Direct SIM resolution from `PhoneAccountHandle.id` plus a conservative
+  fallback that correlates the screening callback with exactly one recent
+  per-SIM active-call callback.
 
 ## Data and safety boundaries
 
@@ -56,8 +62,12 @@ AI, MCP, contacts, MMS processing, or SMS history import.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
 - Notification content is not stored. Only source package, timing, channel,
   category, visibility flags, and content lengths are retained.
-- Call events contain state and SIM attribution only. Caller identity is not
-  requested or stored.
+- Phase 3A call-state events contain state and SIM attribution only.
+- After the user explicitly grants the Phase 3B call-screening role, incoming
+  caller address and any network-supplied display name are sensitive local POC
+  data and are copied into the local Outbox. They are never written to logs or
+  engineering reports.
+- Call history and contacts are not read.
 - The local Outbox contains a second serialized copy of an inbound event until
   it is cleared. The UI clear operation deletes incoming, outgoing, and Outbox
   data together.
@@ -188,3 +198,23 @@ Android may redact sensitive notification content before it reaches an
 untrusted notification listener. Raw SMS reception remains the OTP path.
 
 See [docs/PHASE3_SIGNALS_REPORT.md](docs/PHASE3_SIGNALS_REPORT.md).
+
+## Phase 3B incoming caller identity
+
+The optional caller-ID path is:
+
+```text
+User grants ROLE_CALL_SCREENING
+  -> CallScreeningService
+  -> immediate ALLOW response
+  -> caller address + SIM resolution
+  -> CallIdentityEvent + OutboxEvent
+  -> Mock Transport
+```
+
+The app remains neither the default dialer nor the default SMS app. It does not
+declare `READ_CALL_LOG` or `READ_CONTACTS`, and it does not use the screening
+role to block calls. Full caller addresses are visible only in the local
+`Signals` page and local POC storage.
+
+See [docs/PHASE3B_CALLER_ID_REPORT.md](docs/PHASE3B_CALLER_ID_REPORT.md).

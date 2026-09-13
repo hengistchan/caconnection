@@ -85,6 +85,21 @@ class PocEventStore private constructor(private val context: Context) {
         }
     }
 
+    fun insertCallIdentityWithOutbox(
+        event: CallIdentityEventEntity,
+        onComplete: (() -> Unit)? = null
+    ) {
+        executor.execute {
+            database.runInTransaction {
+                dao.insertCallIdentity(event)
+                dao.insertOutbox(OutboxHelper.createOutboxForCallIdentity(event))
+            }
+            OutboxScheduler.enqueueNow(context)
+            notifyChanged()
+            onComplete?.invoke()
+        }
+    }
+
     fun insertOutgoingAndDispatch(event: OutgoingSmsEventEntity, dispatch: () -> Unit) {
         executor.execute {
             dao.insertOutgoing(event)
@@ -165,6 +180,7 @@ class PocEventStore private constructor(private val context: Context) {
         outgoingLimit: Int = 50,
         notificationLimit: Int = 50,
         callLimit: Int = 50,
+        callIdentityLimit: Int = 50,
         outboxLimit: Int = 50,
         callback: (
             List<SubscriptionSnapshotEntity>,
@@ -172,6 +188,7 @@ class PocEventStore private constructor(private val context: Context) {
             List<OutgoingSmsEventEntity>,
             List<NotificationEventEntity>,
             List<CallEventEntity>,
+            List<CallIdentityEventEntity>,
             List<OutboxEventEntity>
         ) -> Unit
     ) {
@@ -182,6 +199,7 @@ class PocEventStore private constructor(private val context: Context) {
                 dao.getLatestOutgoing(outgoingLimit),
                 dao.getLatestNotifications(notificationLimit),
                 dao.getLatestCalls(callLimit),
+                dao.getLatestCallIdentities(callIdentityLimit),
                 dao.getLatestOutboxEvents(outboxLimit)
             )
         }
@@ -194,6 +212,7 @@ class PocEventStore private constructor(private val context: Context) {
                 dao.clearOutgoing()
                 dao.clearNotifications()
                 dao.clearCalls()
+                dao.clearCallIdentities()
                 // Outbox rows contain copies of sender/body data and must
                 // follow the same user-visible clear operation.
                 dao.clearOutbox()

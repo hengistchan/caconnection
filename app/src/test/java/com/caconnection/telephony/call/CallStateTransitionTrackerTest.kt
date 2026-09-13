@@ -70,4 +70,27 @@ class CallStateTransitionTrackerTest {
         assertEquals(1, sim2?.slotIndex)
         assertTrue(sim1?.sessionId != sim2?.sessionId)
     }
+
+    @Test
+    fun recentActiveCallFallbackResolvesOneSimButNeverGuessesBetweenTwo() {
+        val tracker = RecentActiveCallTracker()
+        tracker.record(2, 1, TelephonyManager.CALL_STATE_RINGING, 1_000L)
+
+        val one = tracker.resolve(1_130L)
+        assertEquals(2, one?.subscriptionId)
+        assertEquals(1, one?.slotIndex)
+        assertEquals("ACTIVE_CALL_STATE_CORRELATION", one?.method)
+        assertEquals("MEDIUM", one?.confidence)
+
+        tracker.record(1, 0, TelephonyManager.CALL_STATE_RINGING, 1_100L)
+        assertNull(tracker.resolve(1_200L))
+    }
+
+    @Test
+    fun recentActiveCallFallbackExpiresOldState() {
+        val tracker = RecentActiveCallTracker()
+        tracker.record(1, 0, TelephonyManager.CALL_STATE_RINGING, 1_000L)
+
+        assertNull(tracker.resolve(7_000L, maxAgeMillis = 5_000L))
+    }
 }

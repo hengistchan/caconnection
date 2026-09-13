@@ -15,9 +15,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 OutgoingSmsEventEntity.class,
                 NotificationEventEntity.class,
                 CallEventEntity.class,
+                CallIdentityEventEntity.class,
                 OutboxEventEntity.class
         },
-        version = 3,
+        version = 4,
         exportSchema = true
 )
 public abstract class PocDatabase extends RoomDatabase {
@@ -90,6 +91,32 @@ public abstract class PocDatabase extends RoomDatabase {
         }
     };
 
+    static final Migration MIGRATION_3_4 = new Migration(3, 4) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `call_identity_events` (" +
+                "`eventId` TEXT NOT NULL, " +
+                "`telecomCallIdHash` TEXT, " +
+                "`callerAddress` TEXT, " +
+                "`callerDisplayName` TEXT, " +
+                "`handlePresentation` INTEGER NOT NULL, " +
+                "`displayNamePresentation` INTEGER NOT NULL, " +
+                "`phoneAccountId` TEXT, " +
+                "`resolvedSubscriptionId` INTEGER, " +
+                "`resolvedSlotIndex` INTEGER, " +
+                "`resolutionMethod` TEXT, " +
+                "`resolutionConfidence` TEXT, " +
+                "`resolutionNotes` TEXT, " +
+                "`verificationStatus` INTEGER NOT NULL, " +
+                "`observedAt` INTEGER NOT NULL, " +
+                "`respondedAt` INTEGER NOT NULL, " +
+                "`decision` TEXT NOT NULL, " +
+                "PRIMARY KEY(`eventId`))"
+            );
+        }
+    };
+
     public abstract PocDao pocDao();
 
     public static PocDatabase get(Context context) {
@@ -101,7 +128,11 @@ public abstract class PocDatabase extends RoomDatabase {
                                     PocDatabase.class,
                                     "gateway-poc.db"
                             )
-                            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                            .addMigrations(
+                                    MIGRATION_1_2,
+                                    MIGRATION_2_3,
+                                    MIGRATION_3_4
+                            )
                             .build();
                 }
             }

@@ -19,6 +19,7 @@
     <string name="open_notification_access">Open notification access settings</string>
     <string name="notification_allowlist_hint">Allowed source package names, one per line (for example: com.example.app)</string>
     <string name="save_notification_allowlist">Save notification source allowlist</string>
+    <string name="request_call_screening_role">Enable incoming caller ID role</string>
     <string name="notification_channel_name">Incoming SMS POC</string>
     <string name="notification_channel_description">Notifications for SMS events captured by the gateway POC</string>
 </resources>

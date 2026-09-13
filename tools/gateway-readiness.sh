@@ -175,6 +175,14 @@ else
     info "notification listener access" "not enabled (optional for SMS readiness)"
 fi
 
+call_screening_holder="$("${ADB[@]}" shell cmd role get-role-holders \
+    android.app.role.CALL_SCREENING 0 2>/dev/null | tr -d '\r' | head -1)"
+if [ "$call_screening_holder" = "$PACKAGE" ]; then
+    info "incoming caller ID role" "enabled"
+else
+    info "incoming caller ID role" "not enabled (optional for SMS readiness)"
+fi
+
 if [ "$ASSUME_MANAGED_PROCESS" -eq 1 ]; then
     pass "managed process retention" "assumed by explicit deployment premise"
 else
@@ -228,17 +236,35 @@ PY
         'SELECT
          (SELECT COUNT(*) FROM notification_events),
          (SELECT COUNT(*) FROM call_events),
+         (SELECT COUNT(*) FROM call_identity_events),
          (SELECT COUNT(*) FROM outbox_events
-          WHERE payloadType IN ("NOTIFICATION", "CALL_STATE")
+          WHERE payloadType IN ("NOTIFICATION", "CALL_STATE", "CALL_IDENTITY")
             AND status != "SUCCESS");' 2>/dev/null || true)"
     if [ -n "$phase3_counts" ]; then
         old_ifs="$IFS"
-        IFS='|' read -r notification_count call_count phase3_not_success <<EOF
+        IFS='|' read -r notification_count call_count caller_id_count phase3_not_success <<EOF
 $phase3_counts
 EOF
         IFS="$old_ifs"
         info "Phase 3 local evidence" \
-            "notifications=$notification_count; calls=$call_count; outboxNotSuccess=$phase3_not_success"
+            "notifications=$notification_count; calls=$call_count; callerIds=$caller_id_count; outboxNotSuccess=$phase3_not_success"
+
+        latest_caller_id="$(sqlite3 -readonly -separator '|' "$temp_dir/gateway-poc.db" \
+            'SELECT observedAt, length(callerAddress), resolvedSlotIndex,
+             resolvedSubscriptionId, resolutionMethod, resolutionConfidence,
+             decision, respondedAt - observedAt
+             FROM call_identity_events ORDER BY observedAt DESC LIMIT 1;' \
+            2>/dev/null || true)"
+        if [ -n "$latest_caller_id" ]; then
+            old_ifs="$IFS"
+            IFS='|' read -r caller_observed caller_length caller_slot caller_sub \
+                caller_method caller_confidence caller_decision caller_latency <<EOF
+$latest_caller_id
+EOF
+            IFS="$old_ifs"
+            info "latest caller ID evidence" \
+                "addressLength=$caller_length; slot=$caller_slot; subId=$caller_sub; resolver=$caller_method/$caller_confidence; decision=$caller_decision; responseLatency=${caller_latency}ms"
+        fi
     else
         info "Phase 3 local evidence" "schema or database evidence unavailable"
     fi

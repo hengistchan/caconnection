@@ -29,6 +29,7 @@ object CallStateMonitor {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val tracker = CallStateTransitionTracker()
+    private val recentActiveCallTracker = RecentActiveCallTracker()
     private val registrations = mutableMapOf<Int, Registration>()
     private val errors = mutableMapOf<Int, String>()
     private var appContext: Context? = null
@@ -53,6 +54,12 @@ object CallStateMonitor {
     }
 
     fun snapshot(): CallMonitorSnapshot = currentSnapshot
+
+    fun resolveRecentActiveCall(
+        referenceAt: Long,
+        maxAgeMillis: Long = 5_000L
+    ): CallPhoneAccountResolution? =
+        recentActiveCallTracker.resolve(referenceAt, maxAgeMillis)
 
     private fun ensureSubscriptionListener() {
         if (subscriptionListenerRegistered) return
@@ -93,11 +100,18 @@ object CallStateMonitor {
                 subscriptionId = subscription.subscriptionId,
                 slotIndex = subscription.slotIndex,
                 onState = { subscriptionId, slotIndex, state ->
+                    val observedAt = System.currentTimeMillis()
+                    recentActiveCallTracker.record(
+                        subscriptionId,
+                        slotIndex,
+                        state,
+                        observedAt
+                    )
                     tracker.accept(
                         subscriptionId,
                         slotIndex,
                         state,
-                        System.currentTimeMillis()
+                        observedAt
                     )?.let { observation ->
                         PocEventStore.get(context).insertCallWithOutbox(
                             CallEventEntity(
@@ -137,6 +151,7 @@ object CallStateMonitor {
             registration.telephonyManager.unregisterTelephonyCallback(registration.callback)
         }
         tracker.removeSubscription(subscriptionId)
+        recentActiveCallTracker.removeSubscription(subscriptionId)
         errors.remove(subscriptionId)
     }
 

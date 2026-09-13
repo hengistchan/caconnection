@@ -22,6 +22,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.caconnection.data.poc.IncomingSmsEventEntity
 import com.caconnection.data.poc.CallEventEntity
+import com.caconnection.data.poc.CallIdentityEventEntity
 import com.caconnection.data.poc.NotificationEventEntity
 import com.caconnection.data.poc.OutgoingSmsEventEntity
 import com.caconnection.data.poc.PocEventStore
@@ -30,6 +31,7 @@ import com.caconnection.notifications.NotificationAccess
 import com.caconnection.notifications.NotificationAllowlist
 import com.caconnection.notifications.NotificationHelper
 import com.caconnection.telephony.call.CallStateMonitor
+import com.caconnection.telephony.call.CallScreeningRoleController
 import com.caconnection.telephony.diagnostics.GatewayReadinessEvaluator
 import com.caconnection.telephony.diagnostics.GatewayReadinessInput
 import com.caconnection.telephony.diagnostics.ReadinessSubscription
@@ -64,6 +66,11 @@ class MainActivity : AppCompatActivity() {
     private var receiverRegistered = false
 
     private val roleLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            refreshAll()
+        }
+
+    private val callScreeningRoleLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
             refreshAll()
         }
@@ -187,6 +194,9 @@ class MainActivity : AppCompatActivity() {
             toast("Saved ${packages.size} allowed notification source(s)")
             refreshStoredEvents()
         }
+        findViewById<Button>(R.id.call_screening_role_button).setOnClickListener {
+            requestCallScreeningRole()
+        }
     }
 
     private fun applyIntent(intent: Intent?) {
@@ -228,17 +238,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshStoredEvents() {
-        eventStore.loadLatest { subscriptions, incoming, outgoing, notifications, calls, outbox ->
+        eventStore.loadLatest {
+                subscriptions,
+                incoming,
+                outgoing,
+                notifications,
+                calls,
+                callIdentities,
+                outbox ->
             runOnUiThread {
                 renderIncoming(incoming)
                 renderOutgoing(outgoing)
-                renderSignals(notifications, calls)
+                renderSignals(notifications, calls, callIdentities)
                 updateDashboard(
                     subscriptions,
                     incoming,
                     outgoing,
                     notifications,
                     calls,
+                    callIdentities,
                     outbox
                 )
                 diagnosticsText.text = buildString {
@@ -273,6 +291,7 @@ class MainActivity : AppCompatActivity() {
         outgoing: List<OutgoingSmsEventEntity> = emptyList(),
         notifications: List<NotificationEventEntity> = emptyList(),
         calls: List<CallEventEntity> = emptyList(),
+        callIdentities: List<CallIdentityEventEntity> = emptyList(),
         outbox: List<com.caconnection.data.poc.OutboxEventEntity> = emptyList()
     ) {
         val roleHeld = SmsRoleController(this).isRoleHeld()
@@ -281,6 +300,7 @@ class MainActivity : AppCompatActivity() {
         val notificationAccess = NotificationAccess.isEnabled(this)
         val notificationAllowlist = NotificationAllowlist.get(this)
         val callMonitor = CallStateMonitor.snapshot()
+        val callScreeningRole = CallScreeningRoleController(this).isRoleHeld()
         val visibleSubscriptions = activeSubscriptions.ifEmpty {
             storedSubscriptions.map {
                 SubscriptionSnapshot(
@@ -360,6 +380,9 @@ class MainActivity : AppCompatActivity() {
                 "Call SIM callbacks   " +
                     "${callMonitor.registeredSubscriptions.size}/${visibleSubscriptions.size}"
             )
+            appendLine(
+                "Caller ID role       ${if (callScreeningRole) "YES" else "NO"}"
+            )
             if (callMonitor.errors.isNotEmpty()) {
                 appendLine("Call callback errors ${callMonitor.errors}")
             }
@@ -367,6 +390,7 @@ class MainActivity : AppCompatActivity() {
             appendLine("Outgoing attempts   ${outgoing.size}")
             appendLine("Notification events ${notifications.size}")
             appendLine("Call-state events   ${calls.size}")
+            appendLine("Caller ID events    ${callIdentities.size}")
             appendLine("Outbox events       ${outbox.size}")
             if (outbox.isNotEmpty()) {
                 appendLine(
@@ -428,11 +452,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSignals(
         notifications: List<NotificationEventEntity>,
-        calls: List<CallEventEntity>
+        calls: List<CallEventEntity>,
+        callIdentities: List<CallIdentityEventEntity>
     ) {
         val notificationAccess = NotificationAccess.isEnabled(this)
         val allowlist = NotificationAllowlist.get(this)
         val callMonitor = CallStateMonitor.snapshot()
+        val callScreeningRole = CallScreeningRoleController(this).isRoleHeld()
         signalsText.text = buildString {
             appendLine("NOTIFICATION LISTENER")
             appendLine("Access: ${if (notificationAccess) "GRANTED" else "NOT GRANTED"}")
@@ -452,6 +478,25 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             appendLine()
+            appendLine("INCOMING CALLER ID")
+            appendLine(
+                "Call-screening role: " +
+                    if (callScreeningRole) "GRANTED" else "NOT GRANTED"
+            )
+            appendLine("Decision policy: always ALLOW")
+            appendLine("Historical call log: NOT READ")
+            appendLine("Contact permission: NOT REQUESTED")
+            appendLine("Captured identities: ${callIdentities.size}")
+            callIdentities.take(10).forEach { event ->
+                appendLine(
+                    "${formatTime(event.observedAt)} · " +
+                        "SIM${event.resolvedSlotIndex?.plus(1) ?: "?"} / " +
+                        "subId ${event.resolvedSubscriptionId ?: "?"} · " +
+                        "caller ${event.callerAddress ?: "(withheld/unknown)"}" +
+                        event.callerDisplayName?.let { " · $it" }.orEmpty()
+                )
+            }
+            appendLine()
             appendLine("CALL STATE")
             appendLine(
                 "READ_PHONE_STATE: " +
@@ -462,7 +507,10 @@ class MainActivity : AppCompatActivity() {
                     if (callMonitor.registeredSubscriptions.isEmpty()) "(none)"
                     else callMonitor.registeredSubscriptions.joinToString()
             )
-            appendLine("Caller number: NOT REQUESTED / NOT STORED")
+            appendLine(
+                "Caller number source: " +
+                    if (callScreeningRole) "CallScreeningService" else "not enabled"
+            )
             appendLine("Captured events: ${calls.size}")
             calls.take(20).forEach { event ->
                 appendLine(
@@ -519,6 +567,20 @@ class MainActivity : AppCompatActivity() {
             toast("SMS role is not available on this device")
         } else {
             roleLauncher.launch(requestIntent)
+        }
+    }
+
+    private fun requestCallScreeningRole() {
+        val controller = CallScreeningRoleController(this)
+        if (controller.isRoleHeld()) {
+            toast("CA Connection already has the incoming caller ID role")
+            return
+        }
+        val requestIntent = controller.createRequestIntent()
+        if (requestIntent == null) {
+            toast("Call-screening role is not available on this device")
+        } else {
+            callScreeningRoleLauncher.launch(requestIntent)
         }
     }
 

@@ -61,6 +61,15 @@ public interface PocDao {
     @Query("DELETE FROM call_events")
     void clearCalls();
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void insertCallIdentity(CallIdentityEventEntity event);
+
+    @Query("SELECT * FROM call_identity_events ORDER BY observedAt DESC LIMIT :limit")
+    List<CallIdentityEventEntity> getLatestCallIdentities(int limit);
+
+    @Query("DELETE FROM call_identity_events")
+    void clearCallIdentities();
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     void insertOutbox(OutboxEventEntity event);
 

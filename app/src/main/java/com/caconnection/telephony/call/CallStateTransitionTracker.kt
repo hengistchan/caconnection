@@ -72,3 +72,56 @@ class CallStateTransitionTracker(
         }
     }
 }
+
+class RecentActiveCallTracker {
+    private data class RecentActiveCall(
+        val subscriptionId: Int,
+        val slotIndex: Int,
+        val observedAt: Long
+    )
+
+    private val recentActiveCalls = mutableMapOf<Int, RecentActiveCall>()
+
+    @Synchronized
+    fun record(
+        subscriptionId: Int,
+        slotIndex: Int,
+        state: Int,
+        observedAt: Long
+    ) {
+        if (state == TelephonyManager.CALL_STATE_RINGING ||
+            state == TelephonyManager.CALL_STATE_OFFHOOK
+        ) {
+            recentActiveCalls[subscriptionId] =
+                RecentActiveCall(subscriptionId, slotIndex, observedAt)
+        }
+    }
+
+    @Synchronized
+    fun resolve(
+        referenceAt: Long,
+        maxAgeMillis: Long = 5_000L
+    ): CallPhoneAccountResolution? {
+        recentActiveCalls.entries.removeAll {
+            referenceAt - it.value.observedAt > maxAgeMillis
+        }
+        val candidates = recentActiveCalls.values.filter {
+            val difference = referenceAt - it.observedAt
+            difference in -1_000L..maxAgeMillis
+        }
+        return candidates.singleOrNull()?.let {
+            CallPhoneAccountResolution(
+                subscriptionId = it.subscriptionId,
+                slotIndex = it.slotIndex,
+                method = "ACTIVE_CALL_STATE_CORRELATION",
+                confidence = "MEDIUM",
+                notes = "Exactly one recent per-subscription active call matched the screening callback"
+            )
+        }
+    }
+
+    @Synchronized
+    fun removeSubscription(subscriptionId: Int) {
+        recentActiveCalls.remove(subscriptionId)
+    }
+}

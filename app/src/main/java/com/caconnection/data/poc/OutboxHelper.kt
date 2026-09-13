@@ -95,6 +95,28 @@ object OutboxHelper {
         )
     }
 
+    fun createOutboxForCallIdentity(
+        event: CallIdentityEventEntity
+    ): OutboxEventEntity {
+        val now = System.currentTimeMillis()
+        return OutboxEventEntity(
+            UUID.randomUUID().toString(),
+            "call_identity_${sha256(event.eventId)}",
+            event.eventId,
+            OutboxStatus.PENDING.name,
+            0,
+            now,
+            now,
+            now,
+            event.resolvedSubscriptionId,
+            event.resolvedSlotIndex,
+            "CALL_IDENTITY",
+            gson.toJson(CallIdentityPayload.fromEntity(event)),
+            null,
+            null
+        )
+    }
+
     /**
      * The full SHA-256 digest avoids the silent collision risk of Java's
      * 32-bit hashCode. Slot/subscription are included so identical content
@@ -204,6 +226,45 @@ object OutboxHelper {
                     state = entity.state,
                     observedAt = entity.observedAt,
                     initialSnapshot = entity.initialSnapshot
+                )
+        }
+    }
+
+    data class CallIdentityPayload(
+        val eventId: String,
+        val telecomCallIdHash: String?,
+        val callerAddress: String?,
+        val callerDisplayName: String?,
+        val handlePresentation: Int,
+        val displayNamePresentation: Int,
+        val phoneAccountId: String?,
+        val subscriptionId: Int?,
+        val slotIndex: Int?,
+        val resolutionMethod: String?,
+        val resolutionConfidence: String?,
+        val verificationStatus: Int,
+        val observedAt: Long,
+        val respondedAt: Long,
+        val decision: String
+    ) {
+        companion object {
+            fun fromEntity(entity: CallIdentityEventEntity) =
+                CallIdentityPayload(
+                    eventId = entity.eventId,
+                    telecomCallIdHash = entity.telecomCallIdHash,
+                    callerAddress = entity.callerAddress,
+                    callerDisplayName = entity.callerDisplayName,
+                    handlePresentation = entity.handlePresentation,
+                    displayNamePresentation = entity.displayNamePresentation,
+                    phoneAccountId = entity.phoneAccountId,
+                    subscriptionId = entity.resolvedSubscriptionId,
+                    slotIndex = entity.resolvedSlotIndex,
+                    resolutionMethod = entity.resolutionMethod,
+                    resolutionConfidence = entity.resolutionConfidence,
+                    verificationStatus = entity.verificationStatus,
+                    observedAt = entity.observedAt,
+                    respondedAt = entity.respondedAt,
+                    decision = entity.decision
                 )
         }
     }
