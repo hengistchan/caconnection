@@ -4,7 +4,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
+import java.util.Base64
 import java.util.UUID
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 data class GatewayHttpResponse(
     val statusCode: Int,
@@ -19,7 +26,12 @@ fun interface GatewayHttpClient {
     ): GatewayHttpResponse
 }
 
-class UrlConnectionGatewayHttpClient : GatewayHttpClient {
+class UrlConnectionGatewayHttpClient(
+    certificatePinSha256Base64: String
+) : GatewayHttpClient {
+    private val sslSocketFactory =
+        pinnedSslContext(certificatePinSha256Base64).socketFactory
+
     override fun post(
         url: String,
         headers: Map<String, String>,
@@ -27,6 +39,9 @@ class UrlConnectionGatewayHttpClient : GatewayHttpClient {
     ): GatewayHttpResponse {
         val connection = URL(url).openConnection() as HttpURLConnection
         return try {
+            if (connection is HttpsURLConnection) {
+                connection.sslSocketFactory = sslSocketFactory
+            }
             connection.requestMethod = "POST"
             connection.connectTimeout = 5_000
             connection.readTimeout = 10_000
@@ -53,11 +68,41 @@ class UrlConnectionGatewayHttpClient : GatewayHttpClient {
             connection.disconnect()
         }
     }
+
+    private fun pinnedSslContext(pin: String): SSLContext {
+        val expectedPin = Base64.getDecoder().decode(pin)
+        val trustManager = object : X509TrustManager {
+            override fun checkClientTrusted(
+                chain: Array<out X509Certificate>?,
+                authType: String?
+            ) = throw CertificateException("Client certificates are not accepted")
+
+            override fun checkServerTrusted(
+                chain: Array<out X509Certificate>?,
+                authType: String?
+            ) {
+                val certificate = chain?.firstOrNull()
+                    ?: throw CertificateException("Missing server certificate")
+                certificate.checkValidity()
+                val actualPin = MessageDigest.getInstance("SHA-256")
+                    .digest(certificate.encoded)
+                if (!MessageDigest.isEqual(expectedPin, actualPin)) {
+                    throw CertificateException("Server certificate pin mismatch")
+                }
+            }
+
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+        return SSLContext.getInstance("TLS").apply {
+            init(null, arrayOf(trustManager), null)
+        }
+    }
 }
 
 class AuthenticatedHttpTransport(
     private val settings: GatewayTransportSettings,
-    private val httpClient: GatewayHttpClient = UrlConnectionGatewayHttpClient(),
+    private val httpClient: GatewayHttpClient =
+        UrlConnectionGatewayHttpClient(settings.certificatePinSha256Base64),
     private val now: () -> Long = System::currentTimeMillis,
     private val nonce: () -> String = { UUID.randomUUID().toString() }
 ) : Transport {

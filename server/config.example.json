@@ -3,5 +3,11 @@
     "xiaomi-gateway": {
       "secret_base64": "REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES_ENCODED_AS_BASE64"
     }
+  },
+  "tls": {
+    "certificate": "server/tls/receiver-cert.pem",
+    "private_key": "server/tls/receiver-key.pem",
+    "certificate_pin_sha256_base64": "BASE64_SHA256_OF_DER_CERTIFICATE",
+    "lan_ip": "192.168.1.10"
   }
 }

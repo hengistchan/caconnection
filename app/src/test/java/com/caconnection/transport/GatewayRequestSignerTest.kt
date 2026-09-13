@@ -7,7 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import javax.crypto.Cipher
 import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 class GatewayRequestSignerTest {
@@ -22,16 +24,44 @@ class GatewayRequestSignerTest {
             "xiaomi-gateway",
             secretBase64,
             123_456L,
-            "nonce-1"
+            "nonce-1",
+            ByteArray(12) { it.toByte() }
         )
+        val body = request.body.toString(StandardCharsets.UTF_8)
         val envelope = JsonParser.parseString(
-            request.body.toString(StandardCharsets.UTF_8)
+            body
         ).asJsonObject
 
-        assertEquals(1, envelope["schemaVersion"].asInt)
+        assertEquals(
+            """{"schemaVersion":2,"deliveryId":"delivery-1","sourceEventId":"source-1","eventType":"INCOMING_SMS","createdAt":1000,"subscriptionId":1,"slotIndex":0,"payload":{"algorithm":"AES-256-GCM","nonceBase64":"AAECAwQFBgcICQoL","ciphertextBase64":"ywDPVPnJ7ZnrQg0WeKUL+gbZJr9dU/ukYrcqhlatcR0\u003d"}}""",
+            body
+        )
+        assertEquals(2, envelope["schemaVersion"].asInt)
         assertEquals("delivery-1", envelope["deliveryId"].asString)
         assertEquals("INCOMING_SMS", envelope["eventType"].asString)
-        assertEquals("hello", envelope["payload"].asJsonObject["body"].asString)
+        val encrypted = envelope["payload"].asJsonObject
+        assertEquals("AES-256-GCM", encrypted["algorithm"].asString)
+        val encryptionKey = HkdfSha256.derive(
+            secret,
+            "xiaomi-gateway".toByteArray(StandardCharsets.UTF_8),
+            "caconnection/payload-encryption/v1".toByteArray(StandardCharsets.UTF_8),
+            32
+        )
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            SecretKeySpec(encryptionKey, "AES"),
+            GCMParameterSpec(
+                128,
+                Base64.getDecoder().decode(encrypted["nonceBase64"].asString)
+            )
+        )
+        cipher.updateAAD(GatewayRequestSigner.encryptionAad(event, "xiaomi-gateway"))
+        val plaintext = cipher.doFinal(
+            Base64.getDecoder().decode(encrypted["ciphertextBase64"].asString)
+        ).toString(StandardCharsets.UTF_8)
+        assertEquals("hello", JsonParser.parseString(plaintext).asJsonObject["body"].asString)
+        assertTrue(!request.body.toString(StandardCharsets.UTF_8).contains("hello"))
 
         val canonical = listOf(
             "123456",
@@ -44,6 +74,10 @@ class GatewayRequestSignerTest {
         mac.init(SecretKeySpec(secret, "HmacSHA256"))
         val expected = Base64.getEncoder().encodeToString(
             mac.doFinal(canonical.toByteArray(StandardCharsets.UTF_8))
+        )
+        assertEquals(
+            "661ZLTQKHvSSY69ZECEII/K9rb8xmnX50hJ9jCq5Klc=",
+            expected
         )
         assertEquals(expected, request.signatureBase64)
     }
@@ -104,11 +138,48 @@ class GatewayRequestSignerTest {
         )
     }
 
+    @Test
+    fun transportConfigurationRequiresHttpsAndValidPin() {
+        GatewayTransportConfig.validate(
+            "https://192.168.1.10:8787",
+            "xiaomi-gateway",
+            secretBase64,
+            Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
+        )
+
+        val httpFailure = runCatching {
+            GatewayTransportConfig.validate(
+                "http://192.168.1.10:8787",
+                "xiaomi-gateway",
+                secretBase64,
+                Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
+            )
+        }.exceptionOrNull()
+        val pinFailure = runCatching {
+            GatewayTransportConfig.validate(
+                "https://192.168.1.10:8787",
+                "xiaomi-gateway",
+                secretBase64,
+                Base64.getEncoder().encodeToString(ByteArray(31))
+            )
+        }.exceptionOrNull()
+
+        assertTrue(httpFailure is IllegalArgumentException)
+        assertEquals("HTTPS is required", httpFailure?.message)
+        assertTrue(pinFailure is IllegalArgumentException)
+        assertEquals(
+            "Certificate pin must be a Base64 SHA-256 digest",
+            pinFailure?.message
+        )
+    }
+
     private fun settings() = GatewayTransportSettings(
         enabled = true,
-        endpoint = "http://127.0.0.1:8787",
+        endpoint = "https://127.0.0.1:8787",
         deviceId = "xiaomi-gateway",
-        sharedSecretBase64 = secretBase64
+        sharedSecretBase64 = secretBase64,
+        certificatePinSha256Base64 =
+            Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
     )
 
     private fun event() = TransportEvent(

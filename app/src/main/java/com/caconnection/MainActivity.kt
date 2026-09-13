@@ -67,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var transportEndpointInput: EditText
     private lateinit var transportDeviceIdInput: EditText
     private lateinit var transportSecretInput: EditText
+    private lateinit var transportCertificatePinInput: EditText
     private lateinit var transportEnabledCheckbox: CheckBox
 
     private val subscriptionRepository by lazy { SubscriptionRepository(this) }
@@ -171,10 +172,15 @@ class MainActivity : AppCompatActivity() {
         transportEndpointInput = findViewById(R.id.transport_endpoint_input)
         transportDeviceIdInput = findViewById(R.id.transport_device_id_input)
         transportSecretInput = findViewById(R.id.transport_secret_input)
+        transportCertificatePinInput =
+            findViewById(R.id.transport_certificate_pin_input)
         transportEnabledCheckbox = findViewById(R.id.transport_enabled_checkbox)
         val transportSettings = GatewayTransportConfig.load(this)
         transportEndpointInput.setText(transportSettings.endpoint)
         transportDeviceIdInput.setText(transportSettings.deviceId)
+        transportCertificatePinInput.setText(
+            transportSettings.certificatePinSha256Base64
+        )
         transportEnabledCheckbox.isChecked = transportSettings.enabled
     }
 
@@ -561,7 +567,7 @@ class MainActivity : AppCompatActivity() {
     ) {
         val settings = GatewayTransportConfig.load(this)
         val mode = if (settings.enabled && settings.configured) {
-            "AUTHENTICATED HTTP"
+            "ENCRYPTED HTTPS"
         } else {
             "LOCAL MOCK"
         }
@@ -581,8 +587,16 @@ class MainActivity : AppCompatActivity() {
                     if (settings.sharedSecretBase64.isBlank()) "NOT CONFIGURED"
                     else "CONFIGURED (hidden)"
             )
-            appendLine("Release policy: HTTPS required")
-            appendLine("Debug policy: local HTTP permitted")
+            appendLine(
+                "Certificate pin: " +
+                    if (settings.certificatePinSha256Base64.isBlank()) {
+                        "NOT CONFIGURED"
+                    } else {
+                        "CONFIGURED"
+                    }
+            )
+            appendLine("Payload: AES-256-GCM encrypted")
+            appendLine("Transport: HTTPS with pinned certificate")
             appendLine()
             appendLine(
                 "Outbox: " +
@@ -663,7 +677,9 @@ class MainActivity : AppCompatActivity() {
                 endpoint = transportEndpointInput.text.toString(),
                 deviceId = transportDeviceIdInput.text.toString(),
                 replacementSecretBase64 =
-                    transportSecretInput.text.toString().takeIf { it.isNotBlank() }
+                    transportSecretInput.text.toString().takeIf { it.isNotBlank() },
+                certificatePinSha256Base64 =
+                    transportCertificatePinInput.text.toString()
             )
         }.onSuccess {
             transportSecretInput.text.clear()

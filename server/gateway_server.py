@@ -2,10 +2,12 @@
 
 import argparse
 import base64
+import binascii
 import hashlib
 import hmac
 import json
 import sqlite3
+import ssl
 import threading
 import time
 from http import HTTPStatus
@@ -13,10 +15,94 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 MAX_BODY_BYTES = 1_048_576
 MAX_CLOCK_SKEW_MS = 300_000
 NONCE_RETENTION_MS = 600_000
+
+
+def payload_key(secret: bytes, device_id: str) -> bytes:
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=device_id.encode("utf-8"),
+        info=b"caconnection/payload-encryption/v1",
+    ).derive(secret)
+
+
+def encryption_aad(envelope: dict[str, Any], device_id: str) -> bytes:
+    return "\n".join(
+        (
+            "2",
+            str(envelope["deliveryId"]),
+            str(envelope["sourceEventId"]),
+            str(envelope["eventType"]),
+            str(envelope["createdAt"]),
+            "" if envelope.get("subscriptionId") is None else str(envelope["subscriptionId"]),
+            "" if envelope.get("slotIndex") is None else str(envelope["slotIndex"]),
+            device_id,
+        )
+    ).encode("utf-8")
+
+
+def encrypt_payload(
+    envelope: dict[str, Any], device_id: str, secret: bytes
+) -> dict[str, Any]:
+    if envelope.get("schemaVersion") == 2:
+        return envelope
+    nonce = __import__("os").urandom(12)
+    outer = {key: value for key, value in envelope.items() if key != "payload"}
+    outer["schemaVersion"] = 2
+    plaintext = json.dumps(
+        envelope["payload"], separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    ciphertext = AESGCM(payload_key(secret, device_id)).encrypt(
+        nonce, plaintext, encryption_aad(outer, device_id)
+    )
+    outer["payload"] = {
+        "algorithm": "AES-256-GCM",
+        "nonceBase64": base64.b64encode(nonce).decode("ascii"),
+        "ciphertextBase64": base64.b64encode(ciphertext).decode("ascii"),
+    }
+    return outer
+
+
+def decrypt_payload(
+    envelope: dict[str, Any], device_id: str, secret: bytes
+) -> dict[str, Any]:
+    if envelope.get("schemaVersion") == 1:
+        return envelope
+    try:
+        encrypted = envelope["payload"]
+        nonce = base64.b64decode(encrypted["nonceBase64"], validate=True)
+        if len(nonce) != 12:
+            raise ValueError("invalid AES-GCM nonce length")
+        ciphertext = base64.b64decode(
+            encrypted["ciphertextBase64"], validate=True
+        )
+        plaintext = AESGCM(payload_key(secret, device_id)).decrypt(
+            nonce, ciphertext, encryption_aad(envelope, device_id)
+        )
+        payload = json.loads(plaintext)
+        if not isinstance(payload, dict):
+            raise ValueError("decrypted payload must be a JSON object")
+    except (
+        InvalidTag,
+        binascii.Error,
+        KeyError,
+        TypeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as error:
+        raise ValueError("invalid encrypted payload") from error
+    result = dict(envelope)
+    result["payload"] = payload
+    return result
 
 
 def canonical_request(
@@ -154,6 +240,38 @@ class GatewayStore:
             for row in rows
         ]
 
+    def migrate_legacy_payloads(self, devices: dict[str, bytes]) -> int:
+        migrated = 0
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT id, device_id, envelope_json FROM events"
+            ).fetchall()
+            for row in rows:
+                envelope = json.loads(row["envelope_json"])
+                if envelope.get("schemaVersion") != 1:
+                    continue
+                secret = devices.get(row["device_id"])
+                if secret is None:
+                    continue
+                encrypted = encrypt_payload(envelope, row["device_id"], secret)
+                db.execute(
+                    "UPDATE events SET envelope_json = ? WHERE id = ?",
+                    (
+                        json.dumps(
+                            encrypted,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ),
+                        row["id"],
+                    ),
+                )
+                migrated += 1
+        if migrated:
+            with self._connect() as db:
+                db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                db.execute("VACUUM")
+        return migrated
+
     def clear(self) -> None:
         with self._lock, self._connect() as db:
             db.execute("DELETE FROM events")
@@ -173,10 +291,16 @@ def validate_envelope(value: Any) -> dict[str, Any]:
     }
     if not required.issubset(value):
         raise ValueError("missing envelope fields")
-    if value["schemaVersion"] != 1:
+    if value["schemaVersion"] not in (1, 2):
         raise ValueError("unsupported schemaVersion")
     if not isinstance(value["payload"], dict):
         raise ValueError("payload must be a JSON object")
+    if value["schemaVersion"] == 2:
+        payload = value["payload"]
+        if payload.get("algorithm") != "AES-256-GCM":
+            raise ValueError("unsupported payload encryption")
+        if not payload.get("nonceBase64") or not payload.get("ciphertextBase64"):
+            raise ValueError("missing encrypted payload fields")
     return value
 
 
@@ -265,8 +389,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif path == "/api/events":
+            events = self.app.store.latest()
+            for event in events:
+                secret = self.app.devices[event["device_id"]]
+                event["envelope"] = decrypt_payload(
+                    event["envelope"], event["device_id"], secret
+                )
             self.send_json(
-                HTTPStatus.OK, {"events": self.app.store.latest()}
+                HTTPStatus.OK, {"events": events}
             )
         else:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -285,8 +415,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path != "/v1/events":
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
+        if not self.app.accept_ingestion:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            return
 
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_json(
+                HTTPStatus.BAD_REQUEST, {"error": "invalid content length"}
+            )
+            return
         if length <= 0 or length > MAX_BODY_BYTES:
             self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid body size"})
             return
@@ -320,6 +459,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
         try:
             envelope = validate_envelope(json.loads(body))
+            if envelope["schemaVersion"] != 2:
+                raise ValueError("encrypted schemaVersion 2 required")
+            decrypt_payload(envelope, device_id, secret)
             inserted = self.app.store.accept(
                 device_id, idempotency_key, nonce, envelope, now_ms
             )
@@ -343,10 +485,12 @@ class GatewayHttpServer(ThreadingHTTPServer):
         address: tuple[str, int],
         devices: dict[str, bytes],
         store: GatewayStore,
+        accept_ingestion: bool = True,
     ):
         super().__init__(address, GatewayHandler)
         self.devices = devices
         self.store = store
+        self.accept_ingestion = accept_ingestion
 
 
 def load_devices(path: Path) -> dict[str, bytes]:
@@ -367,16 +511,35 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--viewer-port", type=int, default=8788)
     parser.add_argument("--config", type=Path, default=root / "config.json")
     parser.add_argument("--database", type=Path, default=root / "data/gateway.db")
     args = parser.parse_args()
+    config = json.loads(args.config.read_text(encoding="utf-8"))
+    devices = load_devices(args.config)
+    store = GatewayStore(args.database)
+    migrated = store.migrate_legacy_payloads(devices)
     server = GatewayHttpServer(
         (args.host, args.port),
-        load_devices(args.config),
-        GatewayStore(args.database),
+        devices,
+        store,
     )
-    print(f"Gateway receiver listening on {args.host}:{args.port}")
-    print("Viewer: http://127.0.0.1:%d/" % args.port)
+    tls = config["tls"]
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(tls["certificate"], tls["private_key"])
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    viewer = GatewayHttpServer(
+        ("127.0.0.1", args.viewer_port),
+        devices,
+        store,
+        accept_ingestion=False,
+    )
+    threading.Thread(target=viewer.serve_forever, daemon=True).start()
+    print(f"HTTPS gateway receiver listening on {args.host}:{args.port}")
+    print("Viewer: http://127.0.0.1:%d/" % args.viewer_port)
+    if migrated:
+        print(f"Migrated {migrated} legacy payload(s) to encrypted storage")
     server.serve_forever()
 
 

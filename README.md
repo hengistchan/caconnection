@@ -6,9 +6,10 @@ question:
 > Can a Xiaomi 17-class HyperOS device act as a reliable dual-SIM cellular SMS
 > gateway?
 
-The POC does not contain a cloud deployment, iOS, end-to-end encryption, AI,
-MCP, contacts, MMS processing, or SMS history import. Phase 4 adds an
-authenticated local-LAN receiver running on the development Mac.
+The POC does not contain a cloud deployment, iOS, cloud-blind end-to-end
+encryption, AI, MCP, contacts, MMS processing, or SMS history import. Phase 4
+adds an authenticated and encrypted local-LAN receiver running on the
+development Mac.
 
 ## Implemented capabilities
 
@@ -54,21 +55,24 @@ authenticated local-LAN receiver running on the development Mac.
 - Direct SIM resolution from `PhoneAccountHandle.id` plus a conservative
   fallback that correlates the screening callback with exactly one recent
   per-SIM active-call callback.
-- A schema-versioned event envelope and HMAC-SHA256 authenticated HTTP
-  Transport.
-- A standard-library Python local receiver with replay protection, server-side
-  idempotency, SQLite persistence, and a localhost-only browser viewer.
+- A schema-versioned envelope with AES-256-GCM payload encryption,
+  HMAC-SHA256 authentication, HTTPS, and leaf-certificate pinning.
+- A Python local receiver with replay protection, server-side idempotency,
+  encrypted-payload SQLite persistence, and a localhost-only browser viewer.
 - Automatic Outbox retry and recovery when the local receiver is unavailable.
 
 ## Data and safety boundaries
 
 - `INTERNET` is declared for Phase 4 local transport. No cloud endpoint exists.
-- Debug builds permit cleartext HTTP for the local-LAN POC. HMAC authenticates
-  and protects integrity but does not encrypt content from a LAN observer.
-- Release configuration requires HTTPS and the release manifest does not opt
-  into cleartext traffic.
+- Debug and release builds require HTTPS; neither manifest opts into cleartext
+  traffic.
+- Payloads are encrypted with AES-256-GCM before transmission and remain
+  encrypted in the receiver database. Routing metadata such as event type,
+  timestamp, and SIM attribution remains visible.
 - Receiver credentials and database files are ignored by Git. The browser
   viewer and clear-data API accept only loopback clients on the Mac.
+- The trusted Mac possesses the shared secret and decrypts payloads for the
+  local viewer. This is not a cloud-blind relay design.
 - `READ_SMS` is not requested.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
 - Notification content is not stored. Only source package, timing, channel,
@@ -230,18 +234,20 @@ role to block calls. Full caller addresses are visible only in the local
 
 See [docs/PHASE3B_CALLER_ID_REPORT.md](docs/PHASE3B_CALLER_ID_REPORT.md).
 
-## Phase 4A authenticated local transport
+## Phase 4B encrypted local transport
 
 When configured from the `Transport` page, WorkManager sends a unified
 schema-versioned envelope to the Mac receiver:
 
 ```text
 Room Outbox
+  -> AES-256-GCM encrypted payload
   -> HMAC-SHA256 signed request
+  -> pinned-certificate HTTPS
   -> local Wi-Fi
   -> Python receiver
-  -> timestamp + nonce + signature verification
-  -> SQLite idempotent insert
+  -> certificate + timestamp + nonce + signature verification
+  -> encrypted SQLite idempotent insert
   -> localhost-only browser viewer
 ```
 
@@ -252,6 +258,7 @@ If transport is disabled or incomplete, the application falls back to
 Start the local receiver:
 
 ```bash
+python3 -m pip install -r server/requirements.txt
 python3 server/setup_local.py
 python3 server/gateway_server.py
 ```
@@ -259,7 +266,12 @@ python3 server/gateway_server.py
 Then open:
 
 ```text
-http://127.0.0.1:8787/
+http://127.0.0.1:8788/
 ```
 
-See [docs/PHASE4_LOCAL_TRANSPORT_REPORT.md](docs/PHASE4_LOCAL_TRANSPORT_REPORT.md).
+See:
+
+- [docs/PHASE4_LOCAL_TRANSPORT_REPORT.md](docs/PHASE4_LOCAL_TRANSPORT_REPORT.md)
+  for the Phase 4A authenticated HTTP baseline;
+- [docs/PHASE4B_ENCRYPTED_TRANSPORT_REPORT.md](docs/PHASE4B_ENCRYPTED_TRANSPORT_REPORT.md)
+  for the encrypted HTTPS implementation and physical-device acceptance.

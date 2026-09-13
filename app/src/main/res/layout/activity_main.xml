@@ -313,6 +313,14 @@
                     android:importantForAutofill="no"
                     android:inputType="textPassword" />
 
+                <EditText
+                    android:id="@+id/transport_certificate_pin_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/transport_certificate_pin_hint"
+                    android:importantForAutofill="no"
+                    android:inputType="textNoSuggestions" />
+
                 <CheckBox
                     android:id="@+id/transport_enabled_checkbox"
                     android:layout_width="match_parent"
