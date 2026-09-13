@@ -17,7 +17,7 @@ class OutboxProcessorTest {
         val statuses = mutableListOf<String>()
         val event = event()
         val processor = OutboxProcessor(
-            transport = Transport { _, _ -> TransportResult.Success },
+            transport = Transport { TransportResult.Success },
             now = { 1_000L }
         )
 
@@ -34,7 +34,7 @@ class OutboxProcessorTest {
     fun retryableFailurePersistsRetryAndServerDelay() = runTest {
         val event = event()
         val processor = OutboxProcessor(
-            transport = Transport { _, _ ->
+            transport = Transport {
                 TransportResult.RetryableFailure("offline", 5_000L)
             },
             now = { 10_000L }
@@ -52,7 +52,7 @@ class OutboxProcessorTest {
     fun tenthFailureBecomesPermanentFailure() = runTest {
         val event = event().apply { retryCount = 9 }
         val processor = OutboxProcessor(
-            transport = Transport { _, _ ->
+            transport = Transport {
                 TransportResult.RetryableFailure("still offline")
             },
             now = { 20_000L }
@@ -69,7 +69,7 @@ class OutboxProcessorTest {
         var called = false
         val event = event().apply { payloadData = null }
         val processor = OutboxProcessor(
-            transport = Transport { _, _ ->
+            transport = Transport {
                 called = true
                 TransportResult.Success
             }
@@ -86,7 +86,7 @@ class OutboxProcessorTest {
     fun coroutineCancellationIsNotConvertedIntoRetry() = runTest {
         val event = event()
         val processor = OutboxProcessor(
-            transport = Transport { _, _ -> throw CancellationException("cancelled") }
+            transport = Transport { throw CancellationException("cancelled") }
         )
 
         var cancellationObserved = false

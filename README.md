@@ -6,8 +6,9 @@ question:
 > Can a Xiaomi 17-class HyperOS device act as a reliable dual-SIM cellular SMS
 > gateway?
 
-The POC does not contain a real cloud endpoint, iOS, end-to-end encryption,
-AI, MCP, contacts, MMS processing, or SMS history import.
+The POC does not contain a cloud deployment, iOS, end-to-end encryption, AI,
+MCP, contacts, MMS processing, or SMS history import. Phase 4 adds an
+authenticated local-LAN receiver running on the development Mac.
 
 ## Implemented capabilities
 
@@ -53,11 +54,21 @@ AI, MCP, contacts, MMS processing, or SMS history import.
 - Direct SIM resolution from `PhoneAccountHandle.id` plus a conservative
   fallback that correlates the screening callback with exactly one recent
   per-SIM active-call callback.
+- A schema-versioned event envelope and HMAC-SHA256 authenticated HTTP
+  Transport.
+- A standard-library Python local receiver with replay protection, server-side
+  idempotency, SQLite persistence, and a localhost-only browser viewer.
+- Automatic Outbox retry and recovery when the local receiver is unavailable.
 
 ## Data and safety boundaries
 
-- No network permission is declared.
-- No cloud endpoint exists.
+- `INTERNET` is declared for Phase 4 local transport. No cloud endpoint exists.
+- Debug builds permit cleartext HTTP for the local-LAN POC. HMAC authenticates
+  and protects integrity but does not encrypt content from a LAN observer.
+- Release configuration requires HTTPS and the release manifest does not opt
+  into cleartext traffic.
+- Receiver credentials and database files are ignored by Git. The browser
+  viewer and clear-data API accept only loopback clients on the Mac.
 - `READ_SMS` is not requested.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
 - Notification content is not stored. Only source package, timing, channel,
@@ -167,9 +178,9 @@ Inbound receiver
   -> SUCCESS / RETRY / FAILED persisted in Room
 ```
 
-No `INTERNET` permission is declared and the Mock Transport performs no network
-request. From Diagnostics, **Run local Outbox self-test (no network)** verifies
-the runtime queue without sending an SMS or exposing stored SMS content.
+At the time of the Phase 2 report, no `INTERNET` permission was declared and
+the Mock Transport performed no network request. The historical report remains
+the evidence for that phase; Phase 4 can now select a real Transport.
 
 See [docs/PHASE2_OUTBOX_REPORT.md](docs/PHASE2_OUTBOX_REPORT.md) for the design,
 failure handling, and verified device evidence.
@@ -209,7 +220,7 @@ User grants ROLE_CALL_SCREENING
   -> immediate ALLOW response
   -> caller address + SIM resolution
   -> CallIdentityEvent + OutboxEvent
-  -> Mock Transport
+  -> active Transport
 ```
 
 The app remains neither the default dialer nor the default SMS app. It does not
@@ -218,3 +229,37 @@ role to block calls. Full caller addresses are visible only in the local
 `Signals` page and local POC storage.
 
 See [docs/PHASE3B_CALLER_ID_REPORT.md](docs/PHASE3B_CALLER_ID_REPORT.md).
+
+## Phase 4A authenticated local transport
+
+When configured from the `Transport` page, WorkManager sends a unified
+schema-versioned envelope to the Mac receiver:
+
+```text
+Room Outbox
+  -> HMAC-SHA256 signed request
+  -> local Wi-Fi
+  -> Python receiver
+  -> timestamp + nonce + signature verification
+  -> SQLite idempotent insert
+  -> localhost-only browser viewer
+```
+
+If transport is disabled or incomplete, the application falls back to
+`MockTransport`. Local runtime credentials live in ignored
+`server/config.json` and Android private preferences.
+
+Start the local receiver:
+
+```bash
+python3 server/setup_local.py
+python3 server/gateway_server.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787/
+```
+
+See [docs/PHASE4_LOCAL_TRANSPORT_REPORT.md](docs/PHASE4_LOCAL_TRANSPORT_REPORT.md).

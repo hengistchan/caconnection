@@ -6,6 +6,7 @@
     <string name="send">Send</string>
     <string name="diagnostics">Diagnostics</string>
     <string name="signals">Signals</string>
+    <string name="transport">Transport</string>
     <string name="refresh_probe">Refresh subscription probe</string>
     <string name="grant_permissions">Grant POC permissions</string>
     <string name="request_sms_role">Request default SMS role (Path B)</string>
@@ -20,6 +21,12 @@
     <string name="notification_allowlist_hint">Allowed source package names, one per line (for example: com.example.app)</string>
     <string name="save_notification_allowlist">Save notification source allowlist</string>
     <string name="request_call_screening_role">Enable incoming caller ID role</string>
+    <string name="transport_endpoint_hint">Receiver base URL, for example http://192.168.1.10:8787</string>
+    <string name="transport_device_id_hint">Gateway device ID</string>
+    <string name="transport_secret_hint">Base64 shared secret (leave blank to keep existing)</string>
+    <string name="enable_http_transport">Enable authenticated HTTP transport</string>
+    <string name="save_transport">Save transport configuration</string>
+    <string name="run_transport_self_test">Queue transport self-test</string>
     <string name="notification_channel_name">Incoming SMS POC</string>
     <string name="notification_channel_description">Notifications for SMS events captured by the gateway POC</string>
 </resources>

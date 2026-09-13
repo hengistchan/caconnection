@@ -42,3 +42,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# Phase 4 local receiver runtime state and credentials
+server/config.json
+server/data/
+__pycache__/
+*.pyc

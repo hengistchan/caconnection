@@ -3,6 +3,7 @@ package com.caconnection.worker
 import com.caconnection.data.poc.OutboxEventEntity
 import com.caconnection.data.poc.OutboxStatus
 import com.caconnection.transport.Transport
+import com.caconnection.transport.TransportEvent
 import com.caconnection.transport.TransportResult
 import kotlinx.coroutines.CancellationException
 import kotlin.math.min
@@ -74,8 +75,18 @@ class OutboxProcessor(
             return
         }
 
+        val transportEvent = TransportEvent(
+            deliveryId = event.eventId,
+            sourceEventId = event.incomingEventId,
+            idempotencyKey = event.idempotencyKey,
+            eventType = event.payloadType ?: "UNKNOWN",
+            createdAt = event.createdAt,
+            subscriptionId = event.subscriptionId,
+            slotIndex = event.slotIndex,
+            payloadData = payload
+        )
         val result = try {
-            transport.send(payload, event.idempotencyKey)
+            transport.send(transportEvent)
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {

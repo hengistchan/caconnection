@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.caconnection.data.poc.PocDatabase
-import com.caconnection.transport.MockTransport
+import com.caconnection.transport.GatewayTransportFactory
 import com.caconnection.transport.Transport
 import kotlinx.coroutines.CancellationException
 import kotlin.math.max
@@ -20,9 +20,7 @@ class OutboxWorker(
         private const val IN_PROGRESS_LEASE_MS = 10 * 60 * 1_000L
     }
 
-    // Phase 2 deliberately uses a no-network mock. Replace this through a
-    // WorkerFactory when a real authenticated Transport is introduced.
-    internal var transport: Transport = MockTransport()
+    internal var transportOverride: Transport? = null
 
     override suspend fun doWork(): Result {
         val dao = PocDatabase.get(applicationContext).pocDao()
@@ -33,7 +31,9 @@ class OutboxWorker(
                 startedAt
             )
 
-            val processor = OutboxProcessor(transport)
+            val processor = OutboxProcessor(
+                transportOverride ?: GatewayTransportFactory.create(applicationContext)
+            )
             val ready = dao.getReadyOutboxEvents(startedAt, BATCH_SIZE)
             ready.forEach { event ->
                 if (dao.claimReadyOutbox(event.eventId, System.currentTimeMillis()) == 1) {

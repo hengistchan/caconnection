@@ -1,18 +1,22 @@
 package com.caconnection.transport
 
+data class TransportEvent(
+    val deliveryId: String,
+    val sourceEventId: String,
+    val idempotencyKey: String,
+    val eventType: String,
+    val createdAt: Long,
+    val subscriptionId: Int?,
+    val slotIndex: Int?,
+    val payloadData: String
+)
+
 /**
  * Interface for transmitting events to a remote endpoint.
  * Implementations should be stateless and thread-safe.
  */
 fun interface Transport {
-    /**
-     * Send an event to the remote endpoint.
-     *
-     * @param payload The serialized event data to send
-     * @param idempotencyKey Unique key to prevent duplicate processing
-     * @return TransportResult indicating success or failure
-     */
-    suspend fun send(payload: String, idempotencyKey: String): TransportResult
+    suspend fun send(event: TransportEvent): TransportResult
 }
 
 /**

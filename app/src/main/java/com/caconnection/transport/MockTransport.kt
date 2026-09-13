@@ -22,8 +22,7 @@ class MockTransport : Transport {
             Collections.synchronizedList(mutableListOf())
 
         data class SentEvent(
-            val payload: String,
-            val idempotencyKey: String,
+            val event: TransportEvent,
             val timestamp: Long = System.currentTimeMillis()
         )
 
@@ -32,8 +31,8 @@ class MockTransport : Transport {
         }
     }
 
-    override suspend fun send(payload: String, idempotencyKey: String): TransportResult {
-        Log.d(TAG, "Sending event with idempotency key: $idempotencyKey")
+    override suspend fun send(event: TransportEvent): TransportResult {
+        Log.d(TAG, "Sending event with idempotency key: ${event.idempotencyKey}")
 
         // Simulate network latency
         if (simulatedLatencyMillis > 0) {
@@ -48,7 +47,7 @@ class MockTransport : Transport {
         // Simulate random failures
         val random = Math.random()
         if (random < simulatedPermanentFailureRate) {
-            Log.w(TAG, "Simulated permanent failure for key: $idempotencyKey")
+            Log.w(TAG, "Simulated permanent failure for key: ${event.idempotencyKey}")
             return TransportResult.PermanentFailure(
                 error = "Simulated permanent failure",
                 errorCode = 400
@@ -56,7 +55,7 @@ class MockTransport : Transport {
         }
 
         if (random < simulatedPermanentFailureRate + simulatedFailureRate) {
-            Log.w(TAG, "Simulated temporary failure for key: $idempotencyKey")
+            Log.w(TAG, "Simulated temporary failure for key: ${event.idempotencyKey}")
             return TransportResult.RetryableFailure(
                 error = "Simulated temporary failure",
                 retryAfterMillis = 5000L // 5 seconds
@@ -64,8 +63,8 @@ class MockTransport : Transport {
         }
 
         // Record successful send
-        sentEvents.add(SentEvent(payload, idempotencyKey))
-        Log.d(TAG, "Successfully sent event with key: $idempotencyKey")
+        sentEvents.add(SentEvent(event))
+        Log.d(TAG, "Successfully sent event with key: ${event.idempotencyKey}")
 
         return TransportResult.Success
     }

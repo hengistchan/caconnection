@@ -1,0 +1,7 @@
+{
+  "devices": {
+    "xiaomi-gateway": {
+      "secret_base64": "REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES_ENCODED_AS_BASE64"
+    }
+  }
+}

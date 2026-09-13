@@ -58,6 +58,13 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/signals" />
+
+            <Button
+                style="?android:attr/buttonBarButtonStyle"
+                android:id="@+id/nav_transport"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/transport" />
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -260,6 +267,69 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/request_call_screening_role" />
+            </LinearLayout>
+        </ScrollView>
+
+        <ScrollView
+            android:id="@+id/page_transport"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/transport_text"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:paddingVertical="12dp"
+                    android:textIsSelectable="true" />
+
+                <EditText
+                    android:id="@+id/transport_endpoint_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/transport_endpoint_hint"
+                    android:importantForAutofill="no"
+                    android:inputType="textUri" />
+
+                <EditText
+                    android:id="@+id/transport_device_id_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/transport_device_id_hint"
+                    android:importantForAutofill="no"
+                    android:inputType="textNoSuggestions" />
+
+                <EditText
+                    android:id="@+id/transport_secret_input"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="@string/transport_secret_hint"
+                    android:importantForAutofill="no"
+                    android:inputType="textPassword" />
+
+                <CheckBox
+                    android:id="@+id/transport_enabled_checkbox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/enable_http_transport" />
+
+                <Button
+                    android:id="@+id/save_transport_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/save_transport" />
+
+                <Button
+                    android:id="@+id/transport_test_button"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/run_transport_self_test" />
             </LinearLayout>
         </ScrollView>
     </FrameLayout>

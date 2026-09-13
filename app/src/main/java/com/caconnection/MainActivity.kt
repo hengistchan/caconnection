@@ -12,6 +12,7 @@ import android.provider.Settings
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.Spinner
 import android.widget.TextView
@@ -40,6 +41,8 @@ import com.caconnection.telephony.outbound.SmsGatewaySender
 import com.caconnection.telephony.smsrole.SmsRoleController
 import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.telephony.subscription.SubscriptionSnapshot
+import com.caconnection.transport.GatewayTransportConfig
+import com.caconnection.worker.OutboxScheduler
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,15 +53,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sendPage: View
     private lateinit var diagnosticsPage: View
     private lateinit var signalsPage: View
+    private lateinit var transportPage: View
     private lateinit var dashboardText: TextView
     private lateinit var incomingText: TextView
     private lateinit var outgoingText: TextView
     private lateinit var diagnosticsText: TextView
     private lateinit var signalsText: TextView
+    private lateinit var transportText: TextView
     private lateinit var recipientInput: EditText
     private lateinit var messageInput: EditText
     private lateinit var simSpinner: Spinner
     private lateinit var notificationAllowlistInput: EditText
+    private lateinit var transportEndpointInput: EditText
+    private lateinit var transportDeviceIdInput: EditText
+    private lateinit var transportSecretInput: EditText
+    private lateinit var transportEnabledCheckbox: CheckBox
 
     private val subscriptionRepository by lazy { SubscriptionRepository(this) }
     private val eventStore by lazy { PocEventStore.get(this) }
@@ -145,11 +154,13 @@ class MainActivity : AppCompatActivity() {
         sendPage = findViewById(R.id.page_send)
         diagnosticsPage = findViewById(R.id.page_diagnostics)
         signalsPage = findViewById(R.id.page_signals)
+        transportPage = findViewById(R.id.page_transport)
         dashboardText = findViewById(R.id.dashboard_text)
         incomingText = findViewById(R.id.incoming_text)
         outgoingText = findViewById(R.id.outgoing_text)
         diagnosticsText = findViewById(R.id.diagnostics_text)
         signalsText = findViewById(R.id.signals_text)
+        transportText = findViewById(R.id.transport_text)
         recipientInput = findViewById(R.id.recipient_input)
         messageInput = findViewById(R.id.message_input)
         simSpinner = findViewById(R.id.sim_spinner)
@@ -157,6 +168,14 @@ class MainActivity : AppCompatActivity() {
         notificationAllowlistInput.setText(
             NotificationAllowlist.get(this).joinToString("\n")
         )
+        transportEndpointInput = findViewById(R.id.transport_endpoint_input)
+        transportDeviceIdInput = findViewById(R.id.transport_device_id_input)
+        transportSecretInput = findViewById(R.id.transport_secret_input)
+        transportEnabledCheckbox = findViewById(R.id.transport_enabled_checkbox)
+        val transportSettings = GatewayTransportConfig.load(this)
+        transportEndpointInput.setText(transportSettings.endpoint)
+        transportDeviceIdInput.setText(transportSettings.deviceId)
+        transportEnabledCheckbox.isChecked = transportSettings.enabled
     }
 
     private fun bindActions() {
@@ -165,6 +184,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.nav_send).setOnClickListener { showPage(PAGE_SEND) }
         findViewById<Button>(R.id.nav_diagnostics).setOnClickListener { showPage(PAGE_DIAGNOSTICS) }
         findViewById<Button>(R.id.nav_signals).setOnClickListener { showPage(PAGE_SIGNALS) }
+        findViewById<Button>(R.id.nav_transport).setOnClickListener { showPage(PAGE_TRANSPORT) }
         findViewById<Button>(R.id.refresh_button).setOnClickListener { refreshAll() }
         findViewById<Button>(R.id.permission_button).setOnClickListener { requestPocPermissions() }
         findViewById<Button>(R.id.role_button).setOnClickListener { requestSmsRole() }
@@ -197,6 +217,17 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.call_screening_role_button).setOnClickListener {
             requestCallScreeningRole()
         }
+        findViewById<Button>(R.id.save_transport_button).setOnClickListener {
+            saveTransportConfiguration()
+        }
+        findViewById<Button>(R.id.transport_test_button).setOnClickListener {
+            eventStore.enqueueOutboxSelfTest {
+                runOnUiThread {
+                    toast("Transport self-test queued")
+                    refreshStoredEvents()
+                }
+            }
+        }
     }
 
     private fun applyIntent(intent: Intent?) {
@@ -213,6 +244,7 @@ class MainActivity : AppCompatActivity() {
             PAGE_SEND -> showPage(PAGE_SEND)
             PAGE_DIAGNOSTICS -> showPage(PAGE_DIAGNOSTICS)
             PAGE_SIGNALS -> showPage(PAGE_SIGNALS)
+            PAGE_TRANSPORT -> showPage(PAGE_TRANSPORT)
         }
     }
 
@@ -222,6 +254,7 @@ class MainActivity : AppCompatActivity() {
         sendPage.visibility = if (page == PAGE_SEND) View.VISIBLE else View.GONE
         diagnosticsPage.visibility = if (page == PAGE_DIAGNOSTICS) View.VISIBLE else View.GONE
         signalsPage.visibility = if (page == PAGE_SIGNALS) View.VISIBLE else View.GONE
+        transportPage.visibility = if (page == PAGE_TRANSPORT) View.VISIBLE else View.GONE
     }
 
     private fun refreshAll() {
@@ -250,6 +283,7 @@ class MainActivity : AppCompatActivity() {
                 renderIncoming(incoming)
                 renderOutgoing(outgoing)
                 renderSignals(notifications, calls, callIdentities)
+                renderTransport(outbox)
                 updateDashboard(
                     subscriptions,
                     incoming,
@@ -522,6 +556,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun renderTransport(
+        outbox: List<com.caconnection.data.poc.OutboxEventEntity>
+    ) {
+        val settings = GatewayTransportConfig.load(this)
+        val mode = if (settings.enabled && settings.configured) {
+            "AUTHENTICATED HTTP"
+        } else {
+            "LOCAL MOCK"
+        }
+        transportText.text = buildString {
+            appendLine("ACTIVE TRANSPORT")
+            appendLine("Mode: $mode")
+            appendLine(
+                "Endpoint: " +
+                    settings.endpoint.ifBlank { "(not configured)" }
+            )
+            appendLine(
+                "Device ID: " +
+                    settings.deviceId.ifBlank { "(not configured)" }
+            )
+            appendLine(
+                "Shared secret: " +
+                    if (settings.sharedSecretBase64.isBlank()) "NOT CONFIGURED"
+                    else "CONFIGURED (hidden)"
+            )
+            appendLine("Release policy: HTTPS required")
+            appendLine("Debug policy: local HTTP permitted")
+            appendLine()
+            appendLine(
+                "Outbox: " +
+                    if (outbox.isEmpty()) "(empty)"
+                    else outbox.groupingBy { it.status }.eachCount()
+                        .entries.joinToString { "${it.key}=${it.value}" }
+            )
+        }
+    }
+
     private fun sendSms() {
         val subscription = activeSubscriptions.getOrNull(simSpinner.selectedItemPosition)
         if (subscription == null) {
@@ -584,6 +655,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun saveTransportConfiguration() {
+        runCatching {
+            GatewayTransportConfig.save(
+                context = this,
+                enabled = transportEnabledCheckbox.isChecked,
+                endpoint = transportEndpointInput.text.toString(),
+                deviceId = transportDeviceIdInput.text.toString(),
+                replacementSecretBase64 =
+                    transportSecretInput.text.toString().takeIf { it.isNotBlank() }
+            )
+        }.onSuccess {
+            transportSecretInput.text.clear()
+            OutboxScheduler.enqueueNow(this)
+            toast("Transport configuration saved")
+            refreshStoredEvents()
+        }.onFailure {
+            toast(it.message ?: "Invalid transport configuration")
+        }
+    }
+
     private fun openBatterySettings() {
         startActivity(
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
@@ -608,6 +699,7 @@ class MainActivity : AppCompatActivity() {
         const val PAGE_SEND = "send"
         const val PAGE_DIAGNOSTICS = "diagnostics"
         const val PAGE_SIGNALS = "signals"
+        const val PAGE_TRANSPORT = "transport"
         private const val REQUEST_PERMISSIONS = 1001
     }
 }
