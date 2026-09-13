@@ -89,3 +89,44 @@ retained all six previously captured inbound records.
   verification.
 - The Gateway still relies on the separately documented managed-process
   assumption and HyperOS `MIUIOP(10018)` provisioning.
+
+## Natural inbound closure — 2026-09-13
+
+The remaining real-inbound boundary was closed with naturally arriving
+messages. No sender, recipient, body, or code value was copied into this
+report.
+
+The latest observed message arrived at **2026-09-13 01:11:46 +08:00** on
+**SIM2 / slot 1 / subId 2**. It was an ordinary, single-part SMS rather than a
+message tagged by HyperOS as a service number.
+
+```text
+Incoming resolver:       OEM_SUBSCRIPTION_EXTRA / HIGH
+SMS timestamp to Room:   1551 ms
+Outbox creation:         6 ms after Incoming persistence
+Outbox processing:       125 ms
+Outbox final status:     SUCCESS
+Retry count:             0
+Idempotency key:         sms_ + 64 lowercase hexadecimal characters
+```
+
+The current post-clear database contained four naturally arriving inbound
+events. Cardinality checks showed:
+
+```text
+IncomingSmsEvent rows:             4
+INCOMING_SMS Outbox rows:          4
+Distinct linked Incoming IDs:      4
+Duplicate SMS Outbox rows:         0
+INCOMING_SMS rows not SUCCESS:      0
+```
+
+All four real inbound events resolved their SIM with HIGH confidence and all
+four corresponding Outbox rows reached `SUCCESS` with zero retries. The
+WorkManager database recorded completed `OutboxWorker` work for the latest
+message at **01:11:47 +08:00**.
+
+At final audit, the installed build remained targetSdk 37, the default SMS
+package remained `com.android.mms`, and `MIUIOP(10008)` plus
+`MIUIOP(10018)` both remained `allow`. The deployment readiness script
+reported `FINAL STATUS: READY` under the explicit managed-process assumption.
