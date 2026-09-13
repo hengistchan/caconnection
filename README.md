@@ -1,4 +1,4 @@
-# Personal Communication Gateway — Phase 1 Android POC
+# Personal Communication Gateway — Android POC
 
 This repository contains a deliberately small Android technical spike for one
 question:
@@ -39,6 +39,14 @@ AI, MCP, contacts, MMS processing, or SMS history import.
 - WorkManager scheduling, retry state, exponential backoff, stale-attempt
   recovery, and process-start recovery.
 - A no-network Mock Transport and local Outbox self-test.
+- User-granted `NotificationListenerService` capture behind an explicit source
+  package allowlist.
+- Metadata-only notification persistence and Outbox payloads; notification
+  title/body values are never stored.
+- Runtime `TelephonyCallback.CallStateListener` registration for each active
+  SIM subscription.
+- Per-SIM `RINGING` / `OFFHOOK` / `IDLE` events and local Outbox delivery,
+  without caller number collection or a call-screening role.
 
 ## Data and safety boundaries
 
@@ -46,6 +54,10 @@ AI, MCP, contacts, MMS processing, or SMS history import.
 - No cloud endpoint exists.
 - `READ_SMS` is not requested.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
+- Notification content is not stored. Only source package, timing, channel,
+  category, visibility flags, and content lengths are retained.
+- Call events contain state and SIM attribution only. Caller identity is not
+  requested or stored.
 - The local Outbox contains a second serialized copy of an inbound event until
   it is cleared. The UI clear operation deletes incoming, outgoing, and Outbox
   data together.
@@ -151,3 +163,28 @@ the runtime queue without sending an SMS or exposing stored SMS content.
 
 See [docs/PHASE2_OUTBOX_REPORT.md](docs/PHASE2_OUTBOX_REPORT.md) for the design,
 failure handling, and verified device evidence.
+
+## Phase 3A local notification and call signals
+
+The `Signals` page exposes two additional local-only paths:
+
+```text
+Allowed app notification
+  -> NotificationListenerService
+  -> metadata-only NotificationEvent + OutboxEvent
+  -> Mock Transport
+
+Per-SIM TelephonyCallback
+  -> RINGING / OFFHOOK / IDLE CallEvent + OutboxEvent
+  -> Mock Transport
+```
+
+Notification access must be granted manually in Android settings. An empty
+source allowlist captures nothing. The call path uses the existing
+`READ_PHONE_STATE` permission and retains the explicit managed-process
+assumption because `TelephonyCallback` is a runtime registration.
+
+Android may redact sensitive notification content before it reaches an
+untrusted notification listener. Raw SMS reception remains the OTP path.
+
+See [docs/PHASE3_SIGNALS_REPORT.md](docs/PHASE3_SIGNALS_REPORT.md).

@@ -167,6 +167,14 @@ check_appop_allow "10018" "HyperOS notification SMS / MIUIOP(10018)"
 pid="$("${ADB[@]}" shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r')"
 info "current process" "${pid:-absent (not itself a failure)}"
 
+enabled_notification_listeners="$("${ADB[@]}" shell settings get secure \
+    enabled_notification_listeners 2>/dev/null | tr -d '\r')"
+if printf '%s' "$enabled_notification_listeners" | grep -F "$PACKAGE/" >/dev/null; then
+    info "notification listener access" "enabled"
+else
+    info "notification listener access" "not enabled (optional for SMS readiness)"
+fi
+
 if [ "$ASSUME_MANAGED_PROCESS" -eq 1 ]; then
     pass "managed process retention" "assumed by explicit deployment premise"
 else
@@ -214,6 +222,25 @@ PY
             "received=$received_display; slot=$last_slot; subId=$last_sub; confidence=$confidence; persistDelay=${delay}ms"
     else
         info "latest inbound evidence" "no readable event"
+    fi
+
+    phase3_counts="$(sqlite3 -readonly -separator '|' "$temp_dir/gateway-poc.db" \
+        'SELECT
+         (SELECT COUNT(*) FROM notification_events),
+         (SELECT COUNT(*) FROM call_events),
+         (SELECT COUNT(*) FROM outbox_events
+          WHERE payloadType IN ("NOTIFICATION", "CALL_STATE")
+            AND status != "SUCCESS");' 2>/dev/null || true)"
+    if [ -n "$phase3_counts" ]; then
+        old_ifs="$IFS"
+        IFS='|' read -r notification_count call_count phase3_not_success <<EOF
+$phase3_counts
+EOF
+        IFS="$old_ifs"
+        info "Phase 3 local evidence" \
+            "notifications=$notification_count; calls=$call_count; outboxNotSuccess=$phase3_not_success"
+    else
+        info "Phase 3 local evidence" "schema or database evidence unavailable"
     fi
 else
     info "latest inbound evidence" "database inspection unavailable"

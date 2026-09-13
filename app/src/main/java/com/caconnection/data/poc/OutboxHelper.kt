@@ -53,6 +53,48 @@ object OutboxHelper {
         )
     }
 
+    fun createOutboxForNotification(
+        event: NotificationEventEntity
+    ): OutboxEventEntity {
+        val now = System.currentTimeMillis()
+        return OutboxEventEntity(
+            UUID.randomUUID().toString(),
+            "notification_${sha256(event.eventId)}",
+            event.eventId,
+            OutboxStatus.PENDING.name,
+            0,
+            now,
+            now,
+            now,
+            null,
+            null,
+            "NOTIFICATION",
+            gson.toJson(NotificationPayload.fromEntity(event)),
+            null,
+            null
+        )
+    }
+
+    fun createOutboxForCall(event: CallEventEntity): OutboxEventEntity {
+        val now = System.currentTimeMillis()
+        return OutboxEventEntity(
+            UUID.randomUUID().toString(),
+            "call_${sha256(event.eventId)}",
+            event.eventId,
+            OutboxStatus.PENDING.name,
+            0,
+            now,
+            now,
+            now,
+            event.subscriptionId,
+            event.slotIndex,
+            "CALL_STATE",
+            gson.toJson(CallPayload.fromEntity(event)),
+            null,
+            null
+        )
+    }
+
     /**
      * The full SHA-256 digest avoids the silent collision risk of Java's
      * 32-bit hashCode. Slot/subscription are included so identical content
@@ -69,11 +111,13 @@ object OutboxHelper {
         ).joinToString(separator = "") { value ->
             "${value.toByteArray(StandardCharsets.UTF_8).size}:$value"
         }
-        val digest = MessageDigest.getInstance("SHA-256")
-            .digest(canonical.toByteArray(StandardCharsets.UTF_8))
-            .joinToString(separator = "") { byte -> "%02x".format(byte) }
-        return "sms_$digest"
+        return "sms_${sha256(canonical)}"
     }
+
+    private fun sha256(value: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(value.toByteArray(StandardCharsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte) }
 
     data class IncomingSmsPayload(
         val eventId: String,
@@ -98,6 +142,68 @@ object OutboxHelper {
                     slotIndex = entity.resolvedSlotIndex,
                     resolutionMethod = entity.resolutionMethod,
                     resolutionConfidence = entity.resolutionConfidence
+                )
+        }
+    }
+
+    data class NotificationPayload(
+        val eventId: String,
+        val eventType: String,
+        val sourcePackage: String,
+        val notificationId: Int,
+        val notificationKeyHash: String?,
+        val postedAt: Long,
+        val observedAt: Long,
+        val channelId: String?,
+        val category: String?,
+        val titleExposed: Boolean,
+        val textExposed: Boolean,
+        val titleLength: Int,
+        val textLength: Int,
+        val removalReason: Int?,
+        val redactionPolicy: String
+    ) {
+        companion object {
+            fun fromEntity(entity: NotificationEventEntity) =
+                NotificationPayload(
+                    eventId = entity.eventId,
+                    eventType = entity.eventType,
+                    sourcePackage = entity.sourcePackage,
+                    notificationId = entity.notificationId,
+                    notificationKeyHash = entity.notificationKeyHash,
+                    postedAt = entity.postedAt,
+                    observedAt = entity.observedAt,
+                    channelId = entity.channelId,
+                    category = entity.category,
+                    titleExposed = entity.titleExposed,
+                    textExposed = entity.textExposed,
+                    titleLength = entity.titleLength,
+                    textLength = entity.textLength,
+                    removalReason = entity.removalReason,
+                    redactionPolicy = entity.redactionPolicy
+                )
+        }
+    }
+
+    data class CallPayload(
+        val eventId: String,
+        val sessionId: String,
+        val subscriptionId: Int,
+        val slotIndex: Int,
+        val state: String,
+        val observedAt: Long,
+        val initialSnapshot: Boolean
+    ) {
+        companion object {
+            fun fromEntity(entity: CallEventEntity) =
+                CallPayload(
+                    eventId = entity.eventId,
+                    sessionId = entity.sessionId,
+                    subscriptionId = entity.subscriptionId,
+                    slotIndex = entity.slotIndex,
+                    state = entity.state,
+                    observedAt = entity.observedAt,
+                    initialSnapshot = entity.initialSnapshot
                 )
         }
     }

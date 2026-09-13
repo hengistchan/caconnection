@@ -13,9 +13,11 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 SubscriptionSnapshotEntity.class,
                 IncomingSmsEventEntity.class,
                 OutgoingSmsEventEntity.class,
+                NotificationEventEntity.class,
+                CallEventEntity.class,
                 OutboxEventEntity.class
         },
-        version = 2,
+        version = 3,
         exportSchema = true
 )
 public abstract class PocDatabase extends RoomDatabase {
@@ -52,6 +54,42 @@ public abstract class PocDatabase extends RoomDatabase {
         }
     };
 
+    static final Migration MIGRATION_2_3 = new Migration(2, 3) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `notification_events` (" +
+                "`eventId` TEXT NOT NULL, " +
+                "`eventType` TEXT NOT NULL, " +
+                "`sourcePackage` TEXT NOT NULL, " +
+                "`notificationId` INTEGER NOT NULL, " +
+                "`notificationKeyHash` TEXT, " +
+                "`postedAt` INTEGER NOT NULL, " +
+                "`observedAt` INTEGER NOT NULL, " +
+                "`channelId` TEXT, " +
+                "`category` TEXT, " +
+                "`titleExposed` INTEGER NOT NULL, " +
+                "`textExposed` INTEGER NOT NULL, " +
+                "`titleLength` INTEGER NOT NULL, " +
+                "`textLength` INTEGER NOT NULL, " +
+                "`removalReason` INTEGER, " +
+                "`redactionPolicy` TEXT NOT NULL, " +
+                "PRIMARY KEY(`eventId`))"
+            );
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `call_events` (" +
+                "`eventId` TEXT NOT NULL, " +
+                "`sessionId` TEXT NOT NULL, " +
+                "`subscriptionId` INTEGER NOT NULL, " +
+                "`slotIndex` INTEGER NOT NULL, " +
+                "`state` TEXT NOT NULL, " +
+                "`observedAt` INTEGER NOT NULL, " +
+                "`initialSnapshot` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`eventId`))"
+            );
+        }
+    };
+
     public abstract PocDao pocDao();
 
     public static PocDatabase get(Context context) {
@@ -63,7 +101,7 @@ public abstract class PocDatabase extends RoomDatabase {
                                     PocDatabase.class,
                                     "gateway-poc.db"
                             )
-                            .addMigrations(MIGRATION_1_2)
+                            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                             .build();
                 }
             }

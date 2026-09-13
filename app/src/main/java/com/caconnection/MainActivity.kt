@@ -21,10 +21,15 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.caconnection.data.poc.IncomingSmsEventEntity
+import com.caconnection.data.poc.CallEventEntity
+import com.caconnection.data.poc.NotificationEventEntity
 import com.caconnection.data.poc.OutgoingSmsEventEntity
 import com.caconnection.data.poc.PocEventStore
 import com.caconnection.data.poc.SubscriptionSnapshotEntity
+import com.caconnection.notifications.NotificationAccess
+import com.caconnection.notifications.NotificationAllowlist
 import com.caconnection.notifications.NotificationHelper
+import com.caconnection.telephony.call.CallStateMonitor
 import com.caconnection.telephony.diagnostics.GatewayReadinessEvaluator
 import com.caconnection.telephony.diagnostics.GatewayReadinessInput
 import com.caconnection.telephony.diagnostics.ReadinessSubscription
@@ -42,13 +47,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var incomingPage: View
     private lateinit var sendPage: View
     private lateinit var diagnosticsPage: View
+    private lateinit var signalsPage: View
     private lateinit var dashboardText: TextView
     private lateinit var incomingText: TextView
     private lateinit var outgoingText: TextView
     private lateinit var diagnosticsText: TextView
+    private lateinit var signalsText: TextView
     private lateinit var recipientInput: EditText
     private lateinit var messageInput: EditText
     private lateinit var simSpinner: Spinner
+    private lateinit var notificationAllowlistInput: EditText
 
     private val subscriptionRepository by lazy { SubscriptionRepository(this) }
     private val eventStore by lazy { PocEventStore.get(this) }
@@ -107,6 +115,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        CallStateMonitor.start(this)
+        NotificationAccess.requestRebindIfEnabled(this)
         refreshAll()
     }
 
@@ -116,7 +126,10 @@ class MainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_PERMISSIONS) refreshAll()
+        if (requestCode == REQUEST_PERMISSIONS) {
+            CallStateMonitor.start(this)
+            refreshAll()
+        }
     }
 
     private fun bindViews() {
@@ -124,13 +137,19 @@ class MainActivity : AppCompatActivity() {
         incomingPage = findViewById(R.id.page_incoming)
         sendPage = findViewById(R.id.page_send)
         diagnosticsPage = findViewById(R.id.page_diagnostics)
+        signalsPage = findViewById(R.id.page_signals)
         dashboardText = findViewById(R.id.dashboard_text)
         incomingText = findViewById(R.id.incoming_text)
         outgoingText = findViewById(R.id.outgoing_text)
         diagnosticsText = findViewById(R.id.diagnostics_text)
+        signalsText = findViewById(R.id.signals_text)
         recipientInput = findViewById(R.id.recipient_input)
         messageInput = findViewById(R.id.message_input)
         simSpinner = findViewById(R.id.sim_spinner)
+        notificationAllowlistInput = findViewById(R.id.notification_allowlist_input)
+        notificationAllowlistInput.setText(
+            NotificationAllowlist.get(this).joinToString("\n")
+        )
     }
 
     private fun bindActions() {
@@ -138,6 +157,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.nav_incoming).setOnClickListener { showPage(PAGE_INCOMING) }
         findViewById<Button>(R.id.nav_send).setOnClickListener { showPage(PAGE_SEND) }
         findViewById<Button>(R.id.nav_diagnostics).setOnClickListener { showPage(PAGE_DIAGNOSTICS) }
+        findViewById<Button>(R.id.nav_signals).setOnClickListener { showPage(PAGE_SIGNALS) }
         findViewById<Button>(R.id.refresh_button).setOnClickListener { refreshAll() }
         findViewById<Button>(R.id.permission_button).setOnClickListener { requestPocPermissions() }
         findViewById<Button>(R.id.role_button).setOnClickListener { requestSmsRole() }
@@ -154,6 +174,19 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+        findViewById<Button>(R.id.notification_access_button).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+        findViewById<Button>(R.id.save_notification_allowlist_button).setOnClickListener {
+            val packages = NotificationAllowlist.set(
+                this,
+                notificationAllowlistInput.text.toString()
+            )
+            notificationAllowlistInput.setText(packages.joinToString("\n"))
+            NotificationAccess.requestRebindIfEnabled(this)
+            toast("Saved ${packages.size} allowed notification source(s)")
+            refreshStoredEvents()
+        }
     }
 
     private fun applyIntent(intent: Intent?) {
@@ -169,6 +202,7 @@ class MainActivity : AppCompatActivity() {
             PAGE_INCOMING -> showPage(PAGE_INCOMING)
             PAGE_SEND -> showPage(PAGE_SEND)
             PAGE_DIAGNOSTICS -> showPage(PAGE_DIAGNOSTICS)
+            PAGE_SIGNALS -> showPage(PAGE_SIGNALS)
         }
     }
 
@@ -177,9 +211,11 @@ class MainActivity : AppCompatActivity() {
         incomingPage.visibility = if (page == PAGE_INCOMING) View.VISIBLE else View.GONE
         sendPage.visibility = if (page == PAGE_SEND) View.VISIBLE else View.GONE
         diagnosticsPage.visibility = if (page == PAGE_DIAGNOSTICS) View.VISIBLE else View.GONE
+        signalsPage.visibility = if (page == PAGE_SIGNALS) View.VISIBLE else View.GONE
     }
 
     private fun refreshAll() {
+        CallStateMonitor.start(this)
         activeSubscriptions = subscriptionRepository.getActiveSubscriptions()
         updateSimSpinner()
         eventStore.replaceSubscriptions(subscriptionRepository.captureEntities()) {
@@ -192,11 +228,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshStoredEvents() {
-        eventStore.loadLatest { subscriptions, incoming, outgoing, outbox ->
+        eventStore.loadLatest { subscriptions, incoming, outgoing, notifications, calls, outbox ->
             runOnUiThread {
                 renderIncoming(incoming)
                 renderOutgoing(outgoing)
-                updateDashboard(subscriptions, incoming, outgoing, outbox)
+                renderSignals(notifications, calls)
+                updateDashboard(
+                    subscriptions,
+                    incoming,
+                    outgoing,
+                    notifications,
+                    calls,
+                    outbox
+                )
                 diagnosticsText.text = buildString {
                     append(TelephonyDiagnostics(this@MainActivity).report())
                     appendLine()
@@ -227,11 +271,16 @@ class MainActivity : AppCompatActivity() {
         storedSubscriptions: List<SubscriptionSnapshotEntity> = emptyList(),
         incoming: List<IncomingSmsEventEntity> = emptyList(),
         outgoing: List<OutgoingSmsEventEntity> = emptyList(),
+        notifications: List<NotificationEventEntity> = emptyList(),
+        calls: List<CallEventEntity> = emptyList(),
         outbox: List<com.caconnection.data.poc.OutboxEventEntity> = emptyList()
     ) {
         val roleHeld = SmsRoleController(this).isRoleHeld()
         val receiverGranted = isGranted(Manifest.permission.RECEIVE_SMS)
         val sendGranted = isGranted(Manifest.permission.SEND_SMS)
+        val notificationAccess = NotificationAccess.isEnabled(this)
+        val notificationAllowlist = NotificationAllowlist.get(this)
+        val callMonitor = CallStateMonitor.snapshot()
         val visibleSubscriptions = activeSubscriptions.ifEmpty {
             storedSubscriptions.map {
                 SubscriptionSnapshot(
@@ -305,8 +354,19 @@ class MainActivity : AppCompatActivity() {
             appendLine("Receive permission  ${if (receiverGranted) "OK" else "DENIED"}")
             appendLine("Send permission     ${if (sendGranted) "OK" else "DENIED"}")
             appendLine("Default SMS role    ${if (roleHeld) "YES" else "NO"}")
+            appendLine("Notification access ${if (notificationAccess) "YES" else "NO"}")
+            appendLine("Allowed notif apps  ${notificationAllowlist.size}")
+            appendLine(
+                "Call SIM callbacks   " +
+                    "${callMonitor.registeredSubscriptions.size}/${visibleSubscriptions.size}"
+            )
+            if (callMonitor.errors.isNotEmpty()) {
+                appendLine("Call callback errors ${callMonitor.errors}")
+            }
             appendLine("Incoming captured   ${incoming.size}")
             appendLine("Outgoing attempts   ${outgoing.size}")
+            appendLine("Notification events ${notifications.size}")
+            appendLine("Call-state events   ${calls.size}")
             appendLine("Outbox events       ${outbox.size}")
             if (outbox.isNotEmpty()) {
                 appendLine(
@@ -362,6 +422,54 @@ class MainActivity : AppCompatActivity() {
                     event.providerWriteError?.let { appendLine("Provider error: $it") }
                     appendLine("Body: ${event.body}")
                 }
+            }
+        }
+    }
+
+    private fun renderSignals(
+        notifications: List<NotificationEventEntity>,
+        calls: List<CallEventEntity>
+    ) {
+        val notificationAccess = NotificationAccess.isEnabled(this)
+        val allowlist = NotificationAllowlist.get(this)
+        val callMonitor = CallStateMonitor.snapshot()
+        signalsText.text = buildString {
+            appendLine("NOTIFICATION LISTENER")
+            appendLine("Access: ${if (notificationAccess) "GRANTED" else "NOT GRANTED"}")
+            appendLine(
+                "Allowlist: " +
+                    if (allowlist.isEmpty()) "(empty — nothing is captured)"
+                    else allowlist.joinToString()
+            )
+            appendLine("Storage: metadata only; title/body are never persisted")
+            appendLine("Captured events: ${notifications.size}")
+            notifications.take(10).forEach { event ->
+                appendLine(
+                    "${formatTime(event.observedAt)} · ${event.eventType} · " +
+                        "${event.sourcePackage} · title=${event.titleExposed}" +
+                        "(${event.titleLength}) text=${event.textExposed}" +
+                        "(${event.textLength})"
+                )
+            }
+            appendLine()
+            appendLine("CALL STATE")
+            appendLine(
+                "READ_PHONE_STATE: " +
+                    if (callMonitor.permissionGranted) "GRANTED" else "NOT GRANTED"
+            )
+            appendLine(
+                "Registered subIds: " +
+                    if (callMonitor.registeredSubscriptions.isEmpty()) "(none)"
+                    else callMonitor.registeredSubscriptions.joinToString()
+            )
+            appendLine("Caller number: NOT REQUESTED / NOT STORED")
+            appendLine("Captured events: ${calls.size}")
+            calls.take(20).forEach { event ->
+                appendLine(
+                    "${formatTime(event.observedAt)} · ${event.state} · " +
+                        "SIM${event.slotIndex + 1} / subId ${event.subscriptionId}" +
+                        if (event.initialSnapshot) " · initial" else ""
+                )
             }
         }
     }
@@ -437,6 +545,7 @@ class MainActivity : AppCompatActivity() {
         const val PAGE_INCOMING = "incoming"
         const val PAGE_SEND = "send"
         const val PAGE_DIAGNOSTICS = "diagnostics"
+        const val PAGE_SIGNALS = "signals"
         private const val REQUEST_PERMISSIONS = 1001
     }
 }

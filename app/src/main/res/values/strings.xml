@@ -5,6 +5,7 @@
     <string name="incoming">Incoming</string>
     <string name="send">Send</string>
     <string name="diagnostics">Diagnostics</string>
+    <string name="signals">Signals</string>
     <string name="refresh_probe">Refresh subscription probe</string>
     <string name="grant_permissions">Grant POC permissions</string>
     <string name="request_sms_role">Request default SMS role (Path B)</string>
@@ -15,6 +16,9 @@
     <string name="outgoing_events">Outgoing status events</string>
     <string name="clear_poc_events">Clear local POC events</string>
     <string name="run_outbox_self_test">Run local Outbox self-test (no network)</string>
+    <string name="open_notification_access">Open notification access settings</string>
+    <string name="notification_allowlist_hint">Allowed source package names, one per line (for example: com.example.app)</string>
+    <string name="save_notification_allowlist">Save notification source allowlist</string>
     <string name="notification_channel_name">Incoming SMS POC</string>
     <string name="notification_channel_description">Notifications for SMS events captured by the gateway POC</string>
 </resources>

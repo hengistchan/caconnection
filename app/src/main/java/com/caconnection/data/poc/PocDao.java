@@ -43,6 +43,24 @@ public interface PocDao {
     @Query("DELETE FROM outgoing_sms_events")
     void clearOutgoing();
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void insertNotification(NotificationEventEntity event);
+
+    @Query("SELECT * FROM notification_events ORDER BY observedAt DESC LIMIT :limit")
+    List<NotificationEventEntity> getLatestNotifications(int limit);
+
+    @Query("DELETE FROM notification_events")
+    void clearNotifications();
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void insertCall(CallEventEntity event);
+
+    @Query("SELECT * FROM call_events ORDER BY observedAt DESC LIMIT :limit")
+    List<CallEventEntity> getLatestCalls(int limit);
+
+    @Query("DELETE FROM call_events")
+    void clearCalls();
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     void insertOutbox(OutboxEventEntity event);
 

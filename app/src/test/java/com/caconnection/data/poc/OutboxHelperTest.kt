@@ -83,6 +83,62 @@ class OutboxHelperTest {
         assertTrue(outbox.payloadData.contains("LOCAL_SELF_TEST"))
     }
 
+    @Test
+    fun notificationPayloadIsMetadataOnly() {
+        val event = NotificationEventEntity(
+            "notification-event",
+            "POSTED",
+            "com.example.alerts",
+            42,
+            "key-hash",
+            1_000L,
+            1_100L,
+            "alerts",
+            "msg",
+            true,
+            true,
+            12,
+            34,
+            null,
+            "METADATA_ONLY"
+        )
+
+        val outbox = OutboxHelper.createOutboxForNotification(event)
+
+        assertTrue(outbox.idempotencyKey.matches(Regex("notification_[0-9a-f]{64}")))
+        assertEquals(event.eventId, outbox.incomingEventId)
+        assertEquals("NOTIFICATION", outbox.payloadType)
+        assertTrue(outbox.payloadData.contains("com.example.alerts"))
+        assertTrue(outbox.payloadData.contains("\"titleLength\":12"))
+        assertTrue(outbox.payloadData.contains("\"redactionPolicy\":\"METADATA_ONLY\""))
+    }
+
+    @Test
+    fun callPayloadContainsSimAndNoCallerIdentity() {
+        val event = CallEventEntity(
+            "call-event",
+            "call-session",
+            2,
+            1,
+            "RINGING",
+            2_000L,
+            false
+        )
+
+        val outbox = OutboxHelper.createOutboxForCall(event)
+
+        assertTrue(outbox.idempotencyKey.matches(Regex("call_[0-9a-f]{64}")))
+        assertEquals(event.eventId, outbox.incomingEventId)
+        assertEquals("CALL_STATE", outbox.payloadType)
+        assertEquals(2, outbox.subscriptionId)
+        assertEquals(1, outbox.slotIndex)
+        assertTrue(outbox.payloadData.contains("\"state\":\"RINGING\""))
+        assertTrue(outbox.payloadData.contains("\"subscriptionId\":2"))
+        assertTrue(outbox.payloadData.contains("\"slotIndex\":1"))
+        assertTrue(!outbox.payloadData.contains("phoneNumber"))
+        assertTrue(!outbox.payloadData.contains("caller"))
+    }
+
     private fun incoming(
         eventId: String = UUID.randomUUID().toString(),
         originatingAddress: String = "+1234567890",
