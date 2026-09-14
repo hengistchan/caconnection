@@ -1,14 +1,18 @@
 import hashlib
 import json
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from server.backup_database import backup_database
 from server.gateway_server import GatewayStore
+from server.production_preflight import ProductionHostAudit, valid_domain
 from server.restore_database import restore_database
 
 
@@ -219,6 +223,140 @@ class DatabaseBackupTest(unittest.TestCase):
                         "SELECT idempotency_key FROM events"
                     ).fetchone()[0],
                 )
+
+
+class ProductionHostAuditTest(unittest.TestCase):
+    @staticmethod
+    def completed(
+        stdout: str = "",
+        returncode: int = 0,
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=returncode,
+            stdout=stdout,
+            stderr="",
+        )
+
+    def test_clean_linux_host_passes_with_expected_warnings(self) -> None:
+        commands = {
+            ("docker", "info", "--format", "{{.ServerVersion}}"):
+                self.completed("29.4.0\n"),
+            ("docker", "compose", "version", "--short"):
+                self.completed("5.1.2\n"),
+            ("timedatectl", "show", "--property=NTPSynchronized", "--value"):
+                self.completed("yes\n"),
+            ("ss", "-H", "-ltn"): self.completed(""),
+            ("ss", "-H", "-lun"): self.completed(""),
+        }
+
+        def runner(command, **_kwargs):
+            return commands[tuple(command)]
+
+        response = Mock(status=200)
+        response.close = Mock()
+        audit = ProductionHostAudit(
+            "gateway.example.com",
+            Path("/tmp"),
+            command_runner=runner,
+            command_lookup=lambda name: f"/usr/bin/{name}",
+            system_name=lambda: "Linux",
+            disk_usage=lambda _path: SimpleNamespace(free=8 * 1024**3),
+            address_lookup=lambda *_args, **_kwargs: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))
+            ],
+            url_open=lambda *_args, **_kwargs: response,
+        )
+        results = audit.audit()
+
+        self.assertFalse([item for item in results if item.status == "FAIL"])
+        self.assertEqual(
+            {"Firewall", "Runtime credentials"},
+            {item.name for item in results if item.status == "WARN"},
+        )
+        response.close.assert_called_once()
+
+    def test_host_blockers_are_reported_without_modification(self) -> None:
+        commands = {
+            ("timedatectl", "show", "--property=NTPSynchronized", "--value"):
+                self.completed("no\n"),
+            ("ss", "-H", "-ltn"):
+                self.completed("LISTEN 0 4096 0.0.0.0:443 0.0.0.0:*\n"),
+            ("ss", "-H", "-lun"): self.completed(""),
+        }
+
+        def runner(command, **_kwargs):
+            return commands[tuple(command)]
+
+        audit = ProductionHostAudit(
+            "gateway.example.com",
+            Path("/tmp"),
+            require_runtime=True,
+            command_runner=runner,
+            command_lookup=lambda name: (
+                None if name == "docker" else f"/usr/bin/{name}"
+            ),
+            system_name=lambda: "Darwin",
+            disk_usage=lambda _path: SimpleNamespace(free=1024),
+            address_lookup=lambda *_args, **_kwargs: [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+            ],
+            url_open=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("offline")
+            ),
+        )
+        results = audit.audit()
+        failed = {item.name for item in results if item.status == "FAIL"}
+
+        self.assertTrue(
+            {
+                "Operating system",
+                "Disk space",
+                "Docker Engine",
+                "Docker Compose",
+                "Clock synchronization",
+                "Public ports",
+                "DNS",
+                "Runtime credentials",
+            }.issubset(failed)
+        )
+
+    def test_runtime_files_must_be_private_and_match_domain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            deploy = Path(temporary)
+            runtime = deploy / "runtime"
+            runtime.mkdir(mode=0o700)
+            files = {
+                deploy / ".env": "GATEWAY_DOMAIN=gateway.example.com\n",
+                runtime / "config.json":
+                    '{"devices":{"phone":{}},"api_clients":{"client":{}}}\n',
+                runtime / "android-provisioning.json":
+                    '{"endpoint":"https://gateway.example.com","enabled":true}\n',
+                runtime / "automation-api-token.txt": "A" * 43 + "\n",
+            }
+            for path, content in files.items():
+                path.write_text(content)
+                path.chmod(0o600)
+            audit = ProductionHostAudit(
+                "gateway.example.com",
+                deploy,
+                require_runtime=True,
+            )
+            audit.check_runtime_files()
+            self.assertEqual("PASS", audit.results[0].status)
+
+            (runtime / "config.json").chmod(0o644)
+            audit.results.clear()
+            audit.check_runtime_files()
+            self.assertEqual("FAIL", audit.results[0].status)
+
+    def test_domain_validation(self) -> None:
+        self.assertEqual(
+            "gateway.example.com",
+            valid_domain(" Gateway.Example.Com "),
+        )
+        with self.assertRaises(Exception):
+            valid_domain("127.0.0.1")
 
 
 if __name__ == "__main__":

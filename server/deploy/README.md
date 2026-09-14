@@ -20,10 +20,31 @@ Requirements:
 - a DNS hostname already pointing to the server;
 - inbound TCP 80/443 and UDP 443 allowed.
 
+Before creating credentials or changing the host, run the read-only preflight:
+
+```bash
+python3 ../production_preflight.py --domain gateway.example.com
+```
+
+It checks Linux, available disk, Docker/Compose access, clock
+synchronization, port conflicts, public DNS, outbound ACME reachability, and
+whether host firewall state still needs manual review. It never changes
+packages, services, firewall rules, or runtime configuration. Inbound
+reachability cannot be proven from the server itself and must still be checked
+externally.
+
 Generate private runtime files:
 
 ```bash
 python3 ../setup_production.py --domain gateway.example.com
+```
+
+Then validate the generated files without printing their contents:
+
+```bash
+python3 ../production_preflight.py \
+  --domain gateway.example.com \
+  --require-runtime
 ```
 
 Rotate an API bearer token or device secret only as an explicit maintenance

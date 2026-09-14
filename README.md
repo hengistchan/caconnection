@@ -335,7 +335,11 @@ Deployment files are under `server/deploy/`. Start with:
 
 ```bash
 cd server/deploy
+python3 ../production_preflight.py --domain gateway.example.com
 python3 ../setup_production.py --domain gateway.example.com
+python3 ../production_preflight.py \
+  --domain gateway.example.com \
+  --require-runtime
 ./deploy.sh
 ./check.sh
 ```

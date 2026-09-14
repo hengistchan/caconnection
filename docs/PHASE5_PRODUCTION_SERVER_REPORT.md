@@ -152,6 +152,13 @@ The setup tool:
 - includes `enabled: true` in Android provisioning;
 - provides separate API-token and device-secret rotation operations.
 
+`server/production_preflight.py` performs the required read-only host audit
+before credentials are generated or services are changed. It checks the Linux
+runtime, available disk, Docker/Compose access, time synchronization, local
+port conflicts, public DNS, outbound ACME reachability, and credential-file
+permissions. Firewall visibility is reported separately because inbound
+reachability must be verified externally.
+
 `deploy.sh` force-recreates the containers so changed secret-file contents are
 loaded into process memory after rotation.
 
@@ -259,7 +266,7 @@ confirmation when the phone reconnects.
 Python:
 
 ```text
-25/25 tests passed
+29/29 tests passed
 compileall passed
 OpenAPI 3.1 YAML parse passed
 shell syntax checks passed
@@ -276,6 +283,8 @@ Coverage includes:
 - English/Chinese OTP ranking;
 - atomic one-time OTP claims;
 - production setup, credential preservation, and explicit rotation;
+- read-only production-host preflight pass/fail behavior and private runtime
+  credential validation;
 - backup consistency, retention, integrity, and restore;
 - a signed encrypted deployment smoke request using a separate TCP connection
   host while preserving TLS SNI and hostname validation.
