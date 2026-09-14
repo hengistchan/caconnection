@@ -20,6 +20,10 @@ Requirements:
 - a DNS hostname already pointing to the server;
 - inbound TCP 80/443 and UDP 443 allowed.
 
+For a config-file-managed Cloudflare Named Tunnel, inbound 80/443 is not
+required. Use the isolated Cloudflare mode below instead of the direct Caddy
+mode.
+
 Before creating credentials or changing the host, run the read-only preflight:
 
 ```bash
@@ -38,6 +42,36 @@ Generate private runtime files:
 ```bash
 python3 ../setup_production.py --domain gateway.example.com
 ```
+
+### Config-file-managed Cloudflare Tunnel mode
+
+Create a dedicated Named Tunnel with the host's existing Cloudflare account
+certificate, then create its DNS route. Do not reuse a remotely managed Tunnel
+token or copy a token from another running container.
+
+Prepare the Gateway runtime in Cloudflare mode:
+
+```bash
+python3 ../setup_production.py \
+  --domain gateway.example.com \
+  --deployment-mode cloudflare-tunnel
+```
+
+Prepare the config-file-managed tunnel files from the credential JSON created
+by `cloudflared tunnel create`:
+
+```bash
+python3 ../setup_cloudflare.py \
+  --domain gateway.example.com \
+  --tunnel-id TUNNEL_UUID \
+  --credentials-file /root/.cloudflared/TUNNEL_UUID.json \
+  --runtime-dir runtime
+```
+
+`compose.cloudflare.yaml` runs a dedicated pinned cloudflared connector. It
+mounts the tunnel config and credential as Docker secrets, connects directly
+to the private Gateway network, and publishes no host port. Existing
+cloudflared system services and containers remain independent.
 
 Then validate the generated files without printing their contents:
 
@@ -96,6 +130,11 @@ Caddy access logging is intentionally disabled so bearer tokens and gateway
 authentication headers cannot be copied into reverse-proxy access logs. The
 gateway application logs only the client address, request line, and response
 status; it never logs headers or request/response bodies.
+
+In Cloudflare Tunnel mode, Cloudflare provides public TLS and the dedicated
+connector forwards directly to the private Gateway container. The Gateway
+itself emits HSTS and the other API security headers. The connector and
+Gateway have no host port bindings.
 
 ## Read messages
 

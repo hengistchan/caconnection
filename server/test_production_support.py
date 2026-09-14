@@ -14,6 +14,7 @@ from server.backup_database import backup_database
 from server.gateway_server import GatewayStore
 from server.production_preflight import ProductionHostAudit, valid_domain
 from server.restore_database import restore_database
+from server.setup_cloudflare import prepare_cloudflare_runtime
 
 
 class ProductionSetupTest(unittest.TestCase):
@@ -67,6 +68,14 @@ class ProductionSetupTest(unittest.TestCase):
                 & 0o777,
             )
             self.assertEqual([], list(runtime.glob(".*.tmp")))
+            self.assertEqual(
+                [
+                    "GATEWAY_DOMAIN=gateway.example.com",
+                    "GATEWAY_DEPLOYMENT_MODE=direct",
+                    "COMPOSE_FILE=compose.yaml",
+                ],
+                (Path(temporary) / ".env").read_text().splitlines(),
+            )
 
             subprocess.run(command, check=True, capture_output=True, text=True)
             second = json.loads((runtime / "config.json").read_text())
@@ -99,6 +108,35 @@ class ProductionSetupTest(unittest.TestCase):
                 rotated["api_clients"]["automation"]["token_sha256"],
             )
 
+    def test_cloudflare_mode_selects_private_tunnel_compose(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            env_file = Path(temporary) / ".env"
+            subprocess.run(
+                [
+                    sys.executable,
+                    "server/setup_production.py",
+                    "--domain",
+                    "gateway.example.com",
+                    "--deployment-mode",
+                    "cloudflare-tunnel",
+                    "--runtime-dir",
+                    str(Path(temporary) / "runtime"),
+                    "--env-file",
+                    str(env_file),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                [
+                    "GATEWAY_DOMAIN=gateway.example.com",
+                    "GATEWAY_DEPLOYMENT_MODE=cloudflare-tunnel",
+                    "COMPOSE_FILE=compose.cloudflare.yaml",
+                ],
+                env_file.read_text().splitlines(),
+            )
+
     def test_setup_rejects_non_hostname_domain(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = subprocess.run(
@@ -117,6 +155,50 @@ class ProductionSetupTest(unittest.TestCase):
             )
             self.assertNotEqual(0, result.returncode)
             self.assertIn("valid DNS hostname", result.stderr)
+
+    def test_cloudflare_runtime_is_private_and_matches_tunnel(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            credentials = root / "source.json"
+            credentials.write_text(
+                json.dumps(
+                    {
+                        "AccountTag": "account",
+                        "TunnelSecret": "secret",
+                        "TunnelID": "12345678-1234-4234-8234-123456789abc",
+                    }
+                )
+            )
+            runtime = root / "runtime"
+
+            prepare_cloudflare_runtime(
+                "gateway.example.com",
+                "12345678-1234-4234-8234-123456789abc",
+                credentials,
+                runtime,
+            )
+
+            copied = runtime / "cloudflare-tunnel-credentials.json"
+            config = runtime / "cloudflared-config.yml"
+            self.assertEqual(0o600, copied.stat().st_mode & 0o777)
+            self.assertEqual(0o600, config.stat().st_mode & 0o777)
+            self.assertIn(
+                "hostname: gateway.example.com",
+                config.read_text(),
+            )
+            self.assertIn(
+                "service: http://gateway:8787",
+                config.read_text(),
+            )
+            self.assertNotIn("TunnelSecret", config.read_text())
+
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                prepare_cloudflare_runtime(
+                    "gateway.example.com",
+                    "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    credentials,
+                    runtime,
+                )
 
 
 class DatabaseBackupTest(unittest.TestCase):
@@ -327,7 +409,11 @@ class ProductionHostAuditTest(unittest.TestCase):
             runtime = deploy / "runtime"
             runtime.mkdir(mode=0o700)
             files = {
-                deploy / ".env": "GATEWAY_DOMAIN=gateway.example.com\n",
+                deploy / ".env": (
+                    "GATEWAY_DOMAIN=gateway.example.com\n"
+                    "GATEWAY_DEPLOYMENT_MODE=direct\n"
+                    "COMPOSE_FILE=compose.yaml\n"
+                ),
                 runtime / "config.json":
                     '{"devices":{"phone":{}},"api_clients":{"client":{}}}\n',
                 runtime / "android-provisioning.json":
@@ -349,6 +435,18 @@ class ProductionHostAuditTest(unittest.TestCase):
             audit.results.clear()
             audit.check_runtime_files()
             self.assertEqual("FAIL", audit.results[0].status)
+
+            (runtime / "config.json").chmod(0o600)
+            (deploy / ".env").write_text(
+                "GATEWAY_DOMAIN=gateway.example.com\n"
+                "GATEWAY_DEPLOYMENT_MODE=cloudflare-tunnel\n"
+                "COMPOSE_FILE=compose.cloudflare.yaml\n"
+            )
+            (deploy / ".env").chmod(0o600)
+            audit.results.clear()
+            audit.check_runtime_files()
+            self.assertEqual("FAIL", audit.results[0].status)
+            self.assertIn("Cloudflare Tunnel", audit.results[0].detail)
 
     def test_domain_validation(self) -> None:
         self.assertEqual(

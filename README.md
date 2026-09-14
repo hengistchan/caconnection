@@ -329,6 +329,12 @@ Xiaomi Android gateway
   -> bearer-authenticated message / one-time OTP API
 ```
 
+Two production edge modes are supported:
+
+- direct public Caddy with automatic system-CA TLS;
+- an isolated, config-file-managed Cloudflare Named Tunnel with no host port
+  published by the Gateway stack.
+
 The backend container is not published on the host. Caddy exposes only TCP
 80/443 and UDP 443. Public certificates use normal Android system-CA
 validation, so certificate renewal does not require phone reprovisioning.
@@ -345,6 +351,11 @@ python3 ../production_preflight.py \
 ./deploy.sh
 ./check.sh
 ```
+
+For Cloudflare Tunnel mode, pass
+`--deployment-mode cloudflare-tunnel`, prepare the dedicated tunnel runtime
+with `server/setup_cloudflare.py`, and use the generated
+`COMPOSE_FILE=compose.cloudflare.yaml`.
 
 `check.sh` verifies public TLS liveness/readiness/version endpoints and sends
 one real signed, encrypted event through Caddy to the private receiver.

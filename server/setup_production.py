@@ -16,6 +16,13 @@ DOMAIN_PATTERN = re.compile(
 )
 
 
+def valid_domain(value: str) -> str:
+    normalized = value.strip().lower()
+    if not DOMAIN_PATTERN.fullmatch(normalized):
+        raise ValueError("A valid DNS hostname is required")
+    return normalized
+
+
 def write_private(path: Path, value: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
@@ -48,13 +55,19 @@ def main() -> None:
     parser.add_argument("--client-id", default="automation")
     parser.add_argument("--runtime-dir", type=Path, default=root / "runtime")
     parser.add_argument("--env-file", type=Path, default=root / ".env")
+    parser.add_argument(
+        "--deployment-mode",
+        choices=("direct", "cloudflare-tunnel"),
+        default="direct",
+    )
     parser.add_argument("--rotate-api-token", action="store_true")
     parser.add_argument("--rotate-device-secret", action="store_true")
     args = parser.parse_args()
 
-    domain = args.domain.strip().lower()
-    if not DOMAIN_PATTERN.fullmatch(domain):
-        raise SystemExit("A valid DNS hostname is required")
+    try:
+        domain = valid_domain(args.domain)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,64}", args.device_id):
         raise SystemExit("Invalid device ID")
     if not re.fullmatch(r"[A-Za-z0-9._-]{3,64}", args.client_id):
@@ -122,9 +135,21 @@ def main() -> None:
         )
         + "\n",
     )
+    compose_file = (
+        "compose.cloudflare.yaml"
+        if args.deployment_mode == "cloudflare-tunnel"
+        else "compose.yaml"
+    )
     write_private(
         args.env_file.resolve(),
-        f"GATEWAY_DOMAIN={domain}\n",
+        "\n".join(
+            (
+                f"GATEWAY_DOMAIN={domain}",
+                f"GATEWAY_DEPLOYMENT_MODE={args.deployment_mode}",
+                f"COMPOSE_FILE={compose_file}",
+                "",
+            )
+        ),
     )
     backups = runtime / "backups"
     backups.mkdir(exist_ok=True)
@@ -134,6 +159,7 @@ def main() -> None:
     print(f"Domain: {domain}")
     print(f"Device ID: {args.device_id}")
     print(f"API client ID: {args.client_id}")
+    print(f"Deployment mode: {args.deployment_mode}")
     print("Device and API credentials were written to private files.")
     print("No credential value was printed.")
 

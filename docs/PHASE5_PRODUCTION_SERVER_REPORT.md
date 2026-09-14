@@ -24,6 +24,12 @@ Xiaomi Android gateway
   -> bearer-authenticated message API / atomic one-time OTP claim API
 ```
 
+The deployment also supports a config-file-managed Cloudflare Named Tunnel
+edge. In that mode a dedicated pinned cloudflared connector joins the private
+Gateway Docker network and no Gateway-stack port is published on the host.
+The direct public-Caddy deployment remains available for servers without a
+Tunnel.
+
 The Mac remains only the temporary Phase 4 development receiver. It is not a
 component of the production architecture.
 
@@ -157,6 +163,11 @@ The setup tool:
 - includes `enabled: true` in Android provisioning;
 - provides separate API-token and device-secret rotation operations.
 
+For Cloudflare mode, `server/setup_cloudflare.py` validates that a Named
+Tunnel credential matches the requested UUID, copies it to private ignored
+runtime storage, and writes a config-file-managed ingress to the Gateway
+container. Neither the credential value nor the Tunnel secret is printed.
+
 `server/production_preflight.py` performs the required read-only host audit
 before credentials are generated or services are changed. It checks the Linux
 runtime, available disk, Docker/Compose access, time synchronization, local
@@ -271,7 +282,7 @@ confirmation when the phone reconnects.
 Python:
 
 ```text
-34/34 tests passed
+36/36 tests passed
 compileall passed
 OpenAPI 3.1 YAML parse passed
 shell syntax checks passed
@@ -289,6 +300,8 @@ Coverage includes:
 - atomic one-time OTP claims;
 - deterministic exact-event OTP claims when multiple eligible messages exist;
 - redacted natural SIM cutover baseline and verification behavior;
+- direct versus Cloudflare deployment-mode selection;
+- private Cloudflare credential/config preparation and mismatch rejection;
 - production setup, credential preservation, and explicit rotation;
 - read-only production-host preflight pass/fail behavior and private runtime
   credential validation;

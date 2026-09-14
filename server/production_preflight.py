@@ -307,6 +307,12 @@ class ProductionHostAudit:
                 for line in env_file.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
+            env_values = {}
+            for line in env_lines:
+                if "=" not in line:
+                    raise ValueError("invalid .env line")
+                name, value = line.split("=", 1)
+                env_values[name] = value
             config = json.loads(
                 (runtime / "config.json").read_text(encoding="utf-8")
             )
@@ -318,14 +324,52 @@ class ProductionHostAudit:
             token = (
                 runtime / "automation-api-token.txt"
             ).read_text(encoding="utf-8").strip()
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as error:
             self.fail(
                 "Runtime credentials",
                 f"private runtime files are unreadable or invalid: {error}",
             )
             return
+        cloudflare_files = [
+            runtime / "cloudflared-config.yml",
+            runtime / "cloudflare-tunnel-credentials.json",
+        ]
+        if env_values.get("GATEWAY_DEPLOYMENT_MODE") == "cloudflare-tunnel":
+            missing_cloudflare = [
+                path for path in cloudflare_files if not path.is_file()
+            ]
+            if missing_cloudflare:
+                self.fail(
+                    "Runtime credentials",
+                    "Cloudflare Tunnel runtime files are missing",
+                )
+                return
+            insecure_cloudflare = [
+                path.name
+                for path in cloudflare_files
+                if path.stat().st_mode & 0o077
+            ]
+            if insecure_cloudflare:
+                self.fail(
+                    "Runtime credentials",
+                    "group/world permissions are present on: "
+                    + ", ".join(sorted(insecure_cloudflare)),
+                )
+                return
         valid = (
-            env_lines == [f"GATEWAY_DOMAIN={self.domain}"]
+            env_values.get("GATEWAY_DOMAIN") == self.domain
+            and env_values.get("GATEWAY_DEPLOYMENT_MODE")
+            in {"direct", "cloudflare-tunnel"}
+            and env_values.get("COMPOSE_FILE")
+            in {"compose.yaml", "compose.cloudflare.yaml"}
+            and (
+                env_values.get("GATEWAY_DEPLOYMENT_MODE") == "direct"
+            ) == (env_values.get("COMPOSE_FILE") == "compose.yaml")
             and provisioning.get("endpoint") == f"https://{self.domain}"
             and provisioning.get("enabled") is True
             and isinstance(config.get("devices"), dict)

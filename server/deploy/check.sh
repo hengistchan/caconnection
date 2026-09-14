@@ -12,11 +12,25 @@ curl --fail --silent --show-error "https://${GATEWAY_DOMAIN}/ready"
 echo
 curl --fail --silent --show-error "https://${GATEWAY_DOMAIN}/version"
 echo
-docker compose exec -T gateway \
-  python -m server.protocol_smoke \
-  --url "https://${GATEWAY_DOMAIN}" \
-  --connect-host caddy \
-  --config /run/secrets/gateway_config
+
+case "${GATEWAY_DEPLOYMENT_MODE:-direct}" in
+  direct)
+    docker compose exec -T gateway \
+      python -m server.protocol_smoke \
+      --url "https://${GATEWAY_DOMAIN}" \
+      --connect-host caddy \
+      --config /run/secrets/gateway_config
+    ;;
+  cloudflare-tunnel)
+    docker compose run --rm --no-deps smoke \
+      --url "https://${GATEWAY_DOMAIN}" \
+      --config /run/secrets/gateway_config
+    ;;
+  *)
+    echo "Unsupported GATEWAY_DEPLOYMENT_MODE." >&2
+    exit 2
+    ;;
+esac
 
 TOKEN="$(cat runtime/automation-api-token.txt)"
 if ! printf '%s' "$TOKEN" | grep -Eq '^[A-Za-z0-9_-]{32,128}$'; then
