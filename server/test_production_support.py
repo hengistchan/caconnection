@@ -12,6 +12,11 @@ from unittest.mock import Mock
 
 from server.backup_database import backup_database
 from server.gateway_server import GatewayStore
+from server.prepare_runtime_permissions import (
+    CLOUDFLARED_UID,
+    GATEWAY_UID,
+    prepare_runtime_permissions,
+)
 from server.production_preflight import ProductionHostAudit, valid_domain
 from server.restore_database import restore_database
 from server.setup_cloudflare import prepare_cloudflare_runtime
@@ -198,6 +203,64 @@ class ProductionSetupTest(unittest.TestCase):
                     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                     credentials,
                     runtime,
+                )
+
+
+class RuntimePermissionTest(unittest.TestCase):
+    def test_cloudflare_secret_ownership_is_prepared_for_non_root_users(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            files = [
+                runtime / "config.json",
+                runtime / "cloudflared-config.yml",
+                runtime / "cloudflare-tunnel-credentials.json",
+            ]
+            for path in files:
+                path.write_text("private")
+                path.chmod(0o600)
+            calls = []
+
+            prepare_runtime_permissions(
+                runtime,
+                "cloudflare-tunnel",
+                effective_uid=0,
+                chown=lambda path, uid, gid: calls.append(
+                    (path.name, uid, gid)
+                ),
+            )
+
+            self.assertEqual(
+                [
+                    ("config.json", GATEWAY_UID, GATEWAY_UID),
+                    (
+                        "cloudflared-config.yml",
+                        CLOUDFLARED_UID,
+                        CLOUDFLARED_UID,
+                    ),
+                    (
+                        "cloudflare-tunnel-credentials.json",
+                        CLOUDFLARED_UID,
+                        CLOUDFLARED_UID,
+                    ),
+                ],
+                calls,
+            )
+            self.assertTrue(
+                all(path.stat().st_mode & 0o777 == 0o400 for path in files)
+            )
+
+    def test_non_root_cannot_silently_keep_wrong_secret_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            config = runtime / "config.json"
+            config.write_text("private")
+            with self.assertRaisesRegex(PermissionError, "root deployment"):
+                prepare_runtime_permissions(
+                    runtime,
+                    "direct",
+                    effective_uid=12345,
                 )
 
 

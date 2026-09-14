@@ -168,6 +168,12 @@ Tunnel credential matches the requested UUID, copies it to private ignored
 runtime storage, and writes a config-file-managed ingress to the Gateway
 container. Neither the credential value nor the Tunnel secret is printed.
 
+Native Linux Compose mounts local secret files without remapping their host
+owner. `server/prepare_runtime_permissions.py` therefore assigns the Gateway
+config to UID 10001 and Cloudflare files to UID 65532 with mode `0400`.
+Deployment fails rather than running either service as root or making secrets
+group/world readable.
+
 `server/production_preflight.py` performs the required read-only host audit
 before credentials are generated or services are changed. It checks the Linux
 runtime, available disk, Docker/Compose access, time synchronization, local
@@ -282,7 +288,7 @@ confirmation when the phone reconnects.
 Python:
 
 ```text
-36/36 tests passed
+38/38 tests passed
 compileall passed
 OpenAPI 3.1 YAML parse passed
 shell syntax checks passed
@@ -302,6 +308,7 @@ Coverage includes:
 - redacted natural SIM cutover baseline and verification behavior;
 - direct versus Cloudflare deployment-mode selection;
 - private Cloudflare credential/config preparation and mismatch rejection;
+- Linux bind-mounted secret ownership preparation for both non-root services;
 - production setup, credential preservation, and explicit rotation;
 - read-only production-host preflight pass/fail behavior and private runtime
   credential validation;

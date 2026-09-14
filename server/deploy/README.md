@@ -73,6 +73,12 @@ mounts the tunnel config and credential as Docker secrets, connects directly
 to the private Gateway network, and publishes no host port. Existing
 cloudflared system services and containers remain independent.
 
+On native Linux, Compose implements local secrets as read-only bind mounts.
+`deploy.sh` therefore assigns `config.json` only to Gateway UID 10001 and the
+two Tunnel files only to cloudflared UID 65532, all mode `0400`, before
+starting containers. This step requires root unless those exact owners are
+already present.
+
 Then validate the generated files without printing their contents:
 
 ```bash

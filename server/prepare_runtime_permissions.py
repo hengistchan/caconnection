@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+from pathlib import Path
+from typing import Callable, Optional
+
+
+GATEWAY_UID = 10001
+CLOUDFLARED_UID = 65532
+
+
+def prepare_runtime_permissions(
+    runtime_dir: Path,
+    deployment_mode: str,
+    effective_uid: Optional[int] = None,
+    chown: Callable[[Path, int, int], None] = os.chown,
+) -> None:
+    if deployment_mode not in {"direct", "cloudflare-tunnel"}:
+        raise ValueError("unsupported deployment mode")
+    runtime = runtime_dir.resolve()
+    assignments = [
+        (runtime / "config.json", GATEWAY_UID),
+    ]
+    if deployment_mode == "cloudflare-tunnel":
+        assignments.extend(
+            (
+                (runtime / "cloudflared-config.yml", CLOUDFLARED_UID),
+                (
+                    runtime / "cloudflare-tunnel-credentials.json",
+                    CLOUDFLARED_UID,
+                ),
+            )
+        )
+    missing = [path for path, _uid in assignments if not path.is_file()]
+    if missing:
+        raise ValueError("required runtime secret file is missing")
+    uid = os.geteuid() if effective_uid is None else effective_uid
+    runtime.chmod(0o700)
+    for path, owner_uid in assignments:
+        stat = path.stat()
+        if uid == 0:
+            chown(path, owner_uid, owner_uid)
+        elif stat.st_uid != owner_uid or stat.st_gid != owner_uid:
+            raise PermissionError(
+                "runtime secret ownership requires a root deployment step"
+            )
+        path.chmod(0o400)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Set Linux host ownership for non-root Gateway and cloudflared "
+            "Docker secret bind mounts."
+        )
+    )
+    parser.add_argument("--runtime-dir", required=True, type=Path)
+    parser.add_argument(
+        "--deployment-mode",
+        required=True,
+        choices=("direct", "cloudflare-tunnel"),
+    )
+    args = parser.parse_args()
+    prepare_runtime_permissions(
+        args.runtime_dir,
+        args.deployment_mode,
+    )
+    print("Runtime secret ownership and read-only permissions prepared.")
+    print("No secret content was read or printed.")
+
+
+if __name__ == "__main__":
+    main()
