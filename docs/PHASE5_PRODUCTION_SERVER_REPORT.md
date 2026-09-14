@@ -69,6 +69,11 @@ and ranked OTP candidates.
 - returns the selected code only once;
 - does not add a plaintext OTP column to SQLite.
 
+The request can optionally include an exact `eventId`. This prevents a client
+or acceptance test from accidentally consuming a different OTP when several
+messages are inside the same age window. A second claim for the same event ID
+returns `404`.
+
 API bearer tokens are never stored directly in server configuration. The
 configuration contains only SHA-256 token hashes and scopes.
 
@@ -266,7 +271,7 @@ confirmation when the phone reconnects.
 Python:
 
 ```text
-29/29 tests passed
+34/34 tests passed
 compileall passed
 OpenAPI 3.1 YAML parse passed
 shell syntax checks passed
@@ -282,6 +287,8 @@ Coverage includes:
 - IP, device, and API-client rate limiting;
 - English/Chinese OTP ranking;
 - atomic one-time OTP claims;
+- deterministic exact-event OTP claims when multiple eligible messages exist;
+- redacted natural SIM cutover baseline and verification behavior;
 - production setup, credential preservation, and explicit rotation;
 - read-only production-host preflight pass/fail behavior and private runtime
   credential validation;
@@ -421,7 +428,8 @@ After those inputs are available, the required cutover sequence is:
 10. import production provisioning without printing secrets;
 11. verify an Android self-test through the public server;
 12. verify one natural SIM1 and one natural SIM2 SMS/OTP end to end;
-13. verify authenticated message retrieval and one-time OTP claim behavior;
+13. use `cutover_acceptance.sh` to verify authenticated retrieval and exact
+    one-time OTP claim behavior without printing sensitive values;
 14. only then disable the Debug gateway and retire the Mac receiver.
 
 Until that sequence succeeds, the verified local Phase 4 transport remains

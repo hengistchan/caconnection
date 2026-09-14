@@ -73,6 +73,8 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
   limits.
 - Authenticated `GET /v1/messages` and atomic one-time
   `POST /v1/otp/claim` APIs.
+- Optional exact-message OTP claims plus a redacted SIM1/SIM2 cutover
+  acceptance tool.
 - Thirty-day configurable retention, encrypted SQLite storage, verified
   backup/export and atomic restore tooling, liveness/readiness/version probes,
   and an encrypted signed deployment smoke test.

@@ -139,6 +139,13 @@ paths:
                   type: integer
                   minimum: 30
                   maximum: 3600
+                eventId:
+                  type: integer
+                  minimum: 1
+                  description: >
+                    Claim only this exact incoming-message event. This makes
+                    one-time consumption deterministic when several OTP
+                    messages are inside the age window.
               additionalProperties: false
       responses:
         "200":

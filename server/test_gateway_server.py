@@ -479,12 +479,17 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         self.assertEqual(
             ["482913"], messages["messages"][0]["otpCandidates"]
         )
+        message_id = messages["messages"][0]["id"]
 
         status, claimed = self.api_request(
             "POST",
             "/v1/otp/claim",
             token=self.api_token,
-            value={"slotIndex": 0, "maxAgeSeconds": 3600},
+            value={
+                "slotIndex": 0,
+                "maxAgeSeconds": 3600,
+                "eventId": message_id,
+            },
         )
         self.assertEqual(200, status)
         self.assertEqual("482913", claimed["otp"]["code"])
@@ -494,7 +499,11 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                 "POST",
                 "/v1/otp/claim",
                 token=self.api_token,
-                value={"slotIndex": 0, "maxAgeSeconds": 3600},
+                value={
+                    "slotIndex": 0,
+                    "maxAgeSeconds": 3600,
+                    "eventId": message_id,
+                },
             )[0],
         )
         self.assertEqual(
@@ -508,6 +517,68 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         )
         raw = json.dumps(self.store.latest()[0]["envelope"])
         self.assertNotIn("482913", raw)
+
+    def test_exact_event_otp_claim_does_not_consume_another_message(self) -> None:
+        for suffix, code in (("older", "112233"), ("newer", "778899")):
+            body = self.encrypted_body(
+                event_type="INCOMING_SMS",
+                slot_index=0,
+                payload={
+                    "originatingAddress": "service",
+                    "body": f"Verification code: {code}",
+                    "partCount": 1,
+                    "resolutionMethod": "OEM_SUBSCRIPTION_EXTRA",
+                    "resolutionConfidence": "HIGH",
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=body,
+                    nonce=f"exact-{suffix}",
+                    idempotency_key=f"exact-{suffix}",
+                )[0],
+            )
+        status, messages = self.api_request(
+            "GET",
+            "/v1/messages?slotIndex=0&limit=10",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        older = next(
+            message
+            for message in messages["messages"]
+            if message["otpCandidates"] == ["112233"]
+        )
+        newer = next(
+            message
+            for message in messages["messages"]
+            if message["otpCandidates"] == ["778899"]
+        )
+
+        status, claimed = self.api_request(
+            "POST",
+            "/v1/otp/claim",
+            token=self.api_token,
+            value={
+                "slotIndex": 0,
+                "maxAgeSeconds": 3600,
+                "eventId": older["id"],
+            },
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual(older["id"], claimed["otp"]["eventId"])
+        self.assertEqual("112233", claimed["otp"]["code"])
+        status, next_claim = self.api_request(
+            "POST",
+            "/v1/otp/claim",
+            token=self.api_token,
+            value={"slotIndex": 0, "maxAgeSeconds": 3600},
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(newer["id"], next_claim["otp"]["eventId"])
+        self.assertEqual("778899", next_claim["otp"]["code"])
 
     def test_api_rate_limit_returns_retry_after(self) -> None:
         self.server.api_requests_per_minute = 1
@@ -592,6 +663,24 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                 "/v1/otp/claim",
                 token=self.api_token,
                 value={"maxAgeSeconds": True},
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token=self.api_token,
+                value={"eventId": True},
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token=self.api_token,
+                value={"eventId": 0},
             )[0],
         )
 

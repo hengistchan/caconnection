@@ -447,6 +447,7 @@ class GatewayStore:
         now_ms: int,
         max_age_seconds: int,
         slot_index: Optional[int] = None,
+        event_id: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         cutoff = now_ms - max_age_seconds * 1000
         clauses = [
@@ -458,6 +459,9 @@ class GatewayStore:
         if slot_index is not None:
             clauses.append("e.slot_index = ?")
             parameters.append(slot_index)
+        if event_id is not None:
+            clauses.append("e.id = ?")
+            parameters.append(event_id)
         with self._lock, self._connect() as db:
             rows = db.execute(
                 """
@@ -853,7 +857,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 return
             try:
                 value = self.read_json_body()
-                if set(value) - {"slotIndex", "maxAgeSeconds"}:
+                if set(value) - {"slotIndex", "maxAgeSeconds", "eventId"}:
                     raise ValueError("unsupported request field")
                 slot_index = value.get("slotIndex")
                 if slot_index is not None and (
@@ -872,6 +876,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 max_age_seconds = max_age_value
                 if not 30 <= max_age_seconds <= 3600:
                     raise ValueError("invalid maxAgeSeconds")
+                event_id = value.get("eventId")
+                if event_id is not None and (
+                    not isinstance(event_id, int)
+                    or isinstance(event_id, bool)
+                    or event_id < 1
+                ):
+                    raise ValueError("invalid eventId")
             except (
                 TypeError,
                 ValueError,
@@ -888,6 +899,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 int(time.time() * 1000),
                 max_age_seconds,
                 slot_index=slot_index,
+                event_id=event_id,
             )
             if claimed is None:
                 self.send_json(

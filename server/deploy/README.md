@@ -170,6 +170,33 @@ Outbox drain.
 Recheck HyperOS `MIUIOP(10018)`, queue a self-test, and send one natural SMS or
 OTP to each SIM.
 
+Immediately before sending the natural tests, capture a private server-side
+baseline:
+
+```bash
+./cutover_acceptance.sh \
+  --url https://gateway.example.com \
+  --token-file runtime/automation-api-token.txt \
+  baseline \
+  --output runtime/cutover-baseline.json
+```
+
+After sending an OTP-bearing message to SIM1, verify that it reached the
+correct slot and that the exact message can be claimed only once:
+
+```bash
+./cutover_acceptance.sh \
+  --url https://gateway.example.com \
+  --token-file runtime/automation-api-token.txt \
+  verify \
+  --baseline runtime/cutover-baseline.json \
+  --slot 0
+```
+
+Repeat for SIM2 with `--slot 1`. The tool uses the baseline message IDs and
+the API's exact `eventId` claim selector. It deliberately does not print the
+sender, message body, OTP value, API token, or Android shared secret.
+
 The production APK package is:
 
 ```text
