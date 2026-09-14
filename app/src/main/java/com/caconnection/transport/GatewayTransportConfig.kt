@@ -15,8 +15,7 @@ data class GatewayTransportSettings(
     val configured: Boolean
         get() = endpoint.isNotBlank() &&
             deviceId.isNotBlank() &&
-            sharedSecretBase64.isNotBlank() &&
-            certificatePinSha256Base64.isNotBlank()
+            sharedSecretBase64.isNotBlank()
 }
 
 object GatewayTransportConfig {
@@ -24,7 +23,6 @@ object GatewayTransportConfig {
     private const val KEY_ENABLED = "enabled"
     private const val KEY_ENDPOINT = "endpoint"
     private const val KEY_DEVICE_ID = "device_id"
-    private const val KEY_SHARED_SECRET = "shared_secret_base64"
     private const val KEY_CERTIFICATE_PIN = "certificate_pin_sha256_base64"
 
     fun load(context: Context): GatewayTransportSettings {
@@ -34,8 +32,7 @@ object GatewayTransportConfig {
             enabled = preferences.getBoolean(KEY_ENABLED, false),
             endpoint = preferences.getString(KEY_ENDPOINT, "").orEmpty(),
             deviceId = preferences.getString(KEY_DEVICE_ID, "").orEmpty(),
-            sharedSecretBase64 =
-                preferences.getString(KEY_SHARED_SECRET, "").orEmpty(),
+            sharedSecretBase64 = GatewaySecretStore.loadAndMigrate(preferences),
             certificatePinSha256Base64 =
                 preferences.getString(KEY_CERTIFICATE_PIN, "").orEmpty()
         )
@@ -62,9 +59,12 @@ object GatewayTransportConfig {
             putBoolean(KEY_ENABLED, enabled)
             putString(KEY_ENDPOINT, normalizedEndpoint)
             putString(KEY_DEVICE_ID, normalizedDeviceId)
-            putString(KEY_SHARED_SECRET, secret)
             putString(KEY_CERTIFICATE_PIN, pin)
         }
+        GatewaySecretStore.store(
+            context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE),
+            secret
+        )
         return load(context)
     }
 
@@ -86,15 +86,29 @@ object GatewayTransportConfig {
             .getOrElse { throw IllegalArgumentException("Invalid endpoint URL") }
         require(uri.scheme == "https") { "HTTPS is required" }
         require(!uri.host.isNullOrBlank()) { "Endpoint must include a host" }
+        require(uri.userInfo == null) {
+            "Endpoint must not include credentials"
+        }
+        require(uri.query == null && uri.fragment == null) {
+            "Endpoint must not include a query or fragment"
+        }
+        require(uri.path.isNullOrEmpty() || uri.path == "/") {
+            "Endpoint must be an HTTPS origin without a path"
+        }
+        require(uri.port == -1 || uri.port in 1..65535) {
+            "Endpoint port is invalid"
+        }
         require(runCatching {
             Base64.getDecoder().decode(secretBase64).size >= 32
         }.getOrDefault(false)) {
             "Shared secret must be Base64 and decode to at least 32 bytes"
         }
-        require(runCatching {
-            Base64.getDecoder().decode(certificatePinSha256Base64).size == 32
-        }.getOrDefault(false)) {
-            "Certificate pin must be a Base64 SHA-256 digest"
+        if (certificatePinSha256Base64.isNotBlank()) {
+            require(runCatching {
+                Base64.getDecoder().decode(certificatePinSha256Base64).size == 32
+            }.getOrDefault(false)) {
+                "Certificate pin must be a Base64 SHA-256 digest"
+            }
         }
     }
 }

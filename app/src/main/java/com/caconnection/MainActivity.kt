@@ -21,6 +21,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import com.caconnection.data.poc.IncomingSmsEventEntity
 import com.caconnection.data.poc.CallEventEntity
 import com.caconnection.data.poc.CallIdentityEventEntity
@@ -94,12 +97,35 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        applySystemBarInsets()
         NotificationHelper.createChannel(this)
         bindViews()
         bindActions()
         requestPocPermissions()
         applyIntent(intent)
         refreshAll()
+    }
+
+    private fun applySystemBarInsets() {
+        val root = findViewById<View>(R.id.root_layout)
+        val initialPaddingLeft = root.paddingLeft
+        val initialPaddingTop = root.paddingTop
+        val initialPaddingRight = root.paddingRight
+        val initialPaddingBottom = root.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val safeInsets = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or
+                    WindowInsetsCompat.Type.displayCutout()
+            )
+            view.updatePadding(
+                left = initialPaddingLeft + safeInsets.left,
+                top = initialPaddingTop + safeInsets.top,
+                right = initialPaddingRight + safeInsets.right,
+                bottom = initialPaddingBottom + safeInsets.bottom
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -588,11 +614,11 @@ class MainActivity : AppCompatActivity() {
                     else "CONFIGURED (hidden)"
             )
             appendLine(
-                "Certificate pin: " +
+                "TLS validation: " +
                     if (settings.certificatePinSha256Base64.isBlank()) {
-                        "NOT CONFIGURED"
+                        "SYSTEM CA"
                     } else {
-                        "CONFIGURED"
+                        "PINNED CERTIFICATE"
                     }
             )
             appendLine("Payload: AES-256-GCM encrypted")

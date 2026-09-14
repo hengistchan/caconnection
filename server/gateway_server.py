@@ -5,16 +5,19 @@ import base64
 import binascii
 import hashlib
 import hmac
+import ipaddress
 import json
+import re
 import sqlite3
 import ssl
 import threading
 import time
+from collections import defaultdict, deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+from typing import Any, Optional
+from urllib.parse import parse_qs, urlparse
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -23,6 +26,115 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 MAX_BODY_BYTES = 1_048_576
 MAX_CLOCK_SKEW_MS = 300_000
 NONCE_RETENTION_MS = 600_000
+SERVICE_VERSION = "0.2.0"
+DEFAULT_RETENTION_DAYS = 30
+DEFAULT_OTP_MAX_AGE_SECONDS = 600
+DEFAULT_INGEST_REQUESTS_PER_MINUTE = 120
+DEFAULT_DEVICE_REQUESTS_PER_MINUTE = 120
+DEFAULT_API_AUTH_REQUESTS_PER_MINUTE = 120
+DEFAULT_API_REQUESTS_PER_MINUTE = 60
+DEFAULT_MAX_CONCURRENT_REQUESTS = 32
+MAX_RATE_LIMIT_IDENTITIES = 10_000
+ALLOWED_EVENT_TYPES = {
+    "INCOMING_SMS",
+    "NOTIFICATION",
+    "CALL_STATE",
+    "CALL_IDENTITY",
+    "LOCAL_SELF_TEST",
+}
+OTP_PATTERN = re.compile(r"(?<!\d)(\d{4,8})(?!\d)")
+OTP_CONTEXT_PATTERN = re.compile(
+    r"验证码|校验码|动态码|认证码|口令|otp|verification|verify|code|passcode",
+    re.IGNORECASE,
+)
+OTP_CONTEXT_BOUNDARIES = ".。!！?？;；\n"
+
+
+def otp_local_context(body: str, start: int, end: int) -> str:
+    left = max(body.rfind(boundary, 0, start) for boundary in OTP_CONTEXT_BOUNDARIES)
+    right_candidates = [
+        position
+        for boundary in OTP_CONTEXT_BOUNDARIES
+        if (position := body.find(boundary, end)) >= 0
+    ]
+    right = min(right_candidates) if right_candidates else len(body)
+    return body[left + 1:right]
+
+
+def extract_otp_candidates(body: str) -> list[str]:
+    """Return likely numeric OTP values without persisting another plaintext copy."""
+    ranked = []
+    seen = set()
+    for match in OTP_PATTERN.finditer(body or ""):
+        value = match.group(1)
+        if value in seen:
+            continue
+        seen.add(value)
+        context = otp_local_context(body, match.start(), match.end())
+        contextual = bool(OTP_CONTEXT_PATTERN.search(context))
+        preferred_length = len(value) in (6, 4)
+        ranked.append((not contextual, not preferred_length, match.start(), value))
+    ranked.sort()
+    return [value for _, _, _, value in ranked]
+
+
+def integer_setting(
+    settings: dict[str, Any],
+    name: str,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    value = settings.get(name, default)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not minimum <= value <= maximum
+    ):
+        raise ValueError(
+            f"{name} must be an integer between {minimum} and {maximum}"
+        )
+    return value
+
+
+class SlidingWindowRateLimiter:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._requests: dict[tuple[str, str], deque[int]] = defaultdict(deque)
+        self._last_cleanup_ms = 0
+
+    def allow(
+        self,
+        bucket: str,
+        key: str,
+        limit: int,
+        now_ms: int,
+    ) -> tuple[bool, int]:
+        if limit <= 0:
+            return True, 0
+        cutoff = now_ms - 60_000
+        identity = (bucket, key)
+        with self._lock:
+            if now_ms - self._last_cleanup_ms >= 60_000:
+                for existing_identity, requests in list(self._requests.items()):
+                    while requests and requests[0] <= cutoff:
+                        requests.popleft()
+                    if not requests:
+                        del self._requests[existing_identity]
+                self._last_cleanup_ms = now_ms
+            if (
+                identity not in self._requests
+                and len(self._requests) >= MAX_RATE_LIMIT_IDENTITIES
+            ):
+                return False, 60_000
+            requests = self._requests[identity]
+            while requests and requests[0] <= cutoff:
+                requests.popleft()
+            if len(requests) >= limit:
+                retry_after_ms = max(1, 60_000 - (now_ms - requests[0]))
+                return False, retry_after_ms
+            requests.append(now_ms)
+            return True, 0
 
 
 def payload_key(secret: bytes, device_id: str) -> bytes:
@@ -173,6 +285,14 @@ class GatewayStore:
                     seen_at INTEGER NOT NULL,
                     PRIMARY KEY(device_id, nonce)
                 );
+                CREATE TABLE IF NOT EXISTS otp_claims (
+                    event_id INTEGER PRIMARY KEY,
+                    client_id TEXT NOT NULL,
+                    claimed_at INTEGER NOT NULL,
+                    FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS index_events_type_received
+                    ON events(event_type, received_at DESC);
                 """
             )
 
@@ -221,6 +341,26 @@ class GatewayStore:
             )
             return cursor.rowcount == 1
 
+    def check_health(self) -> bool:
+        with self._connect() as db:
+            return db.execute("SELECT 1").fetchone()[0] == 1
+
+    def prune(self, retention_days: int, now_ms: int) -> int:
+        if retention_days <= 0:
+            return 0
+        cutoff = now_ms - retention_days * 86_400_000
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM otp_claims WHERE event_id IN "
+                "(SELECT id FROM events WHERE received_at < ?)",
+                (cutoff,),
+            )
+            cursor = db.execute(
+                "DELETE FROM events WHERE received_at < ?",
+                (cutoff,),
+            )
+            return cursor.rowcount
+
     def latest(self, limit: int = 100) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(
@@ -239,6 +379,132 @@ class GatewayStore:
             }
             for row in rows
         ]
+
+    def incoming_messages(
+        self,
+        devices: dict[str, bytes],
+        limit: int,
+        after_id: Optional[int] = None,
+        slot_index: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["event_type = 'INCOMING_SMS'"]
+        parameters: list[Any] = []
+        if after_id is not None:
+            clauses.append("id > ?")
+            parameters.append(after_id)
+        if slot_index is not None:
+            clauses.append("slot_index = ?")
+            parameters.append(slot_index)
+        parameters.append(min(max(limit, 1), 100))
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, device_id, created_at, received_at,
+                       subscription_id, slot_index, envelope_json
+                FROM events
+                WHERE %s
+                ORDER BY id DESC
+                LIMIT ?
+                """ % " AND ".join(clauses),
+                parameters,
+            ).fetchall()
+        messages = []
+        for row in rows:
+            secret = devices.get(row["device_id"])
+            if secret is None:
+                continue
+            envelope = decrypt_payload(
+                json.loads(row["envelope_json"]), row["device_id"], secret
+            )
+            payload = envelope["payload"]
+            body = payload.get("body")
+            messages.append(
+                {
+                    "id": row["id"],
+                    "deviceId": row["device_id"],
+                    "createdAt": row["created_at"],
+                    "receivedAt": row["received_at"],
+                    "subscriptionId": row["subscription_id"],
+                    "slotIndex": row["slot_index"],
+                    "sender": payload.get("originatingAddress"),
+                    "body": body,
+                    "partCount": payload.get("partCount"),
+                    "resolutionMethod": payload.get("resolutionMethod"),
+                    "resolutionConfidence": payload.get(
+                        "resolutionConfidence"
+                    ),
+                    "otpCandidates": extract_otp_candidates(
+                        body if isinstance(body, str) else ""
+                    ),
+                }
+            )
+        return messages
+
+    def claim_latest_otp(
+        self,
+        devices: dict[str, bytes],
+        client_id: str,
+        now_ms: int,
+        max_age_seconds: int,
+        slot_index: Optional[int] = None,
+    ) -> Optional[dict[str, Any]]:
+        cutoff = now_ms - max_age_seconds * 1000
+        clauses = [
+            "e.event_type = 'INCOMING_SMS'",
+            "e.received_at >= ?",
+            "c.event_id IS NULL",
+        ]
+        parameters: list[Any] = [cutoff]
+        if slot_index is not None:
+            clauses.append("e.slot_index = ?")
+            parameters.append(slot_index)
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT e.id, e.device_id, e.received_at,
+                       e.subscription_id, e.slot_index, e.envelope_json
+                FROM events e
+                LEFT JOIN otp_claims c ON c.event_id = e.id
+                WHERE %s
+                ORDER BY e.received_at DESC
+                """ % " AND ".join(clauses),
+                parameters,
+            ).fetchall()
+            for row in rows:
+                secret = devices.get(row["device_id"])
+                if secret is None:
+                    continue
+                envelope = decrypt_payload(
+                    json.loads(row["envelope_json"]),
+                    row["device_id"],
+                    secret,
+                )
+                body = envelope["payload"].get("body")
+                candidates = extract_otp_candidates(
+                    body if isinstance(body, str) else ""
+                )
+                if not candidates:
+                    continue
+                cursor = db.execute(
+                    """
+                    INSERT OR IGNORE INTO otp_claims(
+                        event_id, client_id, claimed_at
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (row["id"], client_id, now_ms),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                return {
+                    "eventId": row["id"],
+                    "deviceId": row["device_id"],
+                    "receivedAt": row["received_at"],
+                    "subscriptionId": row["subscription_id"],
+                    "slotIndex": row["slot_index"],
+                    "code": candidates[0],
+                    "expiresAt": row["received_at"] + max_age_seconds * 1000,
+                }
+        return None
 
     def migrate_legacy_payloads(self, devices: dict[str, bytes]) -> int:
         migrated = 0
@@ -274,6 +540,7 @@ class GatewayStore:
 
     def clear(self) -> None:
         with self._lock, self._connect() as db:
+            db.execute("DELETE FROM otp_claims")
             db.execute("DELETE FROM events")
             db.execute("DELETE FROM request_nonces")
 
@@ -293,6 +560,25 @@ def validate_envelope(value: Any) -> dict[str, Any]:
         raise ValueError("missing envelope fields")
     if value["schemaVersion"] not in (1, 2):
         raise ValueError("unsupported schemaVersion")
+    for field in ("deliveryId", "sourceEventId"):
+        if not isinstance(value[field], str) or not 1 <= len(value[field]) <= 128:
+            raise ValueError(f"invalid {field}")
+    if value["eventType"] not in ALLOWED_EVENT_TYPES:
+        raise ValueError("unsupported eventType")
+    if (
+        not isinstance(value["createdAt"], int)
+        or isinstance(value["createdAt"], bool)
+        or value["createdAt"] < 0
+    ):
+        raise ValueError("invalid createdAt")
+    for field in ("subscriptionId", "slotIndex"):
+        field_value = value.get(field)
+        if field_value is not None and (
+            not isinstance(field_value, int) or isinstance(field_value, bool)
+        ):
+            raise ValueError(f"invalid {field}")
+    if value.get("slotIndex") is not None and not 0 <= value["slotIndex"] <= 3:
+        raise ValueError("invalid slotIndex")
     if not isinstance(value["payload"], dict):
         raise ValueError("payload must be a JSON object")
     if value["schemaVersion"] == 2:
@@ -350,7 +636,7 @@ def is_loopback(address: str) -> bool:
 
 
 class GatewayHandler(BaseHTTPRequestHandler):
-    server_version = "GatewayReceiver/1"
+    server_version = "GatewayReceiver/2"
 
     @property
     def app(self) -> "GatewayHttpServer":
@@ -359,23 +645,181 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def log_message(self, format_string: str, *args: Any) -> None:
         # Never log headers, request bodies, caller addresses, or SMS content.
         print(
-            f"{self.client_address[0]} "
+            f"{self.client_ip()} "
             f"{format_string % args}"
         )
 
-    def send_json(self, status: int, value: dict[str, Any]) -> None:
+    def send_json(
+        self,
+        status: int,
+        value: dict[str, Any],
+        extra_headers: Optional[dict[str, str]] = None,
+    ) -> None:
         body = json.dumps(value, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
+    def client_ip(self) -> str:
+        if self.app.trust_proxy_headers:
+            forwarded = self.headers.get("X-Forwarded-For", "")
+            first = forwarded.split(",", 1)[0].strip()
+            if first:
+                try:
+                    return str(ipaddress.ip_address(first))
+                except ValueError:
+                    pass
+        return self.client_address[0]
+
+    def rate_limit(self, bucket: str, key: str, limit: int) -> bool:
+        allowed, retry_after_ms = self.app.rate_limiter.allow(
+            bucket,
+            key,
+            limit,
+            int(time.time() * 1000),
+        )
+        if allowed:
+            return True
+        self.send_json(
+            HTTPStatus.TOO_MANY_REQUESTS,
+            {"error": "rate limit exceeded"},
+            {"Retry-After": str(max(1, (retry_after_ms + 999) // 1000))},
+        )
+        return False
+
+    def authorize_api(self, required_scope: str) -> Optional[str]:
+        if not self.rate_limit(
+            "api-auth",
+            self.client_ip(),
+            self.app.api_auth_requests_per_minute,
+        ):
+            return None
+        authorization = self.headers.get("Authorization", "")
+        if not authorization.startswith("Bearer "):
+            self.send_json(
+                HTTPStatus.UNAUTHORIZED, {"error": "authentication required"}
+            )
+            return None
+        token = authorization.removeprefix("Bearer ").strip()
+        if not token or len(token) > 512:
+            self.send_json(
+                HTTPStatus.UNAUTHORIZED, {"error": "authentication failed"}
+            )
+            return None
+        token_digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        matched_client = None
+        matched_scopes: set[str] = set()
+        for client_id, client in self.app.api_clients.items():
+            if hmac.compare_digest(client["token_sha256"], token_digest):
+                matched_client = client_id
+                matched_scopes = set(client["scopes"])
+                break
+        if matched_client is None:
+            self.send_json(
+                HTTPStatus.UNAUTHORIZED, {"error": "authentication failed"}
+            )
+            return None
+        if required_scope not in matched_scopes and "*" not in matched_scopes:
+            self.send_json(
+                HTTPStatus.FORBIDDEN, {"error": "insufficient scope"}
+            )
+            return None
+        if not self.rate_limit(
+            "api",
+            matched_client,
+            self.app.api_requests_per_minute,
+        ):
+            return None
+        return matched_client
+
+    def read_json_body(self, maximum_bytes: int = 16_384) -> dict[str, Any]:
+        content_type = self.headers.get("Content-Type", "")
+        if content_type.split(";", 1)[0].strip().lower() != "application/json":
+            raise ValueError("application/json is required")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as error:
+            raise ValueError("invalid content length") from error
+        if length <= 0 or length > maximum_bytes:
+            raise ValueError("invalid body size")
+        value = json.loads(self.rfile.read(length))
+        if not isinstance(value, dict):
+            raise ValueError("body must be a JSON object")
+        return value
+
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/health":
             self.send_json(HTTPStatus.OK, {"status": "ok"})
+            return
+        if path == "/version":
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "service": "caconnection-gateway",
+                    "version": SERVICE_VERSION,
+                    "apiVersion": 1,
+                    "protocolSchemaVersion": 2,
+                },
+            )
+            return
+        if path == "/ready":
+            ready = (
+                self.app.store.check_health()
+                and bool(self.app.devices)
+                and bool(self.app.api_clients)
+            )
+            self.send_json(
+                HTTPStatus.OK if ready else HTTPStatus.SERVICE_UNAVAILABLE,
+                {"status": "ready" if ready else "not_ready"},
+            )
+            return
+        if path == "/v1/messages":
+            if self.authorize_api("messages:read") is None:
+                return
+            query = parse_qs(parsed.query)
+            try:
+                if (
+                    set(query) - {"limit", "afterId", "slotIndex"}
+                    or any(len(values) != 1 for values in query.values())
+                ):
+                    raise ValueError("invalid query")
+                limit = int(query.get("limit", ["50"])[0])
+                if not 1 <= limit <= 100:
+                    raise ValueError("invalid limit")
+                after_id_raw = query.get("afterId", [None])[0]
+                after_id = (
+                    int(after_id_raw) if after_id_raw is not None else None
+                )
+                if after_id is not None and after_id < 0:
+                    raise ValueError("invalid afterId")
+                slot_raw = query.get("slotIndex", [None])[0]
+                slot_index = int(slot_raw) if slot_raw is not None else None
+                if slot_index is not None and slot_index not in (0, 1):
+                    raise ValueError("invalid slotIndex")
+            except (TypeError, ValueError):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid query"}
+                )
+                return
+            messages = self.app.store.incoming_messages(
+                self.app.devices,
+                limit,
+                after_id=after_id,
+                slot_index=slot_index,
+            )
+            self.send_json(HTTPStatus.OK, {"messages": messages})
+            return
+        if not self.app.allow_viewer:
+            self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
         if not is_loopback(self.client_address[0]):
             self.send_json(HTTPStatus.FORBIDDEN, {"error": "local viewer only"})
@@ -403,7 +847,59 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/v1/otp/claim":
+            client_id = self.authorize_api("otp:claim")
+            if client_id is None:
+                return
+            try:
+                value = self.read_json_body()
+                if set(value) - {"slotIndex", "maxAgeSeconds"}:
+                    raise ValueError("unsupported request field")
+                slot_index = value.get("slotIndex")
+                if slot_index is not None and (
+                    not isinstance(slot_index, int)
+                    or isinstance(slot_index, bool)
+                    or slot_index not in (0, 1)
+                ):
+                    raise ValueError("invalid slotIndex")
+                max_age_value = value.get(
+                    "maxAgeSeconds", self.app.otp_max_age_seconds
+                )
+                if not isinstance(max_age_value, int) or isinstance(
+                    max_age_value, bool
+                ):
+                    raise ValueError("invalid maxAgeSeconds")
+                max_age_seconds = max_age_value
+                if not 30 <= max_age_seconds <= 3600:
+                    raise ValueError("invalid maxAgeSeconds")
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid request"}
+                )
+                return
+            claimed = self.app.store.claim_latest_otp(
+                self.app.devices,
+                client_id,
+                int(time.time() * 1000),
+                max_age_seconds,
+                slot_index=slot_index,
+            )
+            if claimed is None:
+                self.send_json(
+                    HTTPStatus.NOT_FOUND, {"error": "no unclaimed OTP found"}
+                )
+            else:
+                self.send_json(HTTPStatus.OK, {"otp": claimed})
+            return
         if path == "/api/clear":
+            if not self.app.allow_viewer:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
             if not is_loopback(self.client_address[0]):
                 self.send_json(HTTPStatus.FORBIDDEN, {"error": "local viewer only"})
             elif self.headers.get("X-Confirm-Clear") != "yes":
@@ -429,8 +925,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if length <= 0 or length > MAX_BODY_BYTES:
             self.send_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid body size"})
             return
-        body = self.rfile.read(length)
         device_id = self.headers.get("X-Gateway-Device", "")
+        if not self.rate_limit(
+            "ingest-ip",
+            self.client_ip(),
+            self.app.ingest_requests_per_minute,
+        ):
+            return
+        body = self.rfile.read(length)
         nonce = self.headers.get("X-Gateway-Nonce", "")
         idempotency_key = self.headers.get("Idempotency-Key", "")
         signature = self.headers.get("X-Gateway-Signature", "")
@@ -444,8 +946,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         now_ms = int(time.time() * 1000)
         if (
             secret is None
-            or not nonce
-            or not idempotency_key
+            or not 1 <= len(nonce) <= 128
+            or not 1 <= len(idempotency_key) <= 128
+            or not 1 <= len(signature) <= 128
             or abs(now_ms - timestamp_ms) > MAX_CLOCK_SKEW_MS
         ):
             self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication failed"})
@@ -456,6 +959,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if not hmac.compare_digest(expected, signature):
             self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "authentication failed"})
             return
+        if not self.rate_limit(
+            "ingest-device",
+            device_id,
+            self.app.device_requests_per_minute,
+        ):
+            return
 
         try:
             envelope = validate_envelope(json.loads(body))
@@ -465,6 +974,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             inserted = self.app.store.accept(
                 device_id, idempotency_key, nonce, envelope, now_ms
             )
+            self.app.store.prune(self.app.retention_days, now_ms)
         except (ValueError, json.JSONDecodeError) as error:
             status = (
                 HTTPStatus.CONFLICT
@@ -480,17 +990,108 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
 
 class GatewayHttpServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 64
+
     def __init__(
         self,
         address: tuple[str, int],
         devices: dict[str, bytes],
         store: GatewayStore,
         accept_ingestion: bool = True,
+        allow_viewer: bool = False,
+        api_clients: Optional[dict[str, dict[str, Any]]] = None,
+        server_settings: Optional[dict[str, Any]] = None,
     ):
         super().__init__(address, GatewayHandler)
         self.devices = devices
         self.store = store
         self.accept_ingestion = accept_ingestion
+        self.allow_viewer = allow_viewer
+        self.api_clients = api_clients or {}
+        settings = server_settings or {}
+        self.retention_days = integer_setting(
+            settings,
+            "retention_days",
+            DEFAULT_RETENTION_DAYS,
+            1,
+            3650,
+        )
+        self.otp_max_age_seconds = integer_setting(
+            settings,
+            "otp_max_age_seconds",
+            DEFAULT_OTP_MAX_AGE_SECONDS,
+            30,
+            3600,
+        )
+        self.ingest_requests_per_minute = integer_setting(
+            settings,
+            "ingest_requests_per_minute",
+            DEFAULT_INGEST_REQUESTS_PER_MINUTE,
+            1,
+            100_000,
+        )
+        self.device_requests_per_minute = integer_setting(
+            settings,
+            "device_requests_per_minute",
+            DEFAULT_DEVICE_REQUESTS_PER_MINUTE,
+            1,
+            100_000,
+        )
+        self.api_auth_requests_per_minute = integer_setting(
+            settings,
+            "api_auth_requests_per_minute",
+            DEFAULT_API_AUTH_REQUESTS_PER_MINUTE,
+            1,
+            100_000,
+        )
+        self.api_requests_per_minute = integer_setting(
+            settings,
+            "api_requests_per_minute",
+            DEFAULT_API_REQUESTS_PER_MINUTE,
+            1,
+            100_000,
+        )
+        trust_proxy_headers = settings.get("trust_proxy_headers", False)
+        if not isinstance(trust_proxy_headers, bool):
+            raise ValueError("trust_proxy_headers must be a boolean")
+        self.trust_proxy_headers = trust_proxy_headers
+        self.max_concurrent_requests = integer_setting(
+            settings,
+            "max_concurrent_requests",
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+            1,
+            1024,
+        )
+        self._request_slots = threading.BoundedSemaphore(
+            self.max_concurrent_requests
+        )
+        self.rate_limiter = SlidingWindowRateLimiter()
+
+    def process_request(
+        self,
+        request: Any,
+        client_address: tuple[str, int],
+    ) -> None:
+        if not self._request_slots.acquire(timeout=1):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(
+        self,
+        request: Any,
+        client_address: tuple[str, int],
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 def load_devices(path: Path) -> dict[str, bytes]:
@@ -506,6 +1107,28 @@ def load_devices(path: Path) -> dict[str, bytes]:
     return result
 
 
+def load_api_clients(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    clients = {}
+    for client_id, value in config.get("api_clients", {}).items():
+        if not re.fullmatch(r"[A-Za-z0-9._-]{3,64}", client_id):
+            raise ValueError(f"Invalid API client ID: {client_id}")
+        token_sha256 = str(value.get("token_sha256", "")).lower()
+        scopes = value.get("scopes", [])
+        if not re.fullmatch(r"[0-9a-f]{64}", token_sha256):
+            raise ValueError(f"Invalid API token hash for {client_id}")
+        if not isinstance(scopes, list) or not all(
+            isinstance(scope, str)
+            and scope in {"messages:read", "otp:claim", "*"}
+            for scope in scopes
+        ):
+            raise ValueError(f"Invalid API scopes for {client_id}")
+        clients[client_id] = {
+            "token_sha256": token_sha256,
+            "scopes": scopes,
+        }
+    return clients
+
+
 def main() -> None:
     root = Path(__file__).resolve().parent
     parser = argparse.ArgumentParser()
@@ -514,30 +1137,44 @@ def main() -> None:
     parser.add_argument("--viewer-port", type=int, default=8788)
     parser.add_argument("--config", type=Path, default=root / "config.json")
     parser.add_argument("--database", type=Path, default=root / "data/gateway.db")
+    parser.add_argument(
+        "--no-tls",
+        action="store_true",
+        help="Serve plain HTTP behind a trusted same-host reverse proxy.",
+    )
     args = parser.parse_args()
     config = json.loads(args.config.read_text(encoding="utf-8"))
     devices = load_devices(args.config)
+    api_clients = load_api_clients(config)
+    server_settings = config.get("server", {})
     store = GatewayStore(args.database)
     migrated = store.migrate_legacy_payloads(devices)
     server = GatewayHttpServer(
         (args.host, args.port),
         devices,
         store,
+        allow_viewer=False,
+        api_clients=api_clients,
+        server_settings=server_settings,
     )
-    tls = config["tls"]
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(tls["certificate"], tls["private_key"])
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    viewer = GatewayHttpServer(
-        ("127.0.0.1", args.viewer_port),
-        devices,
-        store,
-        accept_ingestion=False,
-    )
-    threading.Thread(target=viewer.serve_forever, daemon=True).start()
-    print(f"HTTPS gateway receiver listening on {args.host}:{args.port}")
-    print("Viewer: http://127.0.0.1:%d/" % args.viewer_port)
+    if not args.no_tls:
+        tls = config["tls"]
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(tls["certificate"], tls["private_key"])
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    if args.viewer_port > 0:
+        viewer = GatewayHttpServer(
+            ("127.0.0.1", args.viewer_port),
+            devices,
+            store,
+            accept_ingestion=False,
+            allow_viewer=True,
+        )
+        threading.Thread(target=viewer.serve_forever, daemon=True).start()
+        print("Viewer: http://127.0.0.1:%d/" % args.viewer_port)
+    scheme = "HTTP" if args.no_tls else "HTTPS"
+    print(f"{scheme} gateway receiver listening on {args.host}:{args.port}")
     if migrated:
         print(f"Migrated {migrated} legacy payload(s) to encrypted storage")
     server.serve_forever()

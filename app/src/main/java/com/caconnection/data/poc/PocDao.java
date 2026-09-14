@@ -100,6 +100,9 @@ public interface PocDao {
     @Query("UPDATE outbox_events SET status = 'RETRY', nextRetryAt = :now, updatedAt = :now, lastError = 'Recovered interrupted delivery attempt' WHERE status = 'IN_PROGRESS' AND updatedAt <= :staleBefore")
     int recoverStaleInProgress(long staleBefore, long now);
 
+    @Query("UPDATE outbox_events SET status = 'RETRY', nextRetryAt = :now, updatedAt = :now, lastError = 'Recovered legacy retry exhaustion' WHERE status = 'FAILED' AND lastError LIKE 'Exceeded maximum retry count (%'")
+    int recoverLegacyRetryExhaustion(long now);
+
     @Query("DELETE FROM outbox_events WHERE status = 'SUCCESS'")
     void clearSuccessfulOutboxEvents();
 

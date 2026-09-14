@@ -7,7 +7,6 @@ import com.caconnection.transport.TransportEvent
 import com.caconnection.transport.TransportResult
 import kotlinx.coroutines.CancellationException
 import kotlin.math.min
-import kotlin.math.pow
 
 data class RetryDecision(
     val status: OutboxStatus,
@@ -19,7 +18,6 @@ data class RetryDecision(
 object OutboxRetryPolicy {
     const val INITIAL_RETRY_DELAY_MS = 1_000L
     const val MAX_RETRY_DELAY_MS = 300_000L
-    const val MAX_RETRY_COUNT = 10
 
     fun decide(
         currentRetryCount: Int,
@@ -27,16 +25,9 @@ object OutboxRetryPolicy {
         error: String,
         retryAfterMillis: Long? = null
     ): RetryDecision {
-        val newRetryCount = currentRetryCount + 1
-        if (newRetryCount >= MAX_RETRY_COUNT) {
-            return RetryDecision(
-                status = OutboxStatus.FAILED,
-                retryCount = newRetryCount,
-                nextRetryAt = now,
-                lastError = "Exceeded maximum retry count ($MAX_RETRY_COUNT): $error"
-            )
-        }
-
+        val newRetryCount =
+            if (currentRetryCount == Int.MAX_VALUE) Int.MAX_VALUE
+            else currentRetryCount + 1
         val delay = retryAfterMillis
             ?.coerceIn(0L, MAX_RETRY_DELAY_MS)
             ?: backoffDelay(newRetryCount)
@@ -49,9 +40,10 @@ object OutboxRetryPolicy {
     }
 
     fun backoffDelay(retryCount: Int): Long {
-        val exponent = (retryCount.coerceAtLeast(1) - 1).toDouble()
+        val normalized = retryCount.coerceAtLeast(1)
+        if (normalized >= 10) return MAX_RETRY_DELAY_MS
         return min(
-            (INITIAL_RETRY_DELAY_MS * 2.0.pow(exponent)).toLong(),
+            INITIAL_RETRY_DELAY_MS shl (normalized - 1),
             MAX_RETRY_DELAY_MS
         )
     }

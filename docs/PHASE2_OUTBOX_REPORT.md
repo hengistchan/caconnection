@@ -5,6 +5,11 @@
 - Installed build: **0.1.0-poc-target37-debug**
 - Scope: **local queue and Mock Transport only**
 
+> Historical behavior note: Phase 5 supersedes the ten-attempt terminal retry
+> rule in this report. Temporary network/server failures now remain durable
+> and retry indefinitely with a five-minute maximum interval. Permanent
+> protocol and data errors still use `FAILED`.
+
 ## Implemented flow
 
 ```text

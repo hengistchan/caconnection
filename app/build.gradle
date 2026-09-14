@@ -2,6 +2,17 @@ plugins {
     id 'com.android.application'
 }
 
+def productionKeystorePath = System.getenv("CACONNECTION_RELEASE_KEYSTORE")
+def productionKeystorePassword = System.getenv("CACONNECTION_RELEASE_STORE_PASSWORD")
+def productionKeyAlias = System.getenv("CACONNECTION_RELEASE_KEY_ALIAS")
+def productionKeyPassword = System.getenv("CACONNECTION_RELEASE_KEY_PASSWORD")
+def productionSigningConfigured = [
+        productionKeystorePath,
+        productionKeystorePassword,
+        productionKeyAlias,
+        productionKeyPassword
+].every { it != null && !it.isBlank() }
+
 android {
     namespace = 'com.caconnection'
     compileSdk = 37
@@ -9,8 +20,8 @@ android {
     defaultConfig {
         applicationId = "com.caconnection"
         minSdk = 31
-        versionCode = 1
-        versionName = "0.1.0-poc"
+        versionCode = 2
+        versionName = "0.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         javaCompileOptions {
             annotationProcessorOptions {
@@ -37,14 +48,30 @@ android {
         }
     }
 
+    signingConfigs {
+        if (productionSigningConfigured) {
+            production {
+                storeFile = file(productionKeystorePath)
+                storePassword = productionKeystorePassword
+                keyAlias = productionKeyAlias
+                keyPassword = productionKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
         release {
+            applicationIdSuffix = ".gateway"
+            manifestPlaceholders = [appLabel: "CA Gateway"]
             minifyEnabled = false
             proguardFiles(getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro')
+            if (productionSigningConfigured) {
+                signingConfig = signingConfigs.production
+            }
         }
     }
 
@@ -64,6 +91,19 @@ android {
     lint {
         // AGP 9.4 supports Gradle up to 9.6; keep the wrapper inside that range.
         disable += "AndroidGradlePluginVersion"
+    }
+}
+
+tasks.register("verifyProductionSigning") {
+    doLast {
+        if (!productionSigningConfigured) {
+            throw new GradleException(
+                    "Production signing environment variables are not configured"
+            )
+        }
+        if (!file(productionKeystorePath).isFile()) {
+            throw new GradleException("Production keystore file does not exist")
+        }
     }
 }
 

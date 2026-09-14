@@ -25,7 +25,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="${appLabel}"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MaterialComponents.DayNight.DarkActionBar">
+        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
 
         <activity
             android:name=".MainActivity"
@@ -89,6 +89,15 @@
         <receiver
             android:name=".telephony.outbound.SmsDeliveryReceiver"
             android:exported="false" />
+
+        <receiver
+            android:name=".transport.GatewayProvisioningReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="com.caconnection.action.IMPORT_GATEWAY_PROVISIONING" />
+            </intent-filter>
+        </receiver>
 
         <service
             android:name=".telephony.smsrole.RespondViaMessageService"

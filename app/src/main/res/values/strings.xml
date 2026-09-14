@@ -24,7 +24,7 @@
     <string name="transport_endpoint_hint">Receiver base URL, for example https://192.168.1.10:8787</string>
     <string name="transport_device_id_hint">Gateway device ID</string>
     <string name="transport_secret_hint">Base64 shared secret (leave blank to keep existing)</string>
-    <string name="transport_certificate_pin_hint">Base64 SHA-256 server certificate pin</string>
+    <string name="transport_certificate_pin_hint">Optional certificate pin; leave blank for public system-CA TLS</string>
     <string name="enable_http_transport">Enable encrypted HTTPS transport</string>
     <string name="save_transport">Save transport configuration</string>
     <string name="run_transport_self_test">Queue transport self-test</string>

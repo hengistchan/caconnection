@@ -146,6 +146,21 @@ class GatewayRequestSignerTest {
             secretBase64,
             Base64.getEncoder().encodeToString(ByteArray(32) { 7 })
         )
+        GatewayTransportConfig.validate(
+            "https://gateway.example.com",
+            "xiaomi-gateway",
+            secretBase64,
+            ""
+        )
+        assertTrue(
+            GatewayTransportSettings(
+                enabled = true,
+                endpoint = "https://gateway.example.com",
+                deviceId = "xiaomi-gateway",
+                sharedSecretBase64 = secretBase64,
+                certificatePinSha256Base64 = ""
+            ).configured
+        )
 
         val httpFailure = runCatching {
             GatewayTransportConfig.validate(
@@ -163,6 +178,14 @@ class GatewayRequestSignerTest {
                 Base64.getEncoder().encodeToString(ByteArray(31))
             )
         }.exceptionOrNull()
+        val pathFailure = runCatching {
+            GatewayTransportConfig.validate(
+                "https://gateway.example.com/private/path",
+                "xiaomi-gateway",
+                secretBase64,
+                ""
+            )
+        }.exceptionOrNull()
 
         assertTrue(httpFailure is IllegalArgumentException)
         assertEquals("HTTPS is required", httpFailure?.message)
@@ -170,6 +193,10 @@ class GatewayRequestSignerTest {
         assertEquals(
             "Certificate pin must be a Base64 SHA-256 digest",
             pinFailure?.message
+        )
+        assertEquals(
+            "Endpoint must be an HTTPS origin without a path",
+            pathFailure?.message
         )
     }
 

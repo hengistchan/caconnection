@@ -30,6 +30,7 @@ class OutboxWorker(
                 startedAt - IN_PROGRESS_LEASE_MS,
                 startedAt
             )
+            dao.recoverLegacyRetryExhaustion(startedAt)
 
             val processor = OutboxProcessor(
                 transportOverride ?: GatewayTransportFactory.create(applicationContext)

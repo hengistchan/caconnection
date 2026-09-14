@@ -2,6 +2,10 @@
 *.apk
 *.ap_
 *.aab
+*.jks
+*.keystore
+*.p12
+*.pfx
 
 # Files for the ART/Dalvik VM
 *.dex
@@ -47,5 +51,7 @@ Thumbs.db
 server/config.json
 server/data/
 server/tls/
+server/deploy/.env
+server/deploy/runtime/
 __pycache__/
 *.pyc

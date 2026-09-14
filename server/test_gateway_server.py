@@ -15,9 +15,11 @@ from server.gateway_server import (
     GatewayStore,
     decrypt_payload,
     encrypt_payload,
+    extract_otp_candidates,
     expected_signature,
     validate_envelope,
 )
+from server.protocol_smoke import run_smoke
 from server.setup_local import ensure_certificate
 
 
@@ -58,6 +60,19 @@ class GatewayServerTest(unittest.TestCase):
         self.assertNotEqual(first, changed)
         self.assertEqual(32, len(base64.b64decode(first)))
 
+    def test_otp_candidates_prioritize_context_and_deduplicate(self) -> None:
+        self.assertEqual(
+            ["482913", "2026"],
+            extract_otp_candidates(
+                "Order 2026. Your verification code is 482913; "
+                "repeat 482913."
+            ),
+        )
+        self.assertEqual(
+            ["739251"],
+            extract_otp_candidates("您的验证码为739251，十分钟内有效。"),
+        )
+
     def test_store_is_idempotent_with_fresh_nonces(self) -> None:
         self.assertTrue(
             self.store.accept("device", "key", "nonce-1", self.envelope, 1000)
@@ -82,6 +97,14 @@ class GatewayServerTest(unittest.TestCase):
         future["schemaVersion"] = 2
         with self.assertRaisesRegex(ValueError, "unsupported"):
             validate_envelope(future)
+        invalid_type = dict(self.envelope)
+        invalid_type["eventType"] = "UNSUPPORTED"
+        with self.assertRaisesRegex(ValueError, "unsupported eventType"):
+            validate_envelope(invalid_type)
+        invalid_slot = dict(self.envelope)
+        invalid_slot["slotIndex"] = 99
+        with self.assertRaisesRegex(ValueError, "invalid slotIndex"):
+            validate_envelope(invalid_slot)
 
     def test_payload_encryption_round_trip_hides_plaintext(self) -> None:
         secret = b"x" * 32
@@ -173,11 +196,26 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.secret = bytes(range(32))
+        self.api_token = "test-api-token"
         self.store = GatewayStore(Path(self.temporary.name) / "gateway.db")
         self.server = GatewayHttpServer(
             ("127.0.0.1", 0),
             {"device": self.secret},
             self.store,
+            api_clients={
+                "automation": {
+                    "token_sha256": __import__("hashlib").sha256(
+                        self.api_token.encode()
+                    ).hexdigest(),
+                    "scopes": ["messages:read", "otp:claim"],
+                },
+                "readonly": {
+                    "token_sha256": __import__("hashlib").sha256(
+                        b"readonly-token"
+                    ).hexdigest(),
+                    "scopes": ["messages:read"],
+                },
+            },
         )
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -196,16 +234,22 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         self.thread.join(timeout=2)
         self.temporary.cleanup()
 
-    def encrypted_body(self) -> bytes:
+    def encrypted_body(
+        self,
+        *,
+        event_type: str = "LOCAL_SELF_TEST",
+        payload: Optional[dict] = None,
+        slot_index: Optional[int] = None,
+    ) -> bytes:
         envelope = {
             "schemaVersion": 1,
             "deliveryId": "delivery",
             "sourceEventId": "source",
-            "eventType": "LOCAL_SELF_TEST",
+            "eventType": event_type,
             "createdAt": 1000,
-            "subscriptionId": None,
-            "slotIndex": None,
-            "payload": {
+            "subscriptionId": 1 if slot_index is not None else None,
+            "slotIndex": slot_index,
+            "payload": payload or {
                 "type": "LOCAL_SELF_TEST",
                 "secretMarker": "integration-plaintext-marker",
             },
@@ -260,6 +304,38 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         finally:
             connection.close()
 
+    def api_request(
+        self,
+        method: str,
+        path: str,
+        *,
+        token: Optional[str] = None,
+        value: Optional[dict] = None,
+    ) -> tuple[int, dict]:
+        context = ssl.create_default_context(cafile=str(self.certificate))
+        connection = http.client.HTTPSConnection(
+            "127.0.0.1",
+            self.server.server_port,
+            context=context,
+            timeout=3,
+        )
+        body = (
+            json.dumps(value, separators=(",", ":")).encode()
+            if value is not None
+            else None
+        )
+        headers = {}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        try:
+            connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
     def test_valid_encrypted_request_is_stored_as_ciphertext(self) -> None:
         status, response = self.request()
 
@@ -269,6 +345,22 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         serialized = json.dumps(row["envelope"])
         self.assertNotIn("integration-plaintext-marker", serialized)
         self.assertEqual(2, row["envelope"]["schemaVersion"])
+
+    def test_health_readiness_and_version_endpoints(self) -> None:
+        self.assertEqual(
+            (200, {"status": "ok"}),
+            self.api_request("GET", "/health"),
+        )
+        self.assertEqual(
+            (200, {"status": "ready"}),
+            self.api_request("GET", "/ready"),
+        )
+        status, version = self.api_request("GET", "/version")
+        self.assertEqual(200, status)
+        self.assertEqual("caconnection-gateway", version["service"])
+        self.assertEqual("0.2.0", version["version"])
+        self.assertEqual(1, version["apiVersion"])
+        self.assertEqual(2, version["protocolSchemaVersion"])
 
     def test_authentication_timestamp_replay_and_idempotency(self) -> None:
         body = self.encrypted_body()
@@ -352,6 +444,184 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             {"error": "encrypted schemaVersion 2 required"}, response
         )
         self.assertEqual([], self.store.latest())
+
+    def test_authenticated_message_api_and_one_time_otp_claim(self) -> None:
+        body = self.encrypted_body(
+            event_type="INCOMING_SMS",
+            slot_index=0,
+            payload={
+                "originatingAddress": "service",
+                "body": "Your verification code is 482913.",
+                "partCount": 1,
+                "resolutionMethod": "OEM_SUBSCRIPTION_EXTRA",
+                "resolutionConfidence": "HIGH",
+            },
+        )
+        self.assertEqual(
+            201,
+            self.request(
+                body=body,
+                nonce="sms-nonce",
+                idempotency_key="sms-key",
+            )[0],
+        )
+
+        self.assertEqual(
+            401, self.api_request("GET", "/v1/messages")[0]
+        )
+        status, messages = self.api_request(
+            "GET",
+            "/v1/messages?slotIndex=0&limit=10",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(1, len(messages["messages"]))
+        self.assertEqual(
+            ["482913"], messages["messages"][0]["otpCandidates"]
+        )
+
+        status, claimed = self.api_request(
+            "POST",
+            "/v1/otp/claim",
+            token=self.api_token,
+            value={"slotIndex": 0, "maxAgeSeconds": 3600},
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("482913", claimed["otp"]["code"])
+        self.assertEqual(
+            404,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token=self.api_token,
+                value={"slotIndex": 0, "maxAgeSeconds": 3600},
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token="readonly-token",
+                value={"maxAgeSeconds": 3600},
+            )[0],
+        )
+        raw = json.dumps(self.store.latest()[0]["envelope"])
+        self.assertNotIn("482913", raw)
+
+    def test_api_rate_limit_returns_retry_after(self) -> None:
+        self.server.api_requests_per_minute = 1
+        self.assertEqual(
+            200,
+            self.api_request(
+                "GET", "/v1/messages", token=self.api_token
+            )[0],
+        )
+        status, response = self.api_request(
+            "GET", "/v1/messages", token=self.api_token
+        )
+        self.assertEqual(429, status)
+        self.assertEqual({"error": "rate limit exceeded"}, response)
+
+    def test_invalid_api_tokens_are_rate_limited_by_client_ip(self) -> None:
+        self.server.api_auth_requests_per_minute = 1
+        self.assertEqual(
+            401,
+            self.api_request(
+                "GET",
+                "/v1/messages",
+                token="invalid-token-one",
+            )[0],
+        )
+        self.assertEqual(
+            429,
+            self.api_request(
+                "GET",
+                "/v1/messages",
+                token="invalid-token-two",
+            )[0],
+        )
+
+    def test_authenticated_ingestion_is_rate_limited_per_device(self) -> None:
+        self.server.device_requests_per_minute = 1
+        self.assertEqual(
+            201,
+            self.request(
+                nonce="device-rate-one",
+                idempotency_key="device-rate-one",
+            )[0],
+        )
+        self.assertEqual(
+            429,
+            self.request(
+                nonce="device-rate-two",
+                idempotency_key="device-rate-two",
+            )[0],
+        )
+
+    def test_api_rejects_invalid_query_and_json_types(self) -> None:
+        self.assertEqual(
+            400,
+            self.api_request(
+                "GET",
+                "/v1/messages?limit=0",
+                token=self.api_token,
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "GET",
+                "/v1/messages?unknown=value",
+                token=self.api_token,
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token=self.api_token,
+                value={"slotIndex": True},
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token=self.api_token,
+                value={"maxAgeSeconds": True},
+            )[0],
+        )
+
+    def test_signed_protocol_smoke_supports_separate_connect_host(self) -> None:
+        config = Path(self.temporary.name) / "smoke-config.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "devices": {
+                        "device": {
+                            "secret_base64": base64.b64encode(
+                                self.secret
+                            ).decode()
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status = run_smoke(
+            f"https://localhost:{self.server.server_port}",
+            config,
+            device_id="device",
+            connect_host="127.0.0.1",
+            ca_file=self.certificate,
+        )
+
+        self.assertEqual(201, status)
+        self.assertEqual("LOCAL_SELF_TEST", self.store.latest()[0]["event_type"])
 
     def test_untrusted_certificate_is_rejected(self) -> None:
         context = ssl.create_default_context(

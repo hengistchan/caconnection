@@ -6,10 +6,11 @@ question:
 > Can a Xiaomi 17-class HyperOS device act as a reliable dual-SIM cellular SMS
 > gateway?
 
-The POC does not contain a cloud deployment, iOS, cloud-blind end-to-end
-encryption, AI, MCP, contacts, MMS processing, or SMS history import. Phase 4
-adds an authenticated and encrypted local-LAN receiver running on the
-development Mac.
+The POC does not contain iOS, cloud-blind end-to-end encryption, AI, MCP,
+contacts, MMS processing, or SMS history import. Phase 4 added an authenticated
+and encrypted local-LAN receiver running on the development Mac. Phase 5 adds a
+production Linux deployment in which the Android phone connects directly to a
+public HTTPS server; the Mac is no longer part of the runtime architecture.
 
 ## Implemented capabilities
 
@@ -39,7 +40,8 @@ development Mac.
 - Transactional local Outbox creation for each newly persisted inbound SMS.
 - SHA-256 idempotency keys that distinguish the two physical SIM lines.
 - WorkManager scheduling, retry state, exponential backoff, stale-attempt
-  recovery, and process-start recovery.
+  recovery, process-start recovery, and indefinite retry for temporary
+  network/server failures with a five-minute maximum interval.
 - A no-network Mock Transport and local Outbox self-test.
 - User-granted `NotificationListenerService` capture behind an explicit source
   package allowlist.
@@ -60,19 +62,39 @@ development Mac.
 - A Python local receiver with replay protection, server-side idempotency,
   encrypted-payload SQLite persistence, and a localhost-only browser viewer.
 - Automatic Outbox retry and recovery when the local receiver is unavailable.
+- Android Keystore protection for the gateway shared secret, including
+  migration away from the legacy plaintext preference.
+- A production release package (`com.caconnection.gateway`) that can be
+  installed beside the earlier POC package and is signed only with explicitly
+  supplied production signing credentials.
+- A production Linux receiver behind Caddy with automatic public TLS,
+  container restart, private backend networking, read-only/non-root container
+  hardening, request concurrency limits, and per-IP/per-device/per-client rate
+  limits.
+- Authenticated `GET /v1/messages` and atomic one-time
+  `POST /v1/otp/claim` APIs.
+- Thirty-day configurable retention, encrypted SQLite storage, verified
+  backup/export and atomic restore tooling, liveness/readiness/version probes,
+  and an encrypted signed deployment smoke test.
 
 ## Data and safety boundaries
 
-- `INTERNET` is declared for Phase 4 local transport. No cloud endpoint exists.
+- `INTERNET` is declared for encrypted local and production transport.
 - Debug and release builds require HTTPS; neither manifest opts into cleartext
   traffic.
 - Payloads are encrypted with AES-256-GCM before transmission and remain
   encrypted in the receiver database. Routing metadata such as event type,
   timestamp, and SIM attribution remains visible.
-- Receiver credentials and database files are ignored by Git. The browser
-  viewer and clear-data API accept only loopback clients on the Mac.
-- The trusted Mac possesses the shared secret and decrypts payloads for the
-  local viewer. This is not a cloud-blind relay design.
+- Receiver credentials, API bearer tokens, Android provisioning files,
+  signing material, and database files are excluded from Git.
+- The Phase 4 local viewer and clear-data API accept only loopback clients on
+  the Mac. The production viewer is disabled.
+- The trusted receiver possesses the shared secret and decrypts payloads in
+  memory for authenticated message and OTP responses. This is not a
+  cloud-blind relay design.
+- On Android, the shared secret is encrypted with an app-private Android
+  Keystore AES-GCM key. The key remains available to background workers and is
+  not exportable through normal app storage.
 - `READ_SMS` is not requested.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
 - Notification content is not stored. Only source package, timing, channel,
@@ -118,6 +140,20 @@ com.caconnection.debug
 Installing one variant replaces the other. Existing local POC data is retained
 across replacement installs unless the app is uninstalled or its data is
 cleared.
+
+Production release builds use application ID:
+
+```text
+com.caconnection.gateway
+```
+
+Production signing values are accepted only through the
+`CACONNECTION_RELEASE_*` environment variables. Build and verify the signed
+APK with:
+
+```bash
+./tools/build-production-apk.sh
+```
 
 ## Xiaomi / HyperOS installation
 
@@ -275,3 +311,46 @@ See:
   for the Phase 4A authenticated HTTP baseline;
 - [docs/PHASE4B_ENCRYPTED_TRANSPORT_REPORT.md](docs/PHASE4B_ENCRYPTED_TRANSPORT_REPORT.md)
   for the encrypted HTTPS implementation and physical-device acceptance.
+
+## Phase 5 production server
+
+The production runtime is:
+
+```text
+Xiaomi Android gateway
+  -> Room Outbox
+  -> AES-256-GCM payload
+  -> HMAC-authenticated HTTPS
+  -> Caddy public TLS endpoint
+  -> private Gateway API container
+  -> encrypted SQLite
+  -> bearer-authenticated message / one-time OTP API
+```
+
+The backend container is not published on the host. Caddy exposes only TCP
+80/443 and UDP 443. Public certificates use normal Android system-CA
+validation, so certificate renewal does not require phone reprovisioning.
+
+Deployment files are under `server/deploy/`. Start with:
+
+```bash
+cd server/deploy
+python3 ../setup_production.py --domain gateway.example.com
+./deploy.sh
+./check.sh
+```
+
+`check.sh` verifies public TLS liveness/readiness/version endpoints and sends
+one real signed, encrypted event through Caddy to the private receiver.
+
+Do not provision the phone until those checks pass. Then install the signed
+release package and use `provision_android.sh`. Re-run the HyperOS readiness
+check after every package replacement because HyperOS may reset
+`MIUIOP(10018)`.
+
+See:
+
+- [server/deploy/README.md](server/deploy/README.md) for the operating runbook;
+- [server/openapi.yaml](server/openapi.yaml) for the API contract;
+- [docs/PHASE5_PRODUCTION_SERVER_REPORT.md](docs/PHASE5_PRODUCTION_SERVER_REPORT.md)
+  for the implementation and acceptance evidence.

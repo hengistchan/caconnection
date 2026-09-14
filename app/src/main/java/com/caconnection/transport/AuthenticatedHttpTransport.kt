@@ -30,7 +30,9 @@ class UrlConnectionGatewayHttpClient(
     certificatePinSha256Base64: String
 ) : GatewayHttpClient {
     private val sslSocketFactory =
-        pinnedSslContext(certificatePinSha256Base64).socketFactory
+        certificatePinSha256Base64
+            .takeIf(String::isNotBlank)
+            ?.let { pinnedSslContext(it).socketFactory }
 
     override fun post(
         url: String,
@@ -39,7 +41,7 @@ class UrlConnectionGatewayHttpClient(
     ): GatewayHttpResponse {
         val connection = URL(url).openConnection() as HttpURLConnection
         return try {
-            if (connection is HttpsURLConnection) {
+            if (connection is HttpsURLConnection && sslSocketFactory != null) {
                 connection.sslSocketFactory = sslSocketFactory
             }
             connection.requestMethod = "POST"

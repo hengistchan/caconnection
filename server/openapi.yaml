@@ -1,0 +1,289 @@
+openapi: 3.1.0
+info:
+  title: CA Connection Gateway API
+  version: 0.2.0
+  description: >
+    Production API for Android gateway ingestion, authenticated SMS retrieval,
+    and one-time OTP claims. Sensitive response bodies must never be logged.
+servers:
+  - url: https://gateway.example.com
+paths:
+  /health:
+    get:
+      summary: Liveness check
+      responses:
+        "200":
+          description: Process is running
+  /ready:
+    get:
+      summary: Readiness check
+      responses:
+        "200":
+          description: Device configuration and database are ready
+        "503":
+          description: Service is not ready
+  /version:
+    get:
+      summary: Service and protocol version
+      responses:
+        "200":
+          description: Version information
+  /v1/events:
+    post:
+      summary: Upload one encrypted Android Outbox event
+      parameters:
+        - in: header
+          name: X-Gateway-Device
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Gateway-Timestamp
+          required: true
+          schema:
+            type: integer
+        - in: header
+          name: X-Gateway-Nonce
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Gateway-Signature
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EncryptedEnvelope"
+      responses:
+        "201":
+          description: New event accepted
+        "200":
+          description: Idempotent duplicate accepted
+        "400":
+          description: Invalid encrypted request
+        "401":
+          description: Device authentication failed
+        "409":
+          description: Request nonce replay
+        "429":
+          description: Rate limit exceeded
+  /v1/messages:
+    get:
+      summary: Read decrypted incoming SMS messages
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: afterId
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: slotIndex
+          schema:
+            type: integer
+            enum: [0, 1]
+      responses:
+        "200":
+          description: Messages, including sensitive sender and body fields
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/IncomingMessage"
+        "400":
+          description: Invalid query
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks messages:read scope
+        "429":
+          description: Rate limit exceeded
+  /v1/otp/claim:
+    post:
+      summary: Atomically claim the newest unclaimed OTP
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slotIndex:
+                  type: integer
+                  enum: [0, 1]
+                maxAgeSeconds:
+                  type: integer
+                  minimum: 30
+                  maximum: 3600
+              additionalProperties: false
+      responses:
+        "200":
+          description: OTP claimed; the code is sensitive and returned once
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [otp]
+                properties:
+                  otp:
+                    $ref: "#/components/schemas/OtpClaim"
+        "400":
+          description: Invalid request
+        "404":
+          description: No unclaimed OTP is available
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks otp:claim scope
+        "429":
+          description: Rate limit exceeded
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    EncryptedEnvelope:
+      type: object
+      additionalProperties: true
+      required:
+        - schemaVersion
+        - deliveryId
+        - sourceEventId
+        - eventType
+        - createdAt
+        - payload
+      properties:
+        schemaVersion:
+          type: integer
+          const: 2
+        deliveryId:
+          type: string
+        sourceEventId:
+          type: string
+        eventType:
+          type: string
+          enum:
+            - INCOMING_SMS
+            - NOTIFICATION
+            - CALL_STATE
+            - CALL_IDENTITY
+            - LOCAL_SELF_TEST
+        createdAt:
+          type: integer
+        subscriptionId:
+          type:
+            - integer
+            - "null"
+        slotIndex:
+          type:
+            - integer
+            - "null"
+        payload:
+          type: object
+          additionalProperties: true
+          required:
+            - algorithm
+            - nonceBase64
+            - ciphertextBase64
+          properties:
+            algorithm:
+              type: string
+              const: AES-256-GCM
+            nonceBase64:
+              type: string
+            ciphertextBase64:
+              type: string
+    IncomingMessage:
+      type: object
+      required:
+        - id
+        - deviceId
+        - createdAt
+        - receivedAt
+        - subscriptionId
+        - slotIndex
+        - sender
+        - body
+        - partCount
+        - resolutionMethod
+        - resolutionConfidence
+        - otpCandidates
+      properties:
+        id:
+          type: integer
+        deviceId:
+          type: string
+        createdAt:
+          type: integer
+        receivedAt:
+          type: integer
+        subscriptionId:
+          type: [integer, "null"]
+        slotIndex:
+          type: [integer, "null"]
+        sender:
+          type: [string, "null"]
+        body:
+          type: [string, "null"]
+        partCount:
+          type: [integer, "null"]
+        resolutionMethod:
+          type: [string, "null"]
+        resolutionConfidence:
+          type: [string, "null"]
+        otpCandidates:
+          type: array
+          items:
+            type: string
+            pattern: "^[0-9]{4,8}$"
+    OtpClaim:
+      type: object
+      required:
+        - eventId
+        - deviceId
+        - receivedAt
+        - subscriptionId
+        - slotIndex
+        - code
+        - expiresAt
+      properties:
+        eventId:
+          type: integer
+        deviceId:
+          type: string
+        receivedAt:
+          type: integer
+        subscriptionId:
+          type: [integer, "null"]
+        slotIndex:
+          type: [integer, "null"]
+        code:
+          type: string
+          pattern: "^[0-9]{4,8}$"
+        expiresAt:
+          type: integer

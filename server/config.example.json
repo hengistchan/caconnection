@@ -9,5 +9,24 @@
     "private_key": "server/tls/receiver-key.pem",
     "certificate_pin_sha256_base64": "BASE64_SHA256_OF_DER_CERTIFICATE",
     "lan_ip": "192.168.1.10"
+  },
+  "api_clients": {
+    "automation": {
+      "token_sha256": "SHA256_HEX_OF_RANDOM_BEARER_TOKEN",
+      "scopes": [
+        "messages:read",
+        "otp:claim"
+      ]
+    }
+  },
+  "server": {
+    "retention_days": 30,
+    "otp_max_age_seconds": 600,
+    "ingest_requests_per_minute": 120,
+    "device_requests_per_minute": 120,
+    "api_auth_requests_per_minute": 120,
+    "api_requests_per_minute": 60,
+    "max_concurrent_requests": 32,
+    "trust_proxy_headers": false
   }
 }

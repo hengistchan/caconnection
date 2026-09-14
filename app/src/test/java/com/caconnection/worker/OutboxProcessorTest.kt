@@ -49,7 +49,7 @@ class OutboxProcessorTest {
     }
 
     @Test
-    fun tenthFailureBecomesPermanentFailure() = runTest {
+    fun retryableFailuresRemainDurableAfterTenAttempts() = runTest {
         val event = event().apply { retryCount = 9 }
         val processor = OutboxProcessor(
             transport = Transport {
@@ -60,8 +60,23 @@ class OutboxProcessorTest {
 
         processor.process(event) {}
 
-        assertEquals(OutboxStatus.FAILED.name, event.status)
+        assertEquals(OutboxStatus.RETRY.name, event.status)
         assertEquals(10, event.retryCount)
+        assertEquals(320_000L, event.nextRetryAt)
+        assertEquals("still offline", event.lastError)
+    }
+
+    @Test
+    fun retryCountDoesNotOverflow() {
+        val decision = OutboxRetryPolicy.decide(
+            currentRetryCount = Int.MAX_VALUE,
+            now = 20_000L,
+            error = "still offline"
+        )
+
+        assertEquals(OutboxStatus.RETRY, decision.status)
+        assertEquals(Int.MAX_VALUE, decision.retryCount)
+        assertEquals(320_000L, decision.nextRetryAt)
     }
 
     @Test
