@@ -1,15 +1,15 @@
-# Phase 5 — Production Server and Android Cutover Readiness
+# Phase 5 — Production Server and Android Cutover Acceptance
 
 Date: 2026-09-14
 
 ## Result
 
-The Phase 5 server implementation passes its local code, container,
-cryptographic, and operational acceptance gates. The phone-to-local-receiver
-encrypted baseline also passes. The latest Android reliability and visual
-header build passes automated tests, but its final on-device visual check is
-pending because wireless ADB disconnected after the user reported that the
-header still looked visually merged with the status bar.
+Phase 5 passes its local code, container, cryptographic, production-host, and
+physical Android cutover gates. The signed production application now sends
+directly to the public server through a dedicated config-file-managed
+Cloudflare Named Tunnel. Natural OTP-bearing SMS messages received on SIM1 and
+SIM2 both passed authenticated retrieval, exact-event selection, and
+deterministic second-claim rejection.
 
 The production runtime is now implemented as:
 
@@ -18,7 +18,7 @@ Xiaomi Android gateway
   -> durable Room Outbox
   -> schema-v2 AES-256-GCM payload
   -> timestamp + nonce + HMAC-SHA256 authenticated HTTPS
-  -> Caddy public TLS endpoint
+  -> Cloudflare public TLS / dedicated Named Tunnel
   -> private non-root Gateway API container
   -> encrypted SQLite envelope storage
   -> bearer-authenticated message API / atomic one-time OTP claim API
@@ -30,14 +30,20 @@ Gateway Docker network and no Gateway-stack port is published on the host.
 The direct public-Caddy deployment remains available for servers without a
 Tunnel.
 
-The Mac remains only the temporary Phase 4 development receiver. It is not a
-component of the production architecture.
+The deployed production hostname is:
 
-Formal deployment to a public server has not yet been performed because the
-repository does not contain, and must not invent, the required SSH target,
-production hostname, DNS state, or production Android signing key. The phone
-therefore remains on the verified local receiver until the public deployment
-passes.
+```text
+caconnection-gatway.hengistchan.online
+```
+
+The spelling `gatway` is intentional. DNS is managed from the server's
+existing Terraform workspace. The dedicated Gateway connector remains locally
+managed by YAML and credential JSON; it was not merged into or substituted for
+the pre-existing remotely managed Tunnel.
+
+The Mac is not a component of the production architecture. The earlier local
+receiver and test packages have deliberately not been stopped or removed
+because cleanup requires separate operator approval.
 
 ## Production API
 
@@ -279,9 +285,10 @@ the bounds no longer overlapped. A second visual correction now adds:
 - internal 16 dp header padding;
 - a slightly smaller 22 sp title.
 
-This second correction has passed resource compilation, targetSdk 37 unit
-tests, APK assembly, and lint. It still requires installation and visual
-confirmation when the phone reconnects.
+This second correction passed resource compilation, targetSdk 37 unit tests,
+APK assembly, lint, production signing, installation, and an on-device
+screenshot check. The application header is visually separated from the
+status/cutout area and the navigation controls no longer intersect it.
 
 ## Automated verification
 
@@ -323,12 +330,15 @@ targetSdk 36: 57/57 unit tests passed
 targetSdk 37: 57/57 unit tests passed
 targetSdk 36 Debug APK assembled
 targetSdk 37 Debug APK assembled
-targetSdk 37 unsigned Release APK assembled
+targetSdk 37 signed Release APK assembled
 targetSdk 36 lint passed
 targetSdk 37 lint passed
 ```
 
-An ephemeral signing-key acceptance test also passed:
+A real production signing key was generated outside the repository. Its
+passwords are retained in macOS Keychain and the keystore is stored in a
+private `0700` directory with mode `0600`. The production APK verification
+passed:
 
 ```text
 APK Signature Scheme v2: true
@@ -338,7 +348,8 @@ debuggable:              false
 provisioning receiver:   android.permission.DUMP protected
 ```
 
-The ephemeral key and test-signed APK were deleted immediately afterward.
+No signing password or private-key material was printed, copied to the server,
+or committed to Git.
 
 ## Production-container acceptance
 
@@ -364,30 +375,67 @@ temporary containers/volumes/files:  removed
 The final image contains neither deployment runtime files nor local receiver
 credentials and runs as the non-root `gateway` user.
 
-## Physical Android acceptance
-
-The targetSdk 37 insets build was installed over the existing physical gateway
-package with app data retained. The subsequently built header-surface and
-indefinite-retry update is not yet installed because the phone is currently
-disconnected from ADB.
-
-Baseline post-install verification:
+The live production host additionally passed:
 
 ```text
-legacy plaintext shared-secret preference: absent
-encrypted secret ciphertext preference:    present
-encrypted secret nonce preference:         present
-deterministic Android encrypted self-test:  received by local HTTPS server
-gateway readiness:                          READY
+release:                              5c1531d
+Gateway container:                    healthy
+dedicated cloudflared connector:      4 connections
+Gateway host port bindings:           none
+cloudflared host port bindings:       none
+public system-CA HTTPS:               passed
+/health, /ready, /version:            passed
+signed encrypted public smoke:        HTTP 201
+authenticated message API:            passed
+Terraform DNS apply:                  1 add, 0 change, 0 destroy
+Terraform post-apply plan:             no changes
+checksum-verified final backup:        passed
+pre-existing services and Tunnels:    remained active
+```
+
+## Physical Android acceptance
+
+The signed targetSdk 37 production package was installed side by side with the
+earlier packages:
+
+```text
+com.caconnection.gateway
+```
+
+Post-install and cutover verification:
+
+```text
+targetSdk:                                  37
+version:                                    0.2.0-target37
+production application ID:                  com.caconnection.gateway
+RECEIVE_SMS:                                granted
+SEND_SMS:                                   granted
+READ_PHONE_STATE:                           granted
+POST_NOTIFICATIONS:                         granted
 default SMS application:                    com.android.mms
 default dialer:                             com.android.contacts
-call-screening role:                        com.caconnection.debug
+existing call-screening role:               com.caconnection.debug
 MIUIOP(10018):                              allow
+MIUIOP(10008):                              ignore, unchanged
+managed-process premise:                    explicitly assumed
+production provisioning import:             passed
+SIM1 natural OTP SMS / exact claim:         passed
+SIM1 second exact claim:                    rejected
+SIM2 natural OTP SMS / exact claim:         passed
+SIM2 second exact claim:                    rejected
+final public /ready:                        passed
 ```
 
 HyperOS again changed `MIUIOP(10018)` during package replacement. Only this
 previously approved AppOp was restored, then rechecked. No default
 application, battery setting, or background policy was changed.
+
+The release manifest intentionally omits the debug-only transport-test
+receiver. A separate synthetic Android self-test was therefore not injected
+into the production package. The two natural dual-SIM tests exercised the
+actual receiver, Room Outbox, Android Keystore-backed secret, public Tunnel,
+Gateway API, encrypted storage, authenticated retrieval, and one-time claim
+path end to end.
 
 No paid outbound SMS was sent for this acceptance run.
 
@@ -416,41 +464,19 @@ It does not protect message plaintext from:
 A cloud-blind relay would require a different recipient public-key design and
 is not claimed by Phase 5.
 
-## Remaining formal deployment gate
+## Cutover status and deferred cleanup
 
-Code acceptance is complete. Public deployment requires the operator to
-provide or confirm:
+The production phone-to-server cutover is complete. The following cleanup and
+operations remain intentionally separate:
 
-```text
-SSH host or alias
-SSH user
-SSH port
-production Linux distribution/version
-production DNS hostname
-DNS already pointing to the server
-TCP 80/443 and UDP 443 firewall/admin access
-secure destination for the production Android signing key and passwords
-```
-
-After those inputs are available, the required cutover sequence is:
-
-1. inspect the server without modifying it;
-2. verify Docker/Compose, ports, DNS, firewall, disk, time sync, and existing
-   services;
-3. generate production runtime credentials;
-4. generate and securely retain the real Android production signing key;
-5. deploy and run public TLS, readiness, version, signed protocol, and
-   authenticated message-API checks;
-6. create and export a verified backup;
-7. build and verify the signed production APK;
-8. install `com.caconnection.gateway` side by side;
-9. grant and recheck the approved Android permissions and roles;
-10. import production provisioning without printing secrets;
-11. verify an Android self-test through the public server;
-12. verify one natural SIM1 and one natural SIM2 SMS/OTP end to end;
-13. use `cutover_acceptance.sh` to verify authenticated retrieval and exact
-    one-time OTP claim behavior without printing sensitive values;
-14. only then disable the Debug gateway and retire the Mac receiver.
-
-Until that sequence succeeds, the verified local Phase 4 transport remains
-active and the production cutover is not claimed complete.
+1. do not uninstall the Debug or earlier POC packages without operator
+   approval;
+2. do not stop or remove the Mac receiver without operator approval;
+3. retain `MIUIOP(10008)=ignore` under the explicit managed-process premise
+   unless the operator separately approves changing HyperOS auto-start;
+4. copy verified backups to encrypted off-host storage;
+5. back up the production Android keystore and Keychain recovery material to a
+   separately approved secure destination;
+6. add a protected read-only administration page only as a separate feature;
+7. monitor certificate, Tunnel, backup, disk, and Android upload freshness in
+   routine operations.
