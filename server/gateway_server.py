@@ -8,6 +8,7 @@ import hmac
 import ipaddress
 import json
 import re
+import secrets
 import sqlite3
 import ssl
 import threading
@@ -33,7 +34,11 @@ DEFAULT_INGEST_REQUESTS_PER_MINUTE = 120
 DEFAULT_DEVICE_REQUESTS_PER_MINUTE = 120
 DEFAULT_API_AUTH_REQUESTS_PER_MINUTE = 120
 DEFAULT_API_REQUESTS_PER_MINUTE = 60
+DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE = 20
+DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE = 20
 DEFAULT_MAX_CONCURRENT_REQUESTS = 32
+MIN_PAIRING_EXPIRES_SECONDS = 60
+MAX_PAIRING_EXPIRES_SECONDS = 600
 MAX_RATE_LIMIT_IDENTITIES = 10_000
 ALLOWED_EVENT_TYPES = {
     "INCOMING_SMS",
@@ -291,10 +296,71 @@ class GatewayStore:
                     claimed_at INTEGER NOT NULL,
                     FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS pairing_sessions (
+                    token_sha256 TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    consumed_at INTEGER
+                );
                 CREATE INDEX IF NOT EXISTS index_events_type_received
                     ON events(event_type, received_at DESC);
+                CREATE INDEX IF NOT EXISTS index_pairing_sessions_expiry
+                    ON pairing_sessions(expires_at);
                 """
             )
+
+    def create_pairing(
+        self,
+        token: str,
+        device_id: str,
+        now_ms: int,
+        expires_in_seconds: int,
+    ) -> int:
+        token_digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+        expires_at = now_ms + expires_in_seconds * 1000
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM pairing_sessions WHERE expires_at < ?",
+                (now_ms - 86_400_000,),
+            )
+            db.execute(
+                """
+                INSERT INTO pairing_sessions(
+                    token_sha256, device_id, created_at, expires_at, consumed_at
+                ) VALUES (?, ?, ?, ?, NULL)
+                """,
+                (token_digest, device_id, now_ms, expires_at),
+            )
+        return expires_at
+
+    def claim_pairing(self, token: str, now_ms: int) -> Optional[str]:
+        token_digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """
+                SELECT device_id
+                FROM pairing_sessions
+                WHERE token_sha256 = ?
+                  AND consumed_at IS NULL
+                  AND expires_at >= ?
+                """,
+                (token_digest, now_ms),
+            ).fetchone()
+            if row is None:
+                return None
+            cursor = db.execute(
+                """
+                UPDATE pairing_sessions
+                SET consumed_at = ?
+                WHERE token_sha256 = ? AND consumed_at IS NULL
+                """,
+                (now_ms, token_digest),
+            )
+            if cursor.rowcount != 1:
+                return None
+            return str(row["device_id"])
 
     def accept(
         self,
@@ -547,6 +613,7 @@ class GatewayStore:
             db.execute("DELETE FROM otp_claims")
             db.execute("DELETE FROM events")
             db.execute("DELETE FROM request_nonces")
+            db.execute("DELETE FROM pairing_sessions")
 
 
 def validate_envelope(value: Any) -> dict[str, Any]:
@@ -826,6 +893,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             self.send_json(HTTPStatus.OK, {"messages": messages})
             return
+        if path == "/v1/devices":
+            if self.authorize_api("pairing:create") is None:
+                return
+            self.send_json(
+                HTTPStatus.OK,
+                {"devices": sorted(self.app.devices)},
+            )
+            return
         if not self.app.allow_viewer:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -855,6 +930,149 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/v1/pairings":
+            if not self.app.accept_ingestion:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            if self.authorize_api("pairing:create") is None:
+                return
+            if not self.rate_limit(
+                "pairing-create",
+                self.client_ip(),
+                self.app.pairing_create_requests_per_minute,
+            ):
+                return
+            try:
+                value = self.read_json_body(4_096)
+                if set(value) - {"deviceId", "expiresInSeconds"}:
+                    raise ValueError("unsupported request field")
+                device_id = value.get("deviceId")
+                expires_in_seconds = value.get("expiresInSeconds", 300)
+                if (
+                    not isinstance(device_id, str)
+                    or device_id not in self.app.devices
+                ):
+                    raise ValueError("invalid deviceId")
+                if (
+                    not isinstance(expires_in_seconds, int)
+                    or isinstance(expires_in_seconds, bool)
+                    or not MIN_PAIRING_EXPIRES_SECONDS
+                    <= expires_in_seconds
+                    <= MAX_PAIRING_EXPIRES_SECONDS
+                ):
+                    raise ValueError("invalid expiresInSeconds")
+                if not self.app.pairing_public_endpoint:
+                    raise RuntimeError("pairing endpoint is not configured")
+                token = self.app.pairing_token_factory()
+                if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
+                    raise RuntimeError("pairing token generator failed")
+                now_ms = int(time.time() * 1000)
+                expires_at = self.app.store.create_pairing(
+                    token,
+                    device_id,
+                    now_ms,
+                    expires_in_seconds,
+                )
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid request"}
+                )
+                return
+            except RuntimeError:
+                self.send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"error": "pairing unavailable"},
+                )
+                return
+            document = {
+                "schemaVersion": 1,
+                "type": "ca-connection-pairing",
+                "endpoint": self.app.pairing_public_endpoint,
+                "pairingToken": token,
+            }
+            if self.app.pairing_certificate_pin:
+                document["certificatePinSha256Base64"] = (
+                    self.app.pairing_certificate_pin
+                )
+            self.send_json(
+                HTTPStatus.CREATED,
+                {
+                    "pairing": {
+                        "deviceId": device_id,
+                        "expiresAt": expires_at,
+                        "payload": json.dumps(
+                            document,
+                            separators=(",", ":"),
+                            ensure_ascii=True,
+                        ),
+                    }
+                },
+            )
+            return
+        if path == "/v1/pairings/claim":
+            if not self.app.accept_ingestion:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            if not self.rate_limit(
+                "pairing-claim",
+                self.client_ip(),
+                self.app.pairing_claim_requests_per_minute,
+            ):
+                return
+            try:
+                value = self.read_json_body(4_096)
+                if set(value) != {"pairingToken"}:
+                    raise ValueError("invalid request fields")
+                token = value.get("pairingToken")
+                if (
+                    not isinstance(token, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token)
+                ):
+                    raise ValueError("invalid pairing token")
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid request"}
+                )
+                return
+            device_id = self.app.store.claim_pairing(
+                token,
+                int(time.time() * 1000),
+            )
+            secret = self.app.devices.get(device_id or "")
+            if device_id is None or secret is None:
+                self.send_json(
+                    HTTPStatus.GONE,
+                    {"error": "pairing expired or already used"},
+                )
+                return
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "provisioning": {
+                        "schemaVersion": 1,
+                        "endpoint": self.app.pairing_public_endpoint,
+                        "deviceId": device_id,
+                        "sharedSecretBase64": base64.b64encode(secret).decode(
+                            "ascii"
+                        ),
+                        "certificatePinSha256Base64": (
+                            self.app.pairing_certificate_pin
+                        ),
+                        "enabled": True,
+                    }
+                },
+            )
+            return
         if path == "/v1/otp/claim":
             client_id = self.authorize_api("otp:claim")
             if client_id is None:
@@ -1019,6 +1237,7 @@ class GatewayHttpServer(ThreadingHTTPServer):
         allow_viewer: bool = False,
         api_clients: Optional[dict[str, dict[str, Any]]] = None,
         server_settings: Optional[dict[str, Any]] = None,
+        pairing_token_factory: Optional[Any] = None,
     ):
         super().__init__(address, GatewayHandler)
         self.devices = devices
@@ -1027,6 +1246,43 @@ class GatewayHttpServer(ThreadingHTTPServer):
         self.allow_viewer = allow_viewer
         self.api_clients = api_clients or {}
         settings = server_settings or {}
+        self.pairing_public_endpoint = str(
+            settings.get("pairing_public_endpoint", "")
+        ).strip().rstrip("/")
+        if self.pairing_public_endpoint:
+            parsed_pairing_endpoint = urlparse(self.pairing_public_endpoint)
+            if (
+                parsed_pairing_endpoint.scheme != "https"
+                or not parsed_pairing_endpoint.hostname
+                or parsed_pairing_endpoint.username is not None
+                or parsed_pairing_endpoint.password is not None
+                or parsed_pairing_endpoint.query
+                or parsed_pairing_endpoint.fragment
+                or parsed_pairing_endpoint.path not in ("", "/")
+            ):
+                raise ValueError(
+                    "pairing_public_endpoint must be an HTTPS origin"
+                )
+        self.pairing_certificate_pin = str(
+            settings.get("pairing_certificate_pin_sha256_base64", "")
+        ).strip()
+        if self.pairing_certificate_pin:
+            try:
+                pin_bytes = base64.b64decode(
+                    self.pairing_certificate_pin,
+                    validate=True,
+                )
+            except (binascii.Error, ValueError) as error:
+                raise ValueError(
+                    "pairing_certificate_pin_sha256_base64 is invalid"
+                ) from error
+            if len(pin_bytes) != 32:
+                raise ValueError(
+                    "pairing_certificate_pin_sha256_base64 is invalid"
+                )
+        self.pairing_token_factory = pairing_token_factory or (
+            lambda: secrets.token_urlsafe(32)
+        )
         self.retention_days = integer_setting(
             settings,
             "retention_days",
@@ -1068,6 +1324,20 @@ class GatewayHttpServer(ThreadingHTTPServer):
             DEFAULT_API_REQUESTS_PER_MINUTE,
             1,
             100_000,
+        )
+        self.pairing_create_requests_per_minute = integer_setting(
+            settings,
+            "pairing_create_requests_per_minute",
+            DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE,
+            1,
+            10_000,
+        )
+        self.pairing_claim_requests_per_minute = integer_setting(
+            settings,
+            "pairing_claim_requests_per_minute",
+            DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE,
+            1,
+            10_000,
         )
         trust_proxy_headers = settings.get("trust_proxy_headers", False)
         if not isinstance(trust_proxy_headers, bool):
@@ -1134,7 +1404,12 @@ def load_api_clients(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
             raise ValueError(f"Invalid API token hash for {client_id}")
         if not isinstance(scopes, list) or not all(
             isinstance(scope, str)
-            and scope in {"messages:read", "otp:claim", "*"}
+            and scope in {
+                "messages:read",
+                "otp:claim",
+                "pairing:create",
+                "*",
+            }
             for scope in scopes
         ):
             raise ValueError(f"Invalid API scopes for {client_id}")

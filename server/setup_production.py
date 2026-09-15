@@ -112,6 +112,10 @@ def main() -> None:
         "device_requests_per_minute": 120,
         "api_auth_requests_per_minute": 120,
         "api_requests_per_minute": 60,
+        "pairing_create_requests_per_minute": 20,
+        "pairing_claim_requests_per_minute": 20,
+        "pairing_public_endpoint": f"https://{domain}",
+        "pairing_certificate_pin_sha256_base64": "",
         "max_concurrent_requests": 32,
         "trust_proxy_headers": True,
     }

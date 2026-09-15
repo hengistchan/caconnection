@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="message_filter_all" type="id" />
+    <item name="message_filter_incoming" type="id" />
+    <item name="message_filter_outgoing" type="id" />
+    <item name="message_filter_otp" type="id" />
+    <item name="log_filter_all" type="id" />
+    <item name="log_filter_errors" type="id" />
+    <item name="log_filter_sms" type="id" />
+    <item name="log_filter_calls" type="id" />
+    <item name="log_filter_notifications" type="id" />
+    <item name="log_filter_transport" type="id" />
+</resources>

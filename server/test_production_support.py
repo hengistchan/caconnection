@@ -63,6 +63,14 @@ class ProductionSetupTest(unittest.TestCase):
             self.assertEqual(
                 "https://gateway.example.com", provisioning["endpoint"]
             )
+            self.assertEqual(
+                "https://gateway.example.com",
+                config["server"]["pairing_public_endpoint"],
+            )
+            self.assertEqual(
+                20,
+                config["server"]["pairing_claim_requests_per_minute"],
+            )
             self.assertTrue(provisioning["enabled"])
             self.assertEqual(
                 0o600, (runtime / "config.json").stat().st_mode & 0o777

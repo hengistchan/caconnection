@@ -50,7 +50,7 @@ object NotificationHelper {
         )
         val simLabel = event.resolvedSlotIndex?.let { "SIM${it + 1}" } ?: "SIM unresolved"
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("${event.originatingAddress.ifBlank { "Incoming SMS" }} · $simLabel")
             .setContentText(event.body.take(120))
             .setStyle(NotificationCompat.BigTextStyle().bigText(event.body.take(500)))

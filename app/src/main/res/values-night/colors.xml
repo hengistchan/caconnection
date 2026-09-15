@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="brand_blue">#8DBBFF</color>
+    <color name="brand_blue_soft">#203B62</color>
+    <color name="button_primary_background">#1C64C7</color>
+    <color name="brand_green">#4FD5A8</color>
+    <color name="brand_green_soft">#173D34</color>
+    <color name="brand_orange">#FF956F</color>
+    <color name="brand_orange_soft">#4A2A20</color>
+    <color name="brand_purple">#B295FF</color>
+    <color name="brand_purple_soft">#342A55</color>
+    <color name="app_background">#0D1421</color>
+    <color name="card_background">#172131</color>
+    <color name="hero_background">#142943</color>
+    <color name="navigation_background">#111A28</color>
+    <color name="info_background">#182D48</color>
+    <color name="code_background">#080D16</color>
+    <color name="code_text">#D8E5FF</color>
+    <color name="text_secondary">#A4B4CC</color>
+    <color name="icon_secondary">#A8B8D0</color>
+    <color name="control_text">#D4DEED</color>
+    <color name="control_stroke">#5C708D</color>
+    <color name="divider">#2A374A</color>
+    <color name="card_stroke">#2A3C55</color>
+    <color name="status_success">#62DFB3</color>
+    <color name="status_success_background">#183F35</color>
+    <color name="status_warning">#FFC36A</color>
+    <color name="status_warning_background">#49351C</color>
+    <color name="status_error">#FF8585</color>
+    <color name="status_error_background">#4A2428</color>
+    <color name="status_neutral_background">#273448</color>
+</resources>

@@ -76,6 +76,77 @@ paths:
           description: Request nonce replay
         "429":
           description: Rate limit exceeded
+  /v1/pairings:
+    post:
+      summary: Create a short-lived Android pairing QR payload
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deviceId]
+              additionalProperties: false
+              properties:
+                deviceId:
+                  type: string
+                expiresInSeconds:
+                  type: integer
+                  minimum: 60
+                  maximum: 600
+                  default: 300
+      responses:
+        "201":
+          description: One-time QR payload created; never log its payload
+        "400":
+          description: Invalid request or unknown device
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+        "429":
+          description: Rate limit exceeded
+        "503":
+          description: Pairing is not configured
+  /v1/devices:
+    get:
+      summary: List configured device IDs available for pairing
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Configured device IDs
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+  /v1/pairings/claim:
+    post:
+      summary: Atomically exchange a one-time pairing token for provisioning
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pairingToken]
+              additionalProperties: false
+              properties:
+                pairingToken:
+                  type: string
+                  minLength: 32
+                  maxLength: 128
+      responses:
+        "200":
+          description: Provisioning document containing the device secret
+        "400":
+          description: Invalid request
+        "410":
+          description: Token expired, unknown, or already consumed
+        "429":
+          description: Rate limit exceeded
   /v1/messages:
     get:
       summary: Read decrypted incoming SMS messages

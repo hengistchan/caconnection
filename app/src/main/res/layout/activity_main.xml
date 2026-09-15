@@ -1,80 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:id="@+id/root_layout"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="12dp">
+    android:orientation="vertical">
 
-    <TextView
+    <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:layout_marginBottom="6dp"
-        android:accessibilityHeading="true"
-        android:background="@drawable/gateway_header_background"
-        android:elevation="2dp"
         android:gravity="center_vertical"
-        android:padding="16dp"
-        android:text="@string/poc_title"
-        android:textSize="22sp"
-        android:textStyle="bold" />
-
-    <HorizontalScrollView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:fillViewport="true"
-        android:scrollbars="none">
+        android:orientation="horizontal"
+        android:paddingStart="20dp"
+        android:paddingTop="14dp"
+        android:paddingEnd="10dp"
+        android:paddingBottom="12dp">
 
         <LinearLayout
-            style="?android:attr/buttonBarStyle"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-            <Button
-                style="?android:attr/buttonBarButtonStyle"
-                android:id="@+id/nav_dashboard"
+            <TextView
+                android:id="@+id/page_title"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/dashboard" />
+                android:accessibilityHeading="true"
+                android:text="@string/home_title"
+                android:textColor="?attr/colorOnSurface"
+                android:textSize="28sp"
+                android:textStyle="bold" />
 
-            <Button
-                style="?android:attr/buttonBarButtonStyle"
-                android:id="@+id/nav_incoming"
+            <TextView
+                android:id="@+id/page_subtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/incoming" />
-
-            <Button
-                style="?android:attr/buttonBarButtonStyle"
-                android:id="@+id/nav_send"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/send" />
-
-            <Button
-                style="?android:attr/buttonBarButtonStyle"
-                android:id="@+id/nav_diagnostics"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/diagnostics" />
-
-            <Button
-                style="?android:attr/buttonBarButtonStyle"
-                android:id="@+id/nav_signals"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/signals" />
-
-            <Button
-                style="?android:attr/buttonBarButtonStyle"
-                android:id="@+id/nav_transport"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/transport" />
+                android:layout_marginTop="2dp"
+                android:text="@string/home_subtitle"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
         </LinearLayout>
-    </HorizontalScrollView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/language_button"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/language"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:text="@string/language_short"
+            android:textAllCaps="false"
+            android:textColor="@color/brand_blue"
+            android:textStyle="bold" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/header_refresh_button"
+            style="@style/Widget.MaterialComponents.Button.TextButton"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:contentDescription="@string/refresh"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            app:icon="@drawable/ic_refresh"
+            app:iconGravity="textStart"
+            app:iconPadding="0dp"
+            app:iconTint="@color/icon_secondary" />
+    </LinearLayout>
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -82,271 +75,60 @@
         android:layout_weight="1">
 
         <ScrollView
-            android:id="@+id/page_dashboard"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent">
-
+            android:id="@+id/page_home"
+            style="@style/AppPage"
+            android:overScrollMode="never"
+            android:scrollbars="none">
             <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/dashboard_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:paddingVertical="12dp"
-                    android:textIsSelectable="true" />
-
-                <Button
-                    android:id="@+id/refresh_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/refresh_probe" />
-
-                <Button
-                    android:id="@+id/permission_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/grant_permissions" />
-
-                <Button
-                    android:id="@+id/role_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/request_sms_role" />
-
-                <Button
-                    android:id="@+id/battery_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/open_app_settings" />
-            </LinearLayout>
+                android:id="@+id/home_content"
+                style="@style/AppPageContent" />
         </ScrollView>
 
         <ScrollView
-            android:id="@+id/page_incoming"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:id="@+id/page_messages"
+            style="@style/AppPage"
+            android:overScrollMode="never"
+            android:scrollbars="none"
             android:visibility="gone">
-
-            <TextView
-                android:id="@+id/incoming_text"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:fontFamily="monospace"
-                android:paddingVertical="12dp"
-                android:textIsSelectable="true" />
+            <LinearLayout
+                android:id="@+id/messages_content"
+                style="@style/AppPageContent" />
         </ScrollView>
 
         <ScrollView
-            android:id="@+id/page_send"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:id="@+id/page_activity"
+            style="@style/AppPage"
+            android:overScrollMode="never"
+            android:scrollbars="none"
             android:visibility="gone">
-
             <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <EditText
-                    android:id="@+id/recipient_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/recipient"
-                    android:importantForAutofill="no"
-                    android:inputType="phone" />
-
-                <EditText
-                    android:id="@+id/message_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="120dp"
-                    android:gravity="top|start"
-                    android:hint="@string/message"
-                    android:importantForAutofill="no"
-                    android:inputType="textCapSentences|textMultiLine" />
-
-                <Spinner
-                    android:id="@+id/sim_spinner"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:minHeight="48dp" />
-
-                <Button
-                    android:id="@+id/send_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/send_selected_sim" />
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:paddingTop="16dp"
-                    android:text="@string/outgoing_events"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/outgoing_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:paddingVertical="12dp"
-                    android:textIsSelectable="true" />
-            </LinearLayout>
+                android:id="@+id/activity_content"
+                style="@style/AppPageContent" />
         </ScrollView>
 
         <ScrollView
-            android:id="@+id/page_diagnostics"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:id="@+id/page_settings"
+            style="@style/AppPage"
+            android:overScrollMode="never"
+            android:scrollbars="none"
             android:visibility="gone">
-
             <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/diagnostics_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:paddingVertical="12dp"
-                    android:textIsSelectable="true" />
-
-                <Button
-                    android:id="@+id/outbox_test_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/run_outbox_self_test" />
-
-                <Button
-                    android:id="@+id/clear_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/clear_poc_events" />
-            </LinearLayout>
-        </ScrollView>
-
-        <ScrollView
-            android:id="@+id/page_signals"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:visibility="gone">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/signals_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:paddingVertical="12dp"
-                    android:textIsSelectable="true" />
-
-                <Button
-                    android:id="@+id/notification_access_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/open_notification_access" />
-
-                <EditText
-                    android:id="@+id/notification_allowlist_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="120dp"
-                    android:gravity="top|start"
-                    android:hint="@string/notification_allowlist_hint"
-                    android:importantForAutofill="no"
-                    android:inputType="textNoSuggestions|textMultiLine" />
-
-                <Button
-                    android:id="@+id/save_notification_allowlist_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/save_notification_allowlist" />
-
-                <Button
-                    android:id="@+id/call_screening_role_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/request_call_screening_role" />
-            </LinearLayout>
-        </ScrollView>
-
-        <ScrollView
-            android:id="@+id/page_transport"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:visibility="gone">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical">
-
-                <TextView
-                    android:id="@+id/transport_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:paddingVertical="12dp"
-                    android:textIsSelectable="true" />
-
-                <EditText
-                    android:id="@+id/transport_endpoint_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/transport_endpoint_hint"
-                    android:importantForAutofill="no"
-                    android:inputType="textUri" />
-
-                <EditText
-                    android:id="@+id/transport_device_id_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/transport_device_id_hint"
-                    android:importantForAutofill="no"
-                    android:inputType="textNoSuggestions" />
-
-                <EditText
-                    android:id="@+id/transport_secret_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/transport_secret_hint"
-                    android:importantForAutofill="no"
-                    android:inputType="textPassword" />
-
-                <EditText
-                    android:id="@+id/transport_certificate_pin_input"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:hint="@string/transport_certificate_pin_hint"
-                    android:importantForAutofill="no"
-                    android:inputType="textNoSuggestions" />
-
-                <CheckBox
-                    android:id="@+id/transport_enabled_checkbox"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/enable_http_transport" />
-
-                <Button
-                    android:id="@+id/save_transport_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/save_transport" />
-
-                <Button
-                    android:id="@+id/transport_test_button"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="@string/run_transport_self_test" />
-            </LinearLayout>
+                android:id="@+id/settings_content"
+                style="@style/AppPageContent" />
         </ScrollView>
     </FrameLayout>
+
+    <com.google.android.material.bottomnavigation.BottomNavigationView
+        android:id="@+id/bottom_navigation"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/navigation_background"
+        android:elevation="12dp"
+        android:minHeight="72dp"
+        app:itemActiveIndicatorStyle="@style/BottomNavIndicator"
+        app:itemIconSize="25dp"
+        app:itemIconTint="@color/bottom_nav_item_selector"
+        app:itemTextColor="@color/bottom_nav_item_selector"
+        app:labelVisibilityMode="labeled"
+        app:menu="@menu/main_navigation" />
 </LinearLayout>

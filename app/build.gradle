@@ -37,14 +37,14 @@ android {
             targetSdk = 36
             versionNameSuffix = "-target36"
             buildConfigField("String", "POC_BUILD", '"targetSdk 36"')
-            manifestPlaceholders = [appLabel: "CA Gateway POC 36"]
+            manifestPlaceholders = [appLabel: "CA connection"]
         }
         sdk37 {
             dimension = "targetApi"
             targetSdk = 37
             versionNameSuffix = "-target37"
             buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
-            manifestPlaceholders = [appLabel: "CA Gateway POC 37"]
+            manifestPlaceholders = [appLabel: "CA connection"]
         }
     }
 
@@ -66,7 +66,7 @@ android {
         }
         release {
             applicationIdSuffix = ".gateway"
-            manifestPlaceholders = [appLabel: "CA Gateway"]
+            manifestPlaceholders = [appLabel: "CA connection"]
             minifyEnabled = false
             proguardFiles(getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro')
             if (productionSigningConfigured) {
@@ -122,6 +122,8 @@ dependencies {
 
     // JSON serialization
     implementation 'com.google.code.gson:gson:2.10.1'
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
+    implementation 'com.google.zxing:core:3.5.4'
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'

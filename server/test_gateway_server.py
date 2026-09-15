@@ -207,7 +207,11 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                     "token_sha256": __import__("hashlib").sha256(
                         self.api_token.encode()
                     ).hexdigest(),
-                    "scopes": ["messages:read", "otp:claim"],
+                    "scopes": [
+                        "messages:read",
+                        "otp:claim",
+                        "pairing:create",
+                    ],
                 },
                 "readonly": {
                     "token_sha256": __import__("hashlib").sha256(
@@ -216,6 +220,15 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                     "scopes": ["messages:read"],
                 },
             },
+            server_settings={
+                "pairing_public_endpoint": "https://gateway.example.test",
+                "pairing_certificate_pin_sha256_base64": base64.b64encode(
+                    bytes(range(32))
+                ).decode(),
+            },
+            pairing_token_factory=lambda: (
+                "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"
+            ),
         )
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -517,6 +530,135 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         )
         raw = json.dumps(self.store.latest()[0]["envelope"])
         self.assertNotIn("482913", raw)
+
+    def test_pairing_session_claim_is_one_time_and_returns_provisioning(self) -> None:
+        status, created = self.api_request(
+            "POST",
+            "/v1/pairings",
+            token=self.api_token,
+            value={"deviceId": "device", "expiresInSeconds": 300},
+        )
+
+        self.assertEqual(201, status)
+        pairing = created["pairing"]
+        self.assertEqual("device", pairing["deviceId"])
+        payload = json.loads(pairing["payload"])
+        self.assertEqual("ca-connection-pairing", payload["type"])
+        self.assertEqual(
+            "https://gateway.example.test",
+            payload["endpoint"],
+        )
+        self.assertNotIn("sharedSecret", pairing["payload"])
+
+        status, claimed = self.api_request(
+            "POST",
+            "/v1/pairings/claim",
+            value={"pairingToken": payload["pairingToken"]},
+        )
+        self.assertEqual(200, status)
+        provisioning = claimed["provisioning"]
+        self.assertEqual("device", provisioning["deviceId"])
+        self.assertEqual(
+            base64.b64encode(self.secret).decode(),
+            provisioning["sharedSecretBase64"],
+        )
+        self.assertEqual(
+            payload["certificatePinSha256Base64"],
+            provisioning["certificatePinSha256Base64"],
+        )
+        self.assertEqual(
+            (
+                410,
+                {"error": "pairing expired or already used"},
+            ),
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": payload["pairingToken"]},
+            ),
+        )
+
+    def test_pairing_create_requires_scope_and_valid_device(self) -> None:
+        self.assertEqual(
+            (200, {"devices": ["device"]}),
+            self.api_request(
+                "GET",
+                "/v1/devices",
+                token=self.api_token,
+            ),
+        )
+        self.assertEqual(
+            401,
+            self.api_request(
+                "POST",
+                "/v1/pairings",
+                value={"deviceId": "device"},
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "POST",
+                "/v1/pairings",
+                token="readonly-token",
+                value={"deviceId": "device"},
+            )[0],
+        )
+        self.assertEqual(
+            (
+                400,
+                {"error": "invalid request"},
+            ),
+            self.api_request(
+                "POST",
+                "/v1/pairings",
+                token=self.api_token,
+                value={"deviceId": "unknown"},
+            ),
+        )
+
+    def test_pairing_invalid_expired_and_rate_limited_claims_are_generic(self) -> None:
+        self.assertEqual(
+            (400, {"error": "invalid request"}),
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": "too-short"},
+            ),
+        )
+        expired_token = "z" * 43
+        self.store.create_pairing(
+            expired_token,
+            "device",
+            int(time.time() * 1000) - 120_000,
+            60,
+        )
+        self.assertEqual(
+            (410, {"error": "pairing expired or already used"}),
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": expired_token},
+            ),
+        )
+        self.server.pairing_claim_requests_per_minute = 1
+        self.server.rate_limiter = type(self.server.rate_limiter)()
+        self.assertEqual(
+            410,
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": "y" * 43},
+            )[0],
+        )
+        self.assertEqual(
+            429,
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": "x" * 43},
+            )[0],
+        )
 
     def test_exact_event_otp_claim_does_not_consume_another_message(self) -> None:
         for suffix, code in (("older", "112233"), ("newer", "778899")):

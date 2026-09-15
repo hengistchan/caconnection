@@ -4,14 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.MessageDigest
-import java.security.cert.CertificateException
-import java.security.cert.X509Certificate
-import java.util.Base64
 import java.util.UUID
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLContext
-import javax.net.ssl.X509TrustManager
 
 data class GatewayHttpResponse(
     val statusCode: Int,
@@ -30,9 +24,7 @@ class UrlConnectionGatewayHttpClient(
     certificatePinSha256Base64: String
 ) : GatewayHttpClient {
     private val sslSocketFactory =
-        certificatePinSha256Base64
-            .takeIf(String::isNotBlank)
-            ?.let { pinnedSslContext(it).socketFactory }
+        GatewayTls.socketFactory(certificatePinSha256Base64)
 
     override fun post(
         url: String,
@@ -71,34 +63,6 @@ class UrlConnectionGatewayHttpClient(
         }
     }
 
-    private fun pinnedSslContext(pin: String): SSLContext {
-        val expectedPin = Base64.getDecoder().decode(pin)
-        val trustManager = object : X509TrustManager {
-            override fun checkClientTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?
-            ) = throw CertificateException("Client certificates are not accepted")
-
-            override fun checkServerTrusted(
-                chain: Array<out X509Certificate>?,
-                authType: String?
-            ) {
-                val certificate = chain?.firstOrNull()
-                    ?: throw CertificateException("Missing server certificate")
-                certificate.checkValidity()
-                val actualPin = MessageDigest.getInstance("SHA-256")
-                    .digest(certificate.encoded)
-                if (!MessageDigest.isEqual(expectedPin, actualPin)) {
-                    throw CertificateException("Server certificate pin mismatch")
-                }
-            }
-
-            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
-        }
-        return SSLContext.getInstance("TLS").apply {
-            init(null, arrayOf(trustManager), null)
-        }
-    }
 }
 
 class AuthenticatedHttpTransport(
