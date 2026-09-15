@@ -1,0 +1,121 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  claimGatewayOtp,
+  clearGatewayConfigForTests,
+  gatewayFetch,
+  getGatewayMessages,
+} from '../server/utils/gateway'
+
+const messageFixture = {
+  id: 42,
+  deviceId: 'phone-1',
+  createdAt: 1_757_894_400_000,
+  receivedAt: 1_757_894_401_000,
+  subscriptionId: null,
+  slotIndex: null,
+  sender: '+8613800000000',
+  body: 'Code 482913',
+  partCount: 1,
+  resolutionMethod: 'UNKNOWN',
+  resolutionConfidence: 'LOW',
+  otpCandidates: ['482913'],
+}
+
+describe('Gateway BFF client', () => {
+  beforeEach(() => {
+    process.env.GATEWAY_URL = 'http://gateway.test'
+    process.env.ADMIN_API_TOKEN = 'test-token'
+    process.env.ADMIN_API_TOKEN_FILE = '/does/not/exist'
+    clearGatewayConfigForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    clearGatewayConfigForTests()
+  })
+
+  it('accepts the real string confidence response shape', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ messages: [messageFixture] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ))
+    await expect(getGatewayMessages()).resolves.toEqual({
+      messages: [messageFixture],
+    })
+  })
+
+  it('omits unknown slotIndex from exact-event OTP claims', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        otp: {
+          eventId: 42,
+          deviceId: 'phone-1',
+          receivedAt: 1_757_894_401_000,
+          subscriptionId: null,
+          slotIndex: null,
+          code: '482913',
+          expiresAt: 1_757_895_000_000,
+        },
+      }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await claimGatewayOtp({ eventId: 42, maxAgeSeconds: 600 })
+    const request = fetchMock.mock.calls[0][1] as RequestInit
+    expect(JSON.parse(request.body as string)).toEqual({
+      eventId: 42,
+      maxAgeSeconds: 600,
+    })
+  })
+
+  it.each([400, 401, 403, 404, 410, 429, 503])(
+    'preserves safe Gateway status %i without exposing response text',
+    async (status) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+        new Response('sensitive upstream details', {
+          status,
+          headers: status === 429 ? { 'retry-after': '120' } : {},
+        }),
+      ))
+      await expect(gatewayFetch('/v1/test')).rejects.toMatchObject({
+        statusCode: status,
+        message: expect.not.stringContaining('sensitive upstream details'),
+        ...(status === 429 ? { data: { retryAfter: '120' } } : {}),
+      })
+    },
+  )
+
+  it('maps unexpected Gateway failures to 502', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('failure', { status: 418 }),
+    ))
+    await expect(gatewayFetch('/v1/test')).rejects.toMatchObject({
+      statusCode: 502,
+      message: 'Gateway service unavailable',
+    })
+  })
+
+  it('rejects malformed response shapes', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        messages: [{ ...messageFixture, resolutionConfidence: 0.9 }],
+      }), { status: 200 }),
+    ))
+    await expect(getGatewayMessages()).rejects.toMatchObject({
+      statusCode: 502,
+    })
+  })
+
+  it.each([
+    'file:///tmp/gateway',
+    'https://user:pass@gateway.test',
+    'https://gateway.test/path',
+  ])('rejects unsafe Gateway URL %s', async (url) => {
+    process.env.GATEWAY_URL = url
+    clearGatewayConfigForTests()
+    await expect(gatewayFetch('/health')).rejects.toMatchObject({
+      statusCode: 500,
+    })
+  })
+})

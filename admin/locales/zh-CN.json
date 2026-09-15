@@ -1,0 +1,144 @@
+{
+  "app": {
+    "name": "CA Connection 管理后台",
+    "description": "个人通信网关管理后台"
+  },
+  "nav": {
+    "main": "主导航",
+    "dashboard": "仪表盘",
+    "messages": "短信列表",
+    "logout": "退出登录",
+    "language": "语言"
+  },
+  "login": {
+    "title": "管理后台登录",
+    "subtitle": "请输入管理员密码",
+    "password": "密码",
+    "passwordPlaceholder": "请输入密码",
+    "showPassword": "显示密码",
+    "hidePassword": "隐藏密码",
+    "show": "显示",
+    "hide": "隐藏",
+    "submit": "登录",
+    "submitting": "登录中...",
+    "error": "登录失败，请检查密码是否正确",
+    "rateLimit": "登录尝试过于频繁，请稍后再试",
+    "securityNotice": "安全提示：后台不支持发送短信；配对功能只会生成短时有效的一次性连接码。"
+  },
+  "dashboard": {
+    "title": "仪表盘",
+    "gatewayStatus": "Gateway 状态",
+    "online": "在线",
+    "offline": "离线",
+    "health": "健康检查",
+    "ready": "就绪状态",
+    "version": "版本",
+    "lastRefresh": "最后刷新时间",
+    "sim1Count": "SIM1 消息数",
+    "sim2Count": "SIM2 消息数",
+    "latestMessage": "最新消息时间",
+    "readOnlyNotice": "短信访问保持只读；配对只生成短时连接码，不支持发送短信。",
+    "refresh": "刷新",
+    "refreshing": "刷新中...",
+    "never": "从未",
+    "unknown": "未知",
+    "diagnosticsFailed": "连接诊断未能完成。"
+  },
+  "messages": {
+    "title": "短信列表",
+    "filter": {
+      "all": "全部",
+      "sim1": "SIM1",
+      "sim2": "SIM2"
+    },
+    "refresh": "刷新",
+    "refreshing": "刷新中...",
+    "empty": "暂无短信",
+    "error": "加载失败",
+    "retry": "重试",
+    "eventId": "事件 ID",
+    "sim": "SIM 卡",
+    "receivedAt": "接收时间",
+    "sender": "发送方",
+    "body": "短信正文",
+    "partCount": "分片数",
+    "resolutionMethod": "识别方式",
+    "resolutionConfidence": "置信度",
+    "unknownSim": "未知 SIM",
+    "confidence": {
+      "high": "高",
+      "medium": "中",
+      "low": "低"
+    },
+    "hasOtp": "存在验证码",
+    "otpCount": "验证码数量",
+    "show": "显示",
+    "hide": "隐藏",
+    "hidden": "已隐藏",
+    "claimOtp": "领取验证码",
+    "claiming": "领取中...",
+    "claimed": "已领取",
+    "expired": "已失效",
+    "otpResult": {
+      "title": "验证码已领取",
+      "code": "验证码",
+      "expiresAt": "过期时间",
+      "copy": "复制",
+      "copied": "已复制",
+      "close": "关闭",
+      "autoClose": "将在 {seconds} 秒后自动关闭"
+    },
+    "confirmClaim": {
+      "title": "确认领取验证码",
+      "message": "确定要领取此短信中的验证码吗？领取后将无法再次领取。",
+      "confirm": "确认领取",
+      "cancel": "取消"
+    },
+    "otpErrors": {
+      "unavailable": "该验证码已被领取或已失效。",
+      "rateLimited": "领取请求过于频繁，请稍后重试。",
+      "generic": "无法领取验证码，请先运行连接诊断后重试。",
+      "copyFailed": "无法自动复制，请手动选择并复制验证码。"
+    }
+  },
+  "pairing": {
+    "title": "配对 Android 设备",
+    "description": "生成一个短时有效的二维码，安全连接 APP 与服务器。",
+    "oneTime": "一次性令牌",
+    "device": "网关设备",
+    "noDevices": "没有已配置的设备",
+    "generate": "生成配对二维码",
+    "generating": "正在生成...",
+    "scanNow": "请使用 CA connection 扫描",
+    "expiresIn": "{seconds} 秒后过期",
+    "expired": "配对码已过期，请重新生成。",
+    "secretNotice": "二维码只包含一次性令牌，不包含长期共享密钥。",
+    "replacementNotice": "生成新配对码后，该设备之前的配对码会立即失效。",
+    "qrAlt": "CA connection 配对二维码",
+    "loadError": "无法读取已配置设备。",
+    "generateError": "无法生成配对二维码。",
+    "rateLimited": "生成配对码过于频繁，请稍后重试。"
+  },
+  "error": {
+    "unauthorized": "未登录或登录已过期",
+    "forbidden": "无权访问",
+    "notFound": "页面不存在",
+    "serverError": "服务器错误",
+    "networkError": "网络连接失败",
+    "gatewayError": "Gateway 服务不可用",
+    "unknown": "未知错误"
+  },
+  "time": {
+    "justNow": "刚刚",
+    "minutesAgo": "{n} 分钟前",
+    "hoursAgo": "{n} 小时前",
+    "daysAgo": "{n} 天前"
+  },
+  "common": {
+    "loading": "加载中...",
+    "retry": "重试",
+    "close": "关闭",
+    "confirm": "确认",
+    "cancel": "取消"
+  }
+}

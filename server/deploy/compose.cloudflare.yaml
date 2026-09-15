@@ -42,6 +42,56 @@ services:
       retries: 3
       start_period: 10s
 
+  admin:
+    image: caconnection-admin:1.0.0
+    build:
+      context: ../../admin
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - GATEWAY_URL=http://gateway:8787
+      - ADMIN_API_TOKEN_FILE=/run/secrets/admin_api_token
+      - ADMIN_PASSWORD_HASH_FILE=/run/secrets/admin_password_hash
+      - ADMIN_SESSION_SECRET_FILE=/run/secrets/admin_session_secret
+      - TRUST_PROXY_HEADERS=true
+    secrets:
+      - admin_api_token
+      - admin_password_hash
+      - admin_session_secret
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 0.25
+    networks:
+      - backend
+    depends_on:
+      gateway:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/admin/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
   cloudflared:
     image: cloudflare/cloudflared:2026.9.1@sha256:b269e8abd07a5bf6f3f4be65d5050b2174eca89c56a0241a8ff32a16aec454e4
     restart: unless-stopped
@@ -112,3 +162,9 @@ secrets:
     file: ./runtime/cloudflared-config.yml
   cloudflare_tunnel_credentials:
     file: ./runtime/cloudflare-tunnel-credentials.json
+  admin_api_token:
+    file: ./runtime/admin-ui-api-token.txt
+  admin_password_hash:
+    file: ./runtime/admin-ui-password-hash.txt
+  admin_session_secret:
+    file: ./runtime/admin-ui-session-secret.txt

@@ -320,9 +320,20 @@ class GatewayStore:
         token_digest = hashlib.sha256(token.encode("ascii")).hexdigest()
         expires_at = now_ms + expires_in_seconds * 1000
         with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "DELETE FROM pairing_sessions WHERE expires_at < ?",
                 (now_ms - 86_400_000,),
+            )
+            db.execute(
+                """
+                UPDATE pairing_sessions
+                SET consumed_at = ?
+                WHERE device_id = ?
+                  AND consumed_at IS NULL
+                  AND expires_at >= ?
+                """,
+                (now_ms, device_id, now_ms),
             )
             db.execute(
                 """

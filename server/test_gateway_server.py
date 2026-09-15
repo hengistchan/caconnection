@@ -578,6 +578,48 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             ),
         )
 
+    def test_new_pairing_invalidates_previous_code_for_same_device(self) -> None:
+        tokens = iter(("a" * 43, "b" * 43))
+        self.server.pairing_token_factory = lambda: next(tokens)
+
+        first_status, first_created = self.api_request(
+            "POST",
+            "/v1/pairings",
+            token=self.api_token,
+            value={"deviceId": "device", "expiresInSeconds": 300},
+        )
+        second_status, second_created = self.api_request(
+            "POST",
+            "/v1/pairings",
+            token=self.api_token,
+            value={"deviceId": "device", "expiresInSeconds": 300},
+        )
+        self.assertEqual(201, first_status)
+        self.assertEqual(201, second_status)
+
+        first_token = json.loads(
+            first_created["pairing"]["payload"]
+        )["pairingToken"]
+        second_token = json.loads(
+            second_created["pairing"]["payload"]
+        )["pairingToken"]
+        self.assertEqual(
+            (410, {"error": "pairing expired or already used"}),
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": first_token},
+            ),
+        )
+        self.assertEqual(
+            200,
+            self.api_request(
+                "POST",
+                "/v1/pairings/claim",
+                value={"pairingToken": second_token},
+            )[0],
+        )
+
     def test_pairing_create_requires_scope_and_valid_device(self) -> None:
         self.assertEqual(
             (200, {"devices": ["device"]}),

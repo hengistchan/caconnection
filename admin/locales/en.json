@@ -1,0 +1,144 @@
+{
+  "app": {
+    "name": "CA Connection Admin",
+    "description": "Personal Communication Gateway Admin"
+  },
+  "nav": {
+    "main": "Main navigation",
+    "dashboard": "Dashboard",
+    "messages": "Messages",
+    "logout": "Logout",
+    "language": "Language"
+  },
+  "login": {
+    "title": "Admin Login",
+    "subtitle": "Please enter the admin password",
+    "password": "Password",
+    "passwordPlaceholder": "Enter password",
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "show": "Show",
+    "hide": "Hide",
+    "submit": "Login",
+    "submitting": "Logging in...",
+    "error": "Login failed. Please check your password.",
+    "rateLimit": "Too many login attempts. Please try again later.",
+    "securityNotice": "Security Notice: Sending messages is not supported. Pairing only creates short-lived, one-time connection codes."
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "gatewayStatus": "Gateway Status",
+    "online": "Online",
+    "offline": "Offline",
+    "health": "Health Check",
+    "ready": "Ready Status",
+    "version": "Version",
+    "lastRefresh": "Last Refresh",
+    "sim1Count": "SIM1 Messages",
+    "sim2Count": "SIM2 Messages",
+    "latestMessage": "Latest Message",
+    "readOnlyNotice": "Message access is read-only. Pairing only creates short-lived connection codes; sending messages is not supported.",
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
+    "never": "Never",
+    "unknown": "Unknown",
+    "diagnosticsFailed": "Connection diagnostics could not complete."
+  },
+  "messages": {
+    "title": "Messages",
+    "filter": {
+      "all": "All",
+      "sim1": "SIM1",
+      "sim2": "SIM2"
+    },
+    "refresh": "Refresh",
+    "refreshing": "Refreshing...",
+    "empty": "No messages",
+    "error": "Failed to load",
+    "retry": "Retry",
+    "eventId": "Event ID",
+    "sim": "SIM",
+    "receivedAt": "Received At",
+    "sender": "Sender",
+    "body": "Message Body",
+    "partCount": "Parts",
+    "resolutionMethod": "Detection Method",
+    "resolutionConfidence": "Confidence",
+    "unknownSim": "Unknown SIM",
+    "confidence": {
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "hasOtp": "Has OTP",
+    "otpCount": "OTP Count",
+    "show": "Show",
+    "hide": "Hide",
+    "hidden": "Hidden",
+    "claimOtp": "Claim Code",
+    "claiming": "Claiming...",
+    "claimed": "Claimed",
+    "expired": "Expired",
+    "otpResult": {
+      "title": "Code Claimed",
+      "code": "Code",
+      "expiresAt": "Expires At",
+      "copy": "Copy",
+      "copied": "Copied",
+      "close": "Close",
+      "autoClose": "Auto-closing in {seconds} seconds"
+    },
+    "confirmClaim": {
+      "title": "Confirm Code Claim",
+      "message": "Are you sure you want to claim the verification code from this message? This action cannot be undone.",
+      "confirm": "Confirm",
+      "cancel": "Cancel"
+    },
+    "otpErrors": {
+      "unavailable": "This code was already claimed or is no longer available.",
+      "rateLimited": "Too many code requests. Please wait and try again.",
+      "generic": "Could not claim the code. Run diagnostics and try again.",
+      "copyFailed": "Could not copy the code. Select and copy it manually."
+    }
+  },
+  "pairing": {
+    "title": "Pair Android device",
+    "description": "Create a short-lived QR code for a secure connection.",
+    "oneTime": "One-time token",
+    "device": "Gateway device",
+    "noDevices": "No configured devices",
+    "generate": "Generate pairing QR",
+    "generating": "Generating...",
+    "scanNow": "Scan this code in CA connection",
+    "expiresIn": "Expires in {seconds} seconds",
+    "expired": "Pairing code expired. Generate a new one.",
+    "secretNotice": "The QR contains a one-time token, not the long-lived shared secret.",
+    "replacementNotice": "Generating a new code immediately invalidates the previous code for this device.",
+    "qrAlt": "CA connection pairing QR code",
+    "loadError": "Could not load configured devices.",
+    "generateError": "Could not create a pairing code.",
+    "rateLimited": "Pairing codes are being generated too frequently. Please wait and try again."
+  },
+  "error": {
+    "unauthorized": "Not logged in or session expired",
+    "forbidden": "Access denied",
+    "notFound": "Page not found",
+    "serverError": "Server error",
+    "networkError": "Network connection failed",
+    "gatewayError": "Gateway service unavailable",
+    "unknown": "Unknown error"
+  },
+  "time": {
+    "justNow": "Just now",
+    "minutesAgo": "{n} minutes ago",
+    "hoursAgo": "{n} hours ago",
+    "daysAgo": "{n} days ago"
+  },
+  "common": {
+    "loading": "Loading...",
+    "retry": "Retry",
+    "close": "Close",
+    "confirm": "Confirm",
+    "cancel": "Cancel"
+  }
+}

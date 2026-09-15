@@ -8,20 +8,26 @@ from typing import Callable, Optional
 
 GATEWAY_UID = 10001
 CLOUDFLARED_UID = 65532
+ADMIN_UID = 10002
 
 
 def prepare_runtime_permissions(
     runtime_dir: Path,
     deployment_mode: str,
+    enable_admin: bool = False,
     effective_uid: Optional[int] = None,
     chown: Callable[[Path, int, int], None] = os.chown,
 ) -> None:
     if deployment_mode not in {"direct", "cloudflare-tunnel"}:
         raise ValueError("unsupported deployment mode")
     runtime = runtime_dir.resolve()
+
+    # Base assignments (always required)
     assignments = [
         (runtime / "config.json", GATEWAY_UID),
     ]
+
+    # Cloudflare tunnel files (only for cloudflare-tunnel mode)
     if deployment_mode == "cloudflare-tunnel":
         assignments.extend(
             (
@@ -32,6 +38,17 @@ def prepare_runtime_permissions(
                 ),
             )
         )
+
+    # Admin UI files (only when admin is enabled)
+    if enable_admin:
+        assignments.extend(
+            (
+                (runtime / "admin-ui-api-token.txt", ADMIN_UID),
+                (runtime / "admin-ui-password-hash.txt", ADMIN_UID),
+                (runtime / "admin-ui-session-secret.txt", ADMIN_UID),
+            )
+        )
+
     missing = [path for path, _uid in assignments if not path.is_file()]
     if missing:
         raise ValueError("required runtime secret file is missing")
@@ -61,10 +78,16 @@ def main() -> None:
         required=True,
         choices=("direct", "cloudflare-tunnel"),
     )
+    parser.add_argument(
+        "--enable-admin",
+        action="store_true",
+        help="Include admin UI secret files in permission assignments",
+    )
     args = parser.parse_args()
     prepare_runtime_permissions(
         args.runtime_dir,
         args.deployment_mode,
+        enable_admin=args.enable_admin,
     )
     print("Runtime secret ownership and read-only permissions prepared.")
     print("No secret content was read or printed.")

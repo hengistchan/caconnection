@@ -13,6 +13,7 @@ from unittest.mock import Mock
 from server.backup_database import backup_database
 from server.gateway_server import GatewayStore
 from server.prepare_runtime_permissions import (
+    ADMIN_UID,
     CLOUDFLARED_UID,
     GATEWAY_UID,
     prepare_runtime_permissions,
@@ -269,6 +270,47 @@ class RuntimePermissionTest(unittest.TestCase):
                     runtime,
                     "direct",
                     effective_uid=12345,
+                )
+
+    def test_admin_secrets_are_required_and_assigned_to_admin_uid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            files = [
+                runtime / "config.json",
+                runtime / "cloudflared-config.yml",
+                runtime / "cloudflare-tunnel-credentials.json",
+                runtime / "admin-ui-api-token.txt",
+                runtime / "admin-ui-password-hash.txt",
+                runtime / "admin-ui-session-secret.txt",
+            ]
+            for path in files:
+                path.write_text("private")
+            calls = []
+            prepare_runtime_permissions(
+                runtime,
+                "cloudflare-tunnel",
+                enable_admin=True,
+                effective_uid=0,
+                chown=lambda path, uid, gid: calls.append(
+                    (path.name, uid, gid)
+                ),
+            )
+            self.assertEqual(
+                {
+                    ("admin-ui-api-token.txt", ADMIN_UID, ADMIN_UID),
+                    ("admin-ui-password-hash.txt", ADMIN_UID, ADMIN_UID),
+                    ("admin-ui-session-secret.txt", ADMIN_UID, ADMIN_UID),
+                },
+                {item for item in calls if item[0].startswith("admin-ui-")},
+            )
+
+            (runtime / "admin-ui-session-secret.txt").unlink()
+            with self.assertRaisesRegex(ValueError, "required runtime"):
+                prepare_runtime_permissions(
+                    runtime,
+                    "cloudflare-tunnel",
+                    enable_admin=True,
+                    effective_uid=0,
                 )
 
 

@@ -7,9 +7,16 @@ test -f .env
 test -f runtime/config.json
 . ./.env
 
-python3 ../prepare_runtime_permissions.py \
-  --runtime-dir runtime \
-  --deployment-mode "${GATEWAY_DEPLOYMENT_MODE:-direct}"
+if [ "${GATEWAY_DEPLOYMENT_MODE:-direct}" = "cloudflare-tunnel" ]; then
+  python3 ../prepare_runtime_permissions.py \
+    --runtime-dir runtime \
+    --deployment-mode cloudflare-tunnel \
+    --enable-admin
+else
+  python3 ../prepare_runtime_permissions.py \
+    --runtime-dir runtime \
+    --deployment-mode direct
+fi
 
 docker compose config >/dev/null
 docker compose up -d --build --force-recreate

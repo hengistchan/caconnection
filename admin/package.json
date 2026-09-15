@@ -1,0 +1,39 @@
+{
+  "name": "caconnection-admin",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "audit": "npm audit --registry=https://registry.npmjs.org",
+    "verify": "npm test && npm run lint && npm run build && npm run audit"
+  },
+  "dependencies": {
+    "@nuxtjs/i18n": "10.6.0",
+    "nuxt": "4.5.2",
+    "nuxt-security": "2.6.0",
+    "qrcode": "^1.5.4",
+    "vue": "3.5.42",
+    "vue-router": "5.3.1"
+  },
+  "devDependencies": {
+    "@nuxt/eslint": "^1.17.0",
+    "@types/qrcode": "^1.5.5",
+    "@vitejs/plugin-vue": "6.0.9",
+    "@vue/test-utils": "2.4.6",
+    "happy-dom": "20.14.5",
+    "typescript": "5.8.3",
+    "vitest": "5.0.1"
+  },
+  "overrides": {
+    "glob@10.4.5": "10.5.0",
+    "vue-i18n@10.0.7": "10.0.8",
+    "@intlify/core-base@10.0.7": "10.0.8"
+  }
+}

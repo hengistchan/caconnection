@@ -64,6 +64,10 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 - Automatic Outbox retry and recovery when the local receiver is unavailable.
 - Android Keystore protection for the gateway shared secret, including
   migration away from the legacy plaintext preference.
+- Authenticated admin-generated, five-minute QR pairing. The QR carries a
+  one-time token rather than the long-lived device secret.
+- In-app connection diagnostics covering configuration, DNS, TCP, TLS,
+  liveness, readiness, and an encrypted authenticated self-test.
 - A production release package (`com.caconnection.gateway`) that can be
   installed beside the earlier POC package and is signed only with explicitly
   supplied production signing credentials.
@@ -371,3 +375,48 @@ See:
 - [server/openapi.yaml](server/openapi.yaml) for the API contract;
 - [docs/PHASE5_PRODUCTION_SERVER_REPORT.md](docs/PHASE5_PRODUCTION_SERVER_REPORT.md)
   for the implementation and acceptance evidence.
+
+## Admin UI
+
+A secure, read-only admin dashboard is available for monitoring messages and
+claiming verification codes:
+
+```text
+https://caconnection-gatway.hengistchan.online/admin/
+```
+
+### Features
+
+- **Multi-language**: Simplified Chinese (default) and English
+- **Gateway Status**: Real-time health, readiness, and version monitoring
+- **Message Viewer**: Browse SMS messages with SIM1/SIM2 filtering
+- **OTP Claim**: One-time verification code extraction with confirmation
+- **Privacy Protection**: Sender and message body hidden by default
+
+### Security Architecture
+
+- Gateway API token never reaches the browser (server-side Nitro proxy)
+- scrypt-hashed admin password with random salt
+- Rate-limited login (5 attempts / 15 minutes per IP)
+- HMAC-signed HttpOnly session cookies
+- Security headers: HSTS, CSP, X-Frame-Options, no-referrer
+- All sensitive responses: `Cache-Control: no-store`
+
+### Setup
+
+```bash
+# Generate admin credentials
+python3 server/setup_admin.py --runtime-dir server/deploy/runtime
+
+# Set file permissions
+python3 server/prepare_runtime_permissions.py \
+  --runtime-dir server/deploy/runtime \
+  --deployment-mode cloudflare-tunnel \
+  --enable-admin
+
+# Deploy
+cd server/deploy
+docker compose -f compose.cloudflare.yaml up -d
+```
+
+See [admin/README.md](admin/README.md) for detailed documentation.

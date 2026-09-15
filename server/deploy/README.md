@@ -252,6 +252,79 @@ It is intentionally distinct from `com.caconnection.debug` and the older
 `com.caconnection` test package. Do not uninstall either older package until
 the production phone-to-server path has passed and the user approves cleanup.
 
+## Admin UI
+
+An authenticated admin dashboard for read-only message access, OTP claims,
+and short-lived Android pairing is available at:
+
+```text
+https://caconnection-gatway.hengistchan.online/admin/
+```
+
+### Setup Admin Credentials
+
+Generate admin UI credentials:
+
+```bash
+python3 ../setup_admin.py --runtime-dir runtime
+```
+
+This creates:
+- `admin-ui-api-token.txt` - Gateway API token (messages, OTP claim, and pairing-create scopes)
+- `admin-ui-password.txt` - Admin password (show once, then securely store)
+- `admin-config.json` - Admin configuration (password hash, session secret)
+
+The Gateway `config.json` is updated with only the token SHA-256 hash.
+
+### Set Permissions
+
+```bash
+python3 ../prepare_runtime_permissions.py \
+  --runtime-dir runtime \
+  --deployment-mode cloudflare-tunnel \
+  --enable-admin
+```
+
+### Deploy with Admin UI
+
+```bash
+docker compose -f compose.cloudflare.yaml up -d
+```
+
+### Credential Rotation
+
+Rotate individual credentials:
+
+```bash
+# Rotate API token
+python3 ../setup_admin.py --runtime-dir runtime --rotate-api-token
+
+# Rotate admin password
+python3 ../setup_admin.py --runtime-dir runtime --rotate-password
+
+# Rotate session secret
+python3 ../setup_admin.py --runtime-dir runtime --rotate-session-secret
+```
+
+After rotation, restart the admin container:
+
+```bash
+docker compose -f compose.cloudflare.yaml restart admin
+```
+
+### Security Features
+
+- API token never reaches the browser (server-side proxy only)
+- scrypt-hashed passwords with random salt
+- Rate-limited login (5 attempts / 15 minutes per IP)
+- HMAC-signed HttpOnly session cookies
+- All sensitive responses marked `Cache-Control: no-store`
+- Content hidden by default (sender, message body)
+- OTP codes auto-clear after 30 seconds
+- Android pairing QR codes expire after five minutes and contain only a
+  one-time token. The long-lived device secret is returned only over the
+  verified HTTPS claim connection and the token cannot be reused.
+
 ## Routine operations
 
 - Run `./check.sh` after every deployment or credential rotation.

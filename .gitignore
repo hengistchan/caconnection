@@ -55,3 +55,10 @@ server/deploy/.env
 server/deploy/runtime/
 __pycache__/
 *.pyc
+
+# Admin UI build artifacts
+admin/node_modules/
+admin/.nuxt/
+admin/.output/
+admin/dist/
+admin/.env*
