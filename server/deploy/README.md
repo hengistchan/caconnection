@@ -254,8 +254,8 @@ the production phone-to-server path has passed and the user approves cleanup.
 
 ## Admin UI
 
-An authenticated admin dashboard for read-only message access, OTP claims,
-and short-lived Android pairing is available at:
+An authenticated admin dashboard for message monitoring, remote SMS commands,
+OTP claims, and short-lived Android pairing is available at:
 
 ```text
 https://caconnection-gatway.hengistchan.online/admin/
@@ -270,7 +270,8 @@ python3 ../setup_admin.py --runtime-dir runtime
 ```
 
 This creates:
-- `admin-ui-api-token.txt` - Gateway API token (messages, OTP claim, and pairing-create scopes)
+- `admin-ui-api-token.txt` - Gateway API token (`messages:read`,
+  `messages:send`, `otp:claim`, and `pairing:create` scopes)
 - `admin-ui-password.txt` - Admin password (show once, then securely store)
 - `admin-config.json` - Admin configuration (password hash, session secret)
 

@@ -1,8 +1,13 @@
 # Phase 1 Physical Test Matrix
 
+> Current build policy (2026-09-16): the project builds only the API 37
+> `debug`/`release` variants. References to targetSdk 36 below are retained
+> solely as historical evidence from earlier device runs; do not build or use
+> an SDK 36 variant for future verification.
+
 ## Rules
 
-1. Start with the `sdk36Debug` build and do not request the default SMS role.
+1. Start with the API 37 `debug` build and do not request the default SMS role.
 2. Record the exact device build, target SDK, SMS role state, SIM slot, runtime
    subscription ID, event timestamp, and resolver result for every run.
 3. Use two controlled sender/destination numbers so the actual sending SIM can
@@ -11,8 +16,8 @@
    task swipe-away, lock screen, and reboot as separate states.
 5. Do not mark OTP tests complete with a hand-written message containing a code.
    Use a real standard OTP source.
-6. After finishing Path A, install the `sdk37Debug` build over the same debug
-   package and repeat the OTP subset.
+6. Queue outbound tests from Admin or another authorized API client; the
+   Android gateway app intentionally has no local compose/send UI.
 7. Request the default SMS role only for T20 or when a Path A gate fails.
 8. Restore the previous default SMS app after the test if the Xiaomi is not
    permanently dedicated to the gateway.
@@ -30,23 +35,23 @@
 | T07 | SIM2 receives real OTP | sdk36 / non-default | source, sent time, persisted time | received within accepted latency | PASS — Xiaomi OTP, process absent, subId 2 / slot 1, persisted in 1.634 s |
 | T08 | targetSdk 36 OTP comparison | sdk36 / non-default | T06/T07 results | behavior recorded | PASS — both SIMs delivered promptly after `MIUIOP(10018)` was allowed |
 | T09 | targetSdk 37 OTP comparison | sdk37 / non-default | same OTP class/source if possible | behavior recorded, delay classified | PASS — SIM1 Xiaomi OTP delivered in 2.309 s and SIM2 Juejin OTP in 2.269 s after re-allowing `MIUIOP(10018)` |
-| T10 | Send through SIM1 ×10 | sdk36 | POC event + receiving phone/operator evidence | 10/10 actually sent from SIM1 | PENDING |
-| T11 | Send through SIM2 ×10 | sdk36 | POC event + receiving phone/operator evidence | 10/10 actually sent from SIM2 | PENDING |
-| T12 | Send long SMS through SIM1 | sdk36 | multipart callbacks + received body | correct body and selected SIM | PENDING |
-| T13 | Send long SMS through SIM2 | sdk36 | multipart callbacks + received body | correct body and selected SIM | PENDING |
-| T14 | Send while airplane mode is on | sdk36 | outgoing event status/error | status becomes FAILED with radio/service error | PENDING |
-| T15 | Send with SIM1 out of service | sdk36 | outgoing event status/error | status becomes FAILED without SIM rerouting | PENDING |
-| T16 | Swipe app from recent tasks, then receive | sdk36 | persisted event after reopen | event captured with correct SIM | PARTIAL PASS — process-absent receive passed for SIM1 and SIM2 after `MIUIOP(10018)` allow; literal swipe-away remains pending |
-| T17 | Lock screen for 30 min, then receive | sdk36 | persisted event + timestamps | event captured promptly with correct SIM | PARTIAL PASS — targetSdk 37 SIM2 OTP passed while locked/dozing and process absent; 30-minute dwell not executed |
-| T18 | Reboot, do not launch app, then receive | sdk36 | persisted event after later launch | event captured with correct SIM | PENDING |
-| T19 | Repeat under HyperOS battery restrictions | sdk36 | settings snapshot + events | no foreground activity requirement | OUT OF CURRENT SCOPE — user directed the POC to assume a managed runtime that prevents background kill/freeze; observed `Greezer Denial` remains documented |
+| T10 | Queue through Admin and send through SIM1 ×10 | sdk37 | Admin command + POC event + receiving phone/operator evidence | 10/10 actually sent from SIM1 | PENDING |
+| T11 | Queue through Admin and send through SIM2 ×10 | sdk37 | Admin command + POC event + receiving phone/operator evidence | 10/10 actually sent from SIM2 | PENDING |
+| T12 | Queue long SMS through Admin for SIM1 | sdk37 | multipart callbacks + received body | correct body and selected SIM | PENDING |
+| T13 | Queue long SMS through Admin for SIM2 | sdk37 | multipart callbacks + received body | correct body and selected SIM | PENDING |
+| T14 | Queue from Admin while airplane mode is on | sdk37 | outgoing command status/error | status becomes FAILED with radio/service error | PENDING |
+| T15 | Queue from Admin with SIM1 out of service | sdk37 | outgoing command status/error | status becomes FAILED without SIM rerouting | PENDING |
+| T16 | Swipe app from recent tasks, then receive | sdk37 | persisted event after reopen | event captured with correct SIM | PARTIAL PASS — process-absent receive passed for SIM1 and SIM2 after `MIUIOP(10018)` allow; literal swipe-away remains pending |
+| T17 | Lock screen for 30 min, then receive | sdk37 | persisted event + timestamps | event captured promptly with correct SIM | PARTIAL PASS — targetSdk 37 SIM2 OTP passed while locked/dozing and process absent; 30-minute dwell not executed |
+| T18 | Reboot, do not launch app, then receive | sdk37 | persisted event after later launch | event captured with correct SIM | PENDING |
+| T19 | Repeat under HyperOS battery restrictions | sdk37 | settings snapshot + events | no foreground activity requirement | OUT OF CURRENT SCOPE — user directed the POC to assume a managed runtime that prevents background kill/freeze; observed `Greezer Denial` remains documented |
 | T20 | Repeat SIM and OTP checks in default mode | sdk37 / default SMS | SMS_DELIVER extras, provider status, delay | reliable SIM evidence and prompt OTP | PENDING — fallback/comparison only; requires explicit approval to change default SMS app |
 
 ## Suggested execution sequence
 
 ### A. Initial install and probe
 
-1. Install `app-sdk36-debug.apk`.
+1. Install `app/build/outputs/apk/debug/app-debug.apk`.
 2. Grant the four requested runtime permissions.
 3. Keep the existing system SMS app as default.
 4. Open Diagnostics and copy only non-sensitive device/subscription metadata
@@ -57,7 +62,7 @@
 
 1. Execute T02–T05.
 2. Compare the raw extra schema across all 22 messages.
-3. Execute T10–T15.
+3. Execute T10–T15 from Admin; do not look for a local Android composer.
 4. Confirm actual source SIM on the receiving device; a successful callback is
    not sufficient proof of correct routing.
 
@@ -70,12 +75,11 @@ freeze/kill cases are deferred and replaced by the explicit managed-runtime
 assumption documented below; this does not complete the production reliability
 matrix.
 
-### D. OTP target comparison
+### D. Current OTP verification
 
-1. Execute T06–T08 on the targetSdk 36 build.
-2. Install `app-sdk37-debug.apk` over the existing debug app.
-3. Confirm Diagnostics now says `targetSdk 37`.
-4. Execute T09 with the same OTP category/source where possible.
+1. Confirm Diagnostics says `targetSdk 37`.
+2. Execute T09 with the same OTP category/source where possible.
+3. Treat T06–T08 targetSdk 36 results as historical comparison data only.
 
 ### E. Default SMS fallback
 
@@ -91,7 +95,8 @@ matrix.
 - **Gate 2:** T02 and T03 total 20/20 correct. If not, proceed to Path B rather
   than failing the whole gateway.
 - **Gate 3:** T10 and T11 total 20/20 route through the requested SIM.
-- **Gate 4:** OTP behavior is recorded for both target variants. If the
+- **Gate 4:** Current targetSdk 37 OTP behavior is recorded. Historical
+  targetSdk 36 evidence may be used only as a comparison baseline. If the
   targetSdk 37 non-default path is delayed, T20 must establish whether default
   SMS mode restores acceptable latency.
 - **Gate 5:** T16–T19 demonstrate no permanent foreground-activity dependency.

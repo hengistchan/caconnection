@@ -39,7 +39,7 @@ implement process retention.
 
 The script checks:
 
-- targetSdk 37 and target37 build identity;
+- targetSdk 37 and a non-empty installed version identity;
 - package is not in Android's stopped state;
 - `RECEIVE_SMS`, `SEND_SMS`, and `READ_PHONE_STATE`;
 - the original `com.android.mms` default-SMS package remains selected;

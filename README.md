@@ -15,9 +15,7 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 ## Implemented capabilities
 
 - Runtime dual-SIM discovery with `subscriptionId` and `slotIndex`.
-- Two build variants compiled against Android API 37:
-  - `sdk36Debug`: `targetSdk 36`
-  - `sdk37Debug`: `targetSdk 37`
+- A single Android build target compiled against and targeting API 37.
 - Path A inbound receiver using `SMS_RECEIVED`.
 - Raw inbound extra key/type capture without persisting raw PDU bytes.
 - Explicit resolver classifications:
@@ -32,9 +30,14 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 - Explicit per-subscription sending through
   `SmsManager.createForSubscriptionId`.
 - Multipart sending with per-part sent and delivery callbacks.
+- Authenticated remote SMS commands created in Admin, polled by the gateway
+  device, and routed through the requested active SIM slot.
+- Read-only outgoing status history in the Android app; composing and sending
+  are intentionally available only from Admin or another authorized API
+  client.
 - Local Room event store containing subscription, inbound, and outbound POC
   records.
-- Engineering UI with Dashboard, Incoming, Send, and Diagnostics pages.
+- Engineering UI with Home, Messages, Activity, and Settings pages.
 - Battery optimization, background restriction, standby bucket, permission,
   default SMS role, build, and device diagnostics.
 - Transactional local Outbox creation for each newly persisted inbound SMS.
@@ -103,8 +106,8 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
   not exportable through normal app storage.
 - `READ_SMS` is not requested.
 - SMS bodies and phone numbers are stored locally in the debug POC database.
-- Notification content is not stored. Only source package, timing, channel,
-  category, visibility flags, and content lengths are retained.
+- Notification title and body are stored only for explicitly allowlisted source
+  packages, both in the local Room event and its encrypted Outbox payload.
 - Phase 3A call-state events contain state and SIM attribution only.
 - After the user explicitly grants the Phase 3B call-screening role, incoming
   caller address and any network-supplied display name are sensitive local POC
@@ -126,26 +129,23 @@ The project requires Android SDK Platform 37.0, Android Gradle Plugin 9.4, and
 Gradle 9.6.
 
 ```bash
-./gradlew clean test assembleSdk36Debug assembleSdk37Debug \
-  lintSdk36Debug lintSdk37Debug
+./gradlew clean testDebugUnitTest assembleDebug lintDebug
 ```
 
-Generated APKs:
+Generated APK:
 
 ```text
-app/build/outputs/apk/sdk36/debug/app-sdk36-debug.apk
-app/build/outputs/apk/sdk37/debug/app-sdk37-debug.apk
+app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Both debug variants use application ID:
+The debug build uses application ID:
 
 ```text
 com.caconnection.debug
 ```
 
-Installing one variant replaces the other. Existing local POC data is retained
-across replacement installs unless the app is uninstalled or its data is
-cleared.
+Existing local POC data is retained across replacement installs unless the app
+is uninstalled or its data is cleared.
 
 Production release builds use application ID:
 
@@ -381,9 +381,9 @@ See:
 
 ## Admin UI
 
-A secure admin console is available for monitoring read-only SMS and
-notification content, claiming verification codes, and explicitly managing
-gateway devices:
+A secure admin console is available for monitoring read-only inbound SMS and
+notification content, sending SMS through an authenticated gateway device,
+claiming verification codes, and explicitly managing gateway devices:
 
 ```text
 https://caconnection-gatway.hengistchan.online/admin/
