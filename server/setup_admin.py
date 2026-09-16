@@ -29,7 +29,12 @@ from typing import Optional
 
 ADMIN_CLIENT_ID = "admin-ui"
 ADMIN_UID = 10002  # Must match Docker container UID
-ADMIN_SCOPES = ["messages:read", "otp:claim", "pairing:create"]
+ADMIN_SCOPES = [
+    "messages:read",
+    "messages:send",
+    "otp:claim",
+    "pairing:create",
+]
 
 # Required fields in existing Gateway config
 REQUIRED_CONFIG_SECTIONS = ["devices", "api_clients", "server"]

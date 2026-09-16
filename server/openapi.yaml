@@ -4,8 +4,9 @@ info:
   version: 0.2.0
   description: >
     Production API for Android gateway ingestion, authenticated SMS and
-    notification retrieval, device management, pairing, and one-time OTP
-    claims. Sensitive response bodies must never be logged.
+    notification retrieval, remote outbound SMS commands, device management,
+    pairing, and one-time OTP claims. Sensitive request and response bodies
+    must never be logged.
 servers:
   - url: https://gateway.example.com
 paths:
@@ -71,6 +72,73 @@ paths:
           description: Idempotent duplicate accepted
         "400":
           description: Invalid encrypted request
+        "401":
+          description: Device authentication failed
+        "409":
+          description: Request nonce replay
+        "429":
+          description: Rate limit exceeded
+  /v1/device-commands/claim:
+    post:
+      summary: Claim queued outbound SMS commands for one Android gateway
+      description: >
+        Uses the same device HMAC headers as event ingestion. Claimed command
+        payloads contain sensitive recipient and message-body fields and must
+        never be logged.
+      parameters:
+        - in: header
+          name: X-Gateway-Device
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Gateway-Timestamp
+          required: true
+          schema:
+            type: integer
+        - in: header
+          name: X-Gateway-Nonce
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: X-Gateway-Signature
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                limit:
+                  type: integer
+                  minimum: 1
+                  maximum: 10
+                  default: 5
+      responses:
+        "200":
+          description: Commands claimed for a five-minute processing lease
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [commands]
+                properties:
+                  commands:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutboundMessage"
+        "400":
+          description: Invalid request
         "401":
           description: Device authentication failed
         "409":
@@ -352,6 +420,84 @@ paths:
           description: Token lacks messages:read scope
         "429":
           description: Rate limit exceeded
+  /v1/outbound-messages:
+    get:
+      summary: List remote outbound SMS commands and their current status
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: beforeId
+          description: Return older records whose ID is lower than this cursor.
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
+          name: deviceId
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
+      responses:
+        "200":
+          description: >
+            Commands including sensitive recipient and message-body fields.
+            Expired queued or claimed commands are reported as EXPIRED.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [outboundMessages]
+                properties:
+                  outboundMessages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/OutboundMessage"
+        "400":
+          description: Invalid query
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks messages:send scope
+        "429":
+          description: Rate limit exceeded
+    post:
+      summary: Queue an outbound SMS command for an Android gateway
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OutboundMessageCreate"
+      responses:
+        "201":
+          description: Command queued, or the matching idempotent command returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [outboundMessage]
+                properties:
+                  outboundMessage:
+                    $ref: "#/components/schemas/OutboundMessage"
+        "400":
+          description: Invalid request
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks messages:send scope
+        "409":
+          description: Idempotency key was already used for a different command
+        "429":
+          description: Rate limit exceeded
   /v1/otp/claim:
     post:
       summary: Atomically claim the newest unclaimed OTP
@@ -477,6 +623,7 @@ components:
             - NOTIFICATION
             - CALL_STATE
             - CALL_IDENTITY
+            - OUTBOUND_SMS_STATUS
             - LOCAL_SELF_TEST
         createdAt:
           type: integer
@@ -589,6 +736,94 @@ components:
         title:
           type: [string, "null"]
         body:
+          type: [string, "null"]
+    OutboundMessageCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - deviceId
+        - slotIndex
+        - recipient
+        - body
+        - idempotencyKey
+      properties:
+        deviceId:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+        slotIndex:
+          type: integer
+          enum: [0, 1]
+          description: Physical SIM slot requested on the gateway device.
+        recipient:
+          type: string
+          minLength: 1
+          maxLength: 64
+        body:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        expiresInSeconds:
+          type: integer
+          minimum: 60
+          maximum: 3600
+          default: 300
+        idempotencyKey:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{16,128}$"
+    OutboundMessage:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - commandId
+        - deviceId
+        - slotIndex
+        - recipient
+        - body
+        - status
+        - createdAt
+        - expiresAt
+        - claimedAt
+        - updatedAt
+        - lastResultCode
+        - errorDetail
+      properties:
+        id:
+          type: integer
+        commandId:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{16,128}$"
+        deviceId:
+          type: string
+        slotIndex:
+          type: integer
+          enum: [0, 1]
+        recipient:
+          type: string
+        body:
+          type: string
+        status:
+          type: string
+          enum:
+            - QUEUED
+            - CLAIMED
+            - CREATED
+            - DISPATCHING
+            - SENT_TO_MODEM
+            - DELIVERED
+            - FAILED
+            - EXPIRED
+        createdAt:
+          type: integer
+        expiresAt:
+          type: integer
+        claimedAt:
+          type: [integer, "null"]
+        updatedAt:
+          type: integer
+        lastResultCode:
+          type: [integer, "null"]
+        errorDetail:
           type: [string, "null"]
     OtpClaim:
       type: object

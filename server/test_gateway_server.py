@@ -157,6 +157,16 @@ class GatewayServerTest(unittest.TestCase):
             encrypted,
             2_000,
         )
+        command = self.store.create_outbound_command(
+            device_id="device",
+            secret=old_secret,
+            slot_index=0,
+            recipient="10086",
+            body="Historical command",
+            idempotency_key="rotation-command-key",
+            now_ms=2_100,
+            expires_in_seconds=300,
+        )
 
         updated = self.store.update_device(
             "device",
@@ -171,6 +181,14 @@ class GatewayServerTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "^invalid encrypted payload$"):
             decrypt_payload(stored, "device", old_secret)
+        rotated_commands = self.store.list_outbound_commands(
+            {"device": new_secret},
+            10,
+        )
+        self.assertEqual(command["commandId"], rotated_commands[0]["commandId"])
+        self.assertEqual("Historical command", rotated_commands[0]["body"])
+        with self.assertRaisesRegex(ValueError, "^invalid encrypted payload$"):
+            self.store.list_outbound_commands({"device": old_secret}, 10)
 
     def test_config_device_migration_is_one_time(self) -> None:
         config_devices = {"device": b"x" * 32}
@@ -264,6 +282,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                     ).hexdigest(),
                     "scopes": [
                         "messages:read",
+                        "messages:send",
                         "otp:claim",
                         "pairing:create",
                     ],
@@ -399,6 +418,49 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             headers["Content-Type"] = "application/json"
         try:
             connection.request(method, path, body=body, headers=headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def device_command_request(
+        self,
+        value: dict,
+        *,
+        nonce: str = "command-nonce",
+        idempotency_key: str = "command-request-key",
+    ) -> tuple[int, dict]:
+        body = json.dumps(value, separators=(",", ":")).encode()
+        timestamp_ms = int(time.time() * 1000)
+        signature = expected_signature(
+            self.secret,
+            timestamp_ms,
+            nonce,
+            "device",
+            idempotency_key,
+            body,
+        )
+        context = ssl.create_default_context(cafile=str(self.certificate))
+        connection = http.client.HTTPSConnection(
+            "127.0.0.1",
+            self.server.server_port,
+            context=context,
+            timeout=3,
+        )
+        try:
+            connection.request(
+                "POST",
+                "/v1/device-commands/claim",
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Gateway-Device": "device",
+                    "X-Gateway-Timestamp": str(timestamp_ms),
+                    "X-Gateway-Nonce": nonce,
+                    "X-Gateway-Signature": signature,
+                    "Idempotency-Key": idempotency_key,
+                },
+            )
             response = connection.getresponse()
             return response.status, json.loads(response.read())
         finally:
@@ -701,6 +763,149 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(200, status)
         self.assertEqual(1, len(older_notifications["notifications"]))
+
+    def test_remote_outbound_message_claim_and_status_flow(self) -> None:
+        status, created = self.api_request(
+            "POST",
+            "/v1/outbound-messages",
+            token=self.api_token,
+            value={
+                "deviceId": "device",
+                "slotIndex": 1,
+                "recipient": "10086",
+                "body": "Remote gateway test",
+                "expiresInSeconds": 300,
+                "idempotencyKey": "admin-send-command-0001",
+            },
+        )
+        self.assertEqual(201, status)
+        command = created["outboundMessage"]
+        self.assertEqual("QUEUED", command["status"])
+        self.assertEqual(1, command["slotIndex"])
+        self.assertEqual("10086", command["recipient"])
+
+        self.assertEqual(
+            403,
+            self.api_request(
+                "GET",
+                "/v1/outbound-messages",
+                token="readonly-token",
+            )[0],
+        )
+        status, listed = self.api_request(
+            "GET",
+            "/v1/outbound-messages?limit=10",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            command["commandId"],
+            listed["outboundMessages"][0]["commandId"],
+        )
+
+        status, claimed = self.device_command_request({"limit": 5})
+        self.assertEqual(200, status)
+        self.assertEqual(1, len(claimed["commands"]))
+        self.assertEqual(
+            command["commandId"],
+            claimed["commands"][0]["commandId"],
+        )
+        self.assertEqual("Remote gateway test", claimed["commands"][0]["body"])
+        self.assertEqual(
+            (200, {"commands": []}),
+            self.device_command_request(
+                {"limit": 5},
+                nonce="command-nonce-2",
+                idempotency_key="command-request-key-2",
+            ),
+        )
+
+        status_body = self.encrypted_body(
+            event_type="OUTBOUND_SMS_STATUS",
+            slot_index=1,
+            payload={
+                "commandId": command["commandId"],
+                "status": "SENT_TO_MODEM",
+                "resultCode": -1,
+                "errorDetail": None,
+            },
+        )
+        self.assertEqual(
+            201,
+            self.request(
+                body=status_body,
+                nonce="outbound-status-nonce",
+                idempotency_key="outbound-status-key",
+            )[0],
+        )
+        status, updated = self.api_request(
+            "GET",
+            "/v1/outbound-messages?limit=10",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            "SENT_TO_MODEM",
+            updated["outboundMessages"][0]["status"],
+        )
+
+    def test_outbound_message_idempotency_rejects_changed_payload(self) -> None:
+        value = {
+            "deviceId": "device",
+            "slotIndex": 0,
+            "recipient": "10086",
+            "body": "Original body",
+            "expiresInSeconds": 300,
+            "idempotencyKey": "admin-send-command-0002",
+        }
+        status, first = self.api_request(
+            "POST",
+            "/v1/outbound-messages",
+            token=self.api_token,
+            value=value,
+        )
+        self.assertEqual(201, status)
+
+        status, repeated = self.api_request(
+            "POST",
+            "/v1/outbound-messages",
+            token=self.api_token,
+            value=value,
+        )
+        self.assertEqual(201, status)
+        self.assertEqual(
+            first["outboundMessage"]["commandId"],
+            repeated["outboundMessage"]["commandId"],
+        )
+
+        status, error = self.api_request(
+            "POST",
+            "/v1/outbound-messages",
+            token=self.api_token,
+            value={**value, "body": "Changed body"},
+        )
+        self.assertEqual(409, status)
+        self.assertEqual("idempotency conflict", error["error"])
+
+    def test_outbound_message_list_marks_stale_commands_expired(self) -> None:
+        command = self.store.create_outbound_command(
+            device_id="device",
+            secret=self.secret,
+            slot_index=0,
+            recipient="10086",
+            body="Expired command",
+            idempotency_key="expired-command-key",
+            now_ms=1_000,
+            expires_in_seconds=60,
+        )
+
+        listed = self.store.list_outbound_commands(
+            {"device": self.secret},
+            10,
+        )
+
+        self.assertEqual(command["commandId"], listed[0]["commandId"])
+        self.assertEqual("EXPIRED", listed[0]["status"])
 
     def test_pairing_session_claim_is_one_time_and_returns_provisioning(self) -> None:
         status, created = self.api_request(

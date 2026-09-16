@@ -37,6 +37,10 @@ DEFAULT_API_REQUESTS_PER_MINUTE = 60
 DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE = 20
 DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE = 20
 DEFAULT_MAX_CONCURRENT_REQUESTS = 32
+DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300
+MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS = 60
+MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS = 3600
+OUTBOUND_COMMAND_LEASE_MS = 5 * 60 * 1000
 MIN_PAIRING_EXPIRES_SECONDS = 60
 MAX_PAIRING_EXPIRES_SECONDS = 600
 MAX_RATE_LIMIT_IDENTITIES = 10_000
@@ -45,7 +49,28 @@ ALLOWED_EVENT_TYPES = {
     "NOTIFICATION",
     "CALL_STATE",
     "CALL_IDENTITY",
+    "OUTBOUND_SMS_STATUS",
     "LOCAL_SELF_TEST",
+}
+OUTBOUND_COMMAND_STATUSES = {
+    "QUEUED",
+    "CLAIMED",
+    "CREATED",
+    "DISPATCHING",
+    "SENT_TO_MODEM",
+    "DELIVERED",
+    "FAILED",
+    "EXPIRED",
+}
+OUTBOUND_STATUS_ORDER = {
+    "QUEUED": 0,
+    "CLAIMED": 1,
+    "CREATED": 2,
+    "DISPATCHING": 3,
+    "SENT_TO_MODEM": 4,
+    "DELIVERED": 5,
+    "FAILED": 5,
+    "EXPIRED": 5,
 }
 OTP_PATTERN = re.compile(r"(?<!\d)(\d{4,8})(?!\d)")
 OTP_CONTEXT_PATTERN = re.compile(
@@ -303,10 +328,29 @@ class GatewayStore:
                     expires_at INTEGER NOT NULL,
                     consumed_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS outbound_commands (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    command_id TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    device_id TEXT NOT NULL,
+                    slot_index INTEGER NOT NULL,
+                    envelope_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    claimed_at INTEGER,
+                    updated_at INTEGER NOT NULL,
+                    last_result_code INTEGER,
+                    error_detail TEXT
+                );
                 CREATE INDEX IF NOT EXISTS index_events_type_received
                     ON events(event_type, received_at DESC);
                 CREATE INDEX IF NOT EXISTS index_pairing_sessions_expiry
                     ON pairing_sessions(expires_at);
+                CREATE INDEX IF NOT EXISTS index_outbound_commands_device_status
+                    ON outbound_commands(device_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS index_outbound_commands_created
+                    ON outbound_commands(created_at DESC);
                 CREATE TABLE IF NOT EXISTS devices (
                     device_id TEXT PRIMARY KEY,
                     secret_base64 TEXT NOT NULL,
@@ -383,6 +427,301 @@ class GatewayStore:
             if cursor.rowcount != 1:
                 return None
             return str(row["device_id"])
+
+    # ── Outbound SMS commands ─────────────────────────────────────
+
+    def create_outbound_command(
+        self,
+        device_id: str,
+        secret: bytes,
+        slot_index: int,
+        recipient: str,
+        body: str,
+        idempotency_key: str,
+        now_ms: int,
+        expires_in_seconds: int,
+    ) -> dict[str, Any]:
+        command_id = secrets.token_urlsafe(24)
+        expires_at = now_ms + expires_in_seconds * 1000
+        envelope = encrypt_payload(
+            {
+                "schemaVersion": 1,
+                "deliveryId": command_id,
+                "sourceEventId": command_id,
+                "eventType": "OUTBOUND_SMS_COMMAND",
+                "createdAt": now_ms,
+                "subscriptionId": None,
+                "slotIndex": slot_index,
+                "payload": {
+                    "recipient": recipient,
+                    "body": body,
+                },
+            },
+            device_id,
+            secret,
+        )
+        with self._lock, self._connect() as db:
+            existing = db.execute(
+                """
+                SELECT *
+                FROM outbound_commands
+                WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                existing_command = self._outbound_command_from_row(
+                    existing,
+                    secret,
+                )
+                if (
+                    existing["device_id"] != device_id
+                    or existing["slot_index"] != slot_index
+                    or existing_command["recipient"] != recipient
+                    or existing_command["body"] != body
+                ):
+                    raise ValueError("idempotency key conflict")
+                return existing_command
+            db.execute(
+                """
+                INSERT INTO outbound_commands(
+                    command_id, idempotency_key, device_id, slot_index,
+                    envelope_json, status, created_at, expires_at,
+                    claimed_at, updated_at, last_result_code, error_detail
+                ) VALUES (?, ?, ?, ?, ?, 'QUEUED', ?, ?, NULL, ?, NULL, NULL)
+                """,
+                (
+                    command_id,
+                    idempotency_key,
+                    device_id,
+                    slot_index,
+                    json.dumps(
+                        envelope,
+                        separators=(",", ":"),
+                        ensure_ascii=False,
+                    ),
+                    now_ms,
+                    expires_at,
+                    now_ms,
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM outbound_commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("outbound command creation failed")
+        return self._outbound_command_from_row(row, secret)
+
+    def list_outbound_commands(
+        self,
+        devices: dict[str, bytes],
+        limit: int,
+        before_id: Optional[int] = None,
+        device_id: Optional[str] = None,
+    ) -> list[dict[str, Any]]:
+        clauses = []
+        parameters: list[Any] = []
+        if before_id is not None:
+            clauses.append("id < ?")
+            parameters.append(before_id)
+        if device_id is not None:
+            clauses.append("device_id = ?")
+            parameters.append(device_id)
+        parameters.append(min(max(limit, 1), 100))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        now_ms = int(time.time() * 1000)
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                UPDATE outbound_commands
+                SET status = 'EXPIRED', updated_at = ?
+                WHERE status IN ('QUEUED', 'CLAIMED')
+                  AND expires_at <= ?
+                """,
+                (now_ms, now_ms),
+            )
+            rows = db.execute(
+                f"""
+                SELECT *
+                FROM outbound_commands
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        commands = []
+        for row in rows:
+            secret = devices.get(row["device_id"])
+            if secret is not None:
+                commands.append(self._outbound_command_from_row(row, secret))
+        return commands
+
+    def claim_outbound_commands(
+        self,
+        device_id: str,
+        secret: bytes,
+        limit: int,
+        now_ms: int,
+    ) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute(
+                """
+                UPDATE outbound_commands
+                SET status = 'EXPIRED', updated_at = ?
+                WHERE device_id = ?
+                  AND status IN ('QUEUED', 'CLAIMED')
+                  AND expires_at <= ?
+                """,
+                (now_ms, device_id, now_ms),
+            )
+            db.execute(
+                """
+                UPDATE outbound_commands
+                SET status = 'QUEUED', claimed_at = NULL, updated_at = ?
+                WHERE device_id = ?
+                  AND status = 'CLAIMED'
+                  AND claimed_at <= ?
+                  AND expires_at > ?
+                """,
+                (
+                    now_ms,
+                    device_id,
+                    now_ms - OUTBOUND_COMMAND_LEASE_MS,
+                    now_ms,
+                ),
+            )
+            rows = db.execute(
+                """
+                SELECT *
+                FROM outbound_commands
+                WHERE device_id = ?
+                  AND status = 'QUEUED'
+                  AND expires_at > ?
+                ORDER BY id ASC
+                LIMIT ?
+                """,
+                (device_id, now_ms, min(max(limit, 1), 10)),
+            ).fetchall()
+            if rows:
+                command_ids = [row["command_id"] for row in rows]
+                placeholders = ",".join("?" for _ in command_ids)
+                db.execute(
+                    f"""
+                    UPDATE outbound_commands
+                    SET status = 'CLAIMED', claimed_at = ?, updated_at = ?
+                    WHERE command_id IN ({placeholders})
+                      AND status = 'QUEUED'
+                    """,
+                    [now_ms, now_ms, *command_ids],
+                )
+                rows = db.execute(
+                    f"""
+                    SELECT *
+                    FROM outbound_commands
+                    WHERE command_id IN ({placeholders})
+                    ORDER BY id ASC
+                    """,
+                    command_ids,
+                ).fetchall()
+        return [
+            self._outbound_command_from_row(row, secret)
+            for row in rows
+        ]
+
+    def update_outbound_command_status(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        now_ms: int,
+    ) -> bool:
+        command_id = payload.get("commandId")
+        status = payload.get("status")
+        result_code = payload.get("resultCode")
+        error_detail = payload.get("errorDetail")
+        if (
+            not isinstance(command_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", command_id)
+            or status not in OUTBOUND_COMMAND_STATUSES
+            or status in {"QUEUED", "CLAIMED", "EXPIRED"}
+            or (
+                result_code is not None
+                and (
+                    not isinstance(result_code, int)
+                    or isinstance(result_code, bool)
+                )
+            )
+            or not (
+                error_detail is None
+                or isinstance(error_detail, str)
+            )
+        ):
+            raise ValueError("invalid outbound status")
+        normalized_error = (
+            error_detail.strip()[:256] if isinstance(error_detail, str) else None
+        )
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                """
+                SELECT status
+                FROM outbound_commands
+                WHERE command_id = ? AND device_id = ?
+                """,
+                (command_id, device_id),
+            ).fetchone()
+            if row is None:
+                return False
+            current = str(row["status"])
+            if current in {"DELIVERED", "FAILED", "EXPIRED"}:
+                return True
+            if OUTBOUND_STATUS_ORDER[status] < OUTBOUND_STATUS_ORDER[current]:
+                return True
+            db.execute(
+                """
+                UPDATE outbound_commands
+                SET status = ?, updated_at = ?,
+                    last_result_code = ?, error_detail = ?
+                WHERE command_id = ? AND device_id = ?
+                """,
+                (
+                    status,
+                    now_ms,
+                    result_code,
+                    normalized_error,
+                    command_id,
+                    device_id,
+                ),
+            )
+        return True
+
+    def _outbound_command_from_row(
+        self,
+        row: sqlite3.Row,
+        secret: bytes,
+    ) -> dict[str, Any]:
+        envelope = decrypt_payload(
+            json.loads(row["envelope_json"]),
+            row["device_id"],
+            secret,
+        )
+        payload = envelope["payload"]
+        return {
+            "id": row["id"],
+            "commandId": row["command_id"],
+            "deviceId": row["device_id"],
+            "slotIndex": row["slot_index"],
+            "recipient": payload.get("recipient"),
+            "body": payload.get("body"),
+            "status": row["status"],
+            "createdAt": row["created_at"],
+            "expiresAt": row["expires_at"],
+            "claimedAt": row["claimed_at"],
+            "updatedAt": row["updated_at"],
+            "lastResultCode": row["last_result_code"],
+            "errorDetail": row["error_detail"],
+        }
 
     # ── Device CRUD ──────────────────────────────────────────────
 
@@ -533,6 +872,41 @@ class GatewayStore:
                                 event_row["id"],
                             ),
                         )
+                    command_rows = db.execute(
+                        """
+                        SELECT id, envelope_json
+                        FROM outbound_commands
+                        WHERE device_id = ?
+                        """,
+                        (device_id,),
+                    ).fetchall()
+                    for command_row in command_rows:
+                        envelope = decrypt_payload(
+                            json.loads(command_row["envelope_json"]),
+                            device_id,
+                            old_secret,
+                        )
+                        envelope["schemaVersion"] = 1
+                        reencrypted = encrypt_payload(
+                            envelope,
+                            device_id,
+                            new_secret,
+                        )
+                        db.execute(
+                            """
+                            UPDATE outbound_commands
+                            SET envelope_json = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                json.dumps(
+                                    reencrypted,
+                                    separators=(",", ":"),
+                                    ensure_ascii=False,
+                                ),
+                                command_row["id"],
+                            ),
+                        )
                 db.execute(
                     "UPDATE devices SET secret_base64 = ? WHERE device_id = ?",
                     (secret_base64, device_id),
@@ -618,6 +992,28 @@ class GatewayStore:
                 (marker_key, str(now_ms)),
             )
         return migrated
+
+    def record_request_nonce(
+        self,
+        device_id: str,
+        nonce: str,
+        now_ms: int,
+    ) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM request_nonces WHERE seen_at < ?",
+                (now_ms - NONCE_RETENTION_MS,),
+            )
+            try:
+                db.execute(
+                    """
+                    INSERT INTO request_nonces(device_id, nonce, seen_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (device_id, nonce, now_ms),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("replayed nonce") from error
 
     def accept(
         self,
@@ -953,6 +1349,7 @@ class GatewayStore:
             db.execute("DELETE FROM events")
             db.execute("DELETE FROM request_nonces")
             db.execute("DELETE FROM pairing_sessions")
+            db.execute("DELETE FROM outbound_commands")
 
 
 def validate_envelope(value: Any) -> dict[str, Any]:
@@ -1153,20 +1550,91 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return None
         return matched_client
 
+    def authorize_device_request(
+        self,
+        body: bytes,
+    ) -> Optional[tuple[str, bytes]]:
+        if not self.rate_limit(
+            "device-auth-ip",
+            self.client_ip(),
+            self.app.ingest_requests_per_minute,
+        ):
+            return None
+        device_id = self.headers.get("X-Gateway-Device", "")
+        nonce = self.headers.get("X-Gateway-Nonce", "")
+        idempotency_key = self.headers.get("Idempotency-Key", "")
+        signature = self.headers.get("X-Gateway-Signature", "")
+        try:
+            timestamp_ms = int(self.headers.get("X-Gateway-Timestamp", ""))
+        except ValueError:
+            self.send_json(
+                HTTPStatus.UNAUTHORIZED,
+                {"error": "invalid timestamp"},
+            )
+            return None
+        secret = self.app.devices.get(device_id)
+        now_ms = int(time.time() * 1000)
+        if (
+            secret is None
+            or not 1 <= len(nonce) <= 128
+            or not 1 <= len(idempotency_key) <= 128
+            or not 1 <= len(signature) <= 128
+            or abs(now_ms - timestamp_ms) > MAX_CLOCK_SKEW_MS
+        ):
+            self.send_json(
+                HTTPStatus.UNAUTHORIZED,
+                {"error": "authentication failed"},
+            )
+            return None
+        expected = expected_signature(
+            secret,
+            timestamp_ms,
+            nonce,
+            device_id,
+            idempotency_key,
+            body,
+        )
+        if not hmac.compare_digest(expected, signature):
+            self.send_json(
+                HTTPStatus.UNAUTHORIZED,
+                {"error": "authentication failed"},
+            )
+            return None
+        if not self.rate_limit(
+            "device",
+            device_id,
+            self.app.device_requests_per_minute,
+        ):
+            return None
+        try:
+            self.app.store.record_request_nonce(device_id, nonce, now_ms)
+        except ValueError:
+            self.send_json(
+                HTTPStatus.CONFLICT,
+                {"error": "replayed nonce"},
+            )
+            return None
+        self.app.store.touch_device(device_id, now_ms)
+        return device_id, secret
+
     def read_json_body(self, maximum_bytes: int = 16_384) -> dict[str, Any]:
         content_type = self.headers.get("Content-Type", "")
         if content_type.split(";", 1)[0].strip().lower() != "application/json":
             raise ValueError("application/json is required")
+        body = self.read_body_bytes(maximum_bytes)
+        value = json.loads(body)
+        if not isinstance(value, dict):
+            raise ValueError("body must be a JSON object")
+        return value
+
+    def read_body_bytes(self, maximum_bytes: int = 16_384) -> bytes:
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError as error:
             raise ValueError("invalid content length") from error
         if length <= 0 or length > maximum_bytes:
             raise ValueError("invalid body size")
-        value = json.loads(self.rfile.read(length))
-        if not isinstance(value, dict):
-            raise ValueError("body must be a JSON object")
-        return value
+        return self.rfile.read(length)
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -1283,6 +1751,48 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK, {"notifications": notifications}
             )
             return
+        if path == "/v1/outbound-messages":
+            if self.authorize_api("messages:send") is None:
+                return
+            query = parse_qs(parsed.query)
+            try:
+                if (
+                    set(query) - {"limit", "beforeId", "deviceId"}
+                    or any(len(values) != 1 for values in query.values())
+                ):
+                    raise ValueError("invalid query")
+                limit = int(query.get("limit", ["50"])[0])
+                if not 1 <= limit <= 100:
+                    raise ValueError("invalid limit")
+                before_id_raw = query.get("beforeId", [None])[0]
+                before_id = (
+                    int(before_id_raw) if before_id_raw is not None else None
+                )
+                if before_id is not None and before_id < 1:
+                    raise ValueError("invalid beforeId")
+                device_id = query.get("deviceId", [None])[0]
+                if device_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9._-]{1,64}",
+                    device_id,
+                ):
+                    raise ValueError("invalid deviceId")
+            except (TypeError, ValueError):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "invalid query"},
+                )
+                return
+            commands = self.app.store.list_outbound_commands(
+                self.app.devices,
+                limit,
+                before_id=before_id,
+                device_id=device_id,
+            )
+            self.send_json(
+                HTTPStatus.OK,
+                {"outboundMessages": commands},
+            )
+            return
         if path == "/v1/devices":
             if self.authorize_api("pairing:create") is None:
                 return
@@ -1326,6 +1836,133 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/v1/device-commands/claim":
+            if not self.app.accept_ingestion:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            try:
+                if self.headers.get("Content-Type", "").split(
+                    ";", 1
+                )[0].strip().lower() != "application/json":
+                    raise ValueError("application/json is required")
+                body = self.read_body_bytes(4_096)
+            except ValueError:
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "invalid request"},
+                )
+                return
+            authorized = self.authorize_device_request(body)
+            if authorized is None:
+                return
+            device_id, secret = authorized
+            try:
+                value = json.loads(body)
+                if not isinstance(value, dict) or set(value) - {"limit"}:
+                    raise ValueError("invalid request fields")
+                limit = value.get("limit", 5)
+                if (
+                    not isinstance(limit, int)
+                    or isinstance(limit, bool)
+                    or not 1 <= limit <= 10
+                ):
+                    raise ValueError("invalid limit")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "invalid request"},
+                )
+                return
+            commands = self.app.store.claim_outbound_commands(
+                device_id,
+                secret,
+                limit,
+                int(time.time() * 1000),
+            )
+            self.send_json(
+                HTTPStatus.OK,
+                {"commands": commands},
+            )
+            return
+        if path == "/v1/outbound-messages":
+            if self.authorize_api("messages:send") is None:
+                return
+            try:
+                value = self.read_json_body(16_384)
+                if set(value) - {
+                    "deviceId",
+                    "slotIndex",
+                    "recipient",
+                    "body",
+                    "expiresInSeconds",
+                    "idempotencyKey",
+                }:
+                    raise ValueError("unsupported request field")
+                device_id = value.get("deviceId")
+                slot_index = value.get("slotIndex")
+                recipient = value.get("recipient")
+                message_body = value.get("body")
+                expires_in_seconds = value.get(
+                    "expiresInSeconds",
+                    DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS,
+                )
+                idempotency_key = value.get("idempotencyKey")
+                if (
+                    not isinstance(device_id, str)
+                    or device_id not in self.app.devices
+                    or not isinstance(slot_index, int)
+                    or isinstance(slot_index, bool)
+                    or slot_index not in (0, 1)
+                    or not isinstance(recipient, str)
+                    or not 1 <= len(recipient.strip()) <= 64
+                    or bool(re.search(r"[A-Za-z]", recipient))
+                    or not isinstance(message_body, str)
+                    or not 1 <= len(message_body) <= 2_000
+                    or not isinstance(expires_in_seconds, int)
+                    or isinstance(expires_in_seconds, bool)
+                    or not MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS
+                    <= expires_in_seconds
+                    <= MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS
+                    or not isinstance(idempotency_key, str)
+                    or not re.fullmatch(
+                        r"[A-Za-z0-9._-]{16,128}",
+                        idempotency_key,
+                    )
+                ):
+                    raise ValueError("invalid outbound message")
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "invalid request"},
+                )
+                return
+            try:
+                command = self.app.store.create_outbound_command(
+                    device_id=device_id,
+                    secret=self.app.devices[device_id],
+                    slot_index=slot_index,
+                    recipient=recipient.strip(),
+                    body=message_body,
+                    idempotency_key=idempotency_key,
+                    now_ms=int(time.time() * 1000),
+                    expires_in_seconds=expires_in_seconds,
+                )
+            except ValueError:
+                self.send_json(
+                    HTTPStatus.CONFLICT,
+                    {"error": "idempotency conflict"},
+                )
+                return
+            self.send_json(
+                HTTPStatus.CREATED,
+                {"outboundMessage": command},
+            )
+            return
         if path == "/v1/devices":
             if self.authorize_api("pairing:create") is None:
                 return
@@ -1641,10 +2278,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
             envelope = validate_envelope(json.loads(body))
             if envelope["schemaVersion"] != 2:
                 raise ValueError("encrypted schemaVersion 2 required")
-            decrypt_payload(envelope, device_id, secret)
+            decrypted = decrypt_payload(envelope, device_id, secret)
             inserted = self.app.store.accept(
                 device_id, idempotency_key, nonce, envelope, now_ms
             )
+            if envelope["eventType"] == "OUTBOUND_SMS_STATUS":
+                if not self.app.store.update_outbound_command_status(
+                    device_id,
+                    decrypted["payload"],
+                    now_ms,
+                ):
+                    raise ValueError("unknown outbound command")
+            self.app.store.touch_device(device_id, now_ms)
             self.app.store.prune(self.app.retention_days, now_ms)
         except (ValueError, json.JSONDecodeError) as error:
             status = (
@@ -1909,6 +2554,7 @@ def load_api_clients(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
             isinstance(scope, str)
             and scope in {
                 "messages:read",
+                "messages:send",
                 "otp:claim",
                 "pairing:create",
                 "*",
