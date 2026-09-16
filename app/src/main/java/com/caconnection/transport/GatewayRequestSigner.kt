@@ -81,12 +81,31 @@ object GatewayRequestSigner {
             )
         )
         val body = gson.toJson(envelope).toByteArray(StandardCharsets.UTF_8)
+        return signBody(
+            body = body,
+            deviceId = deviceId,
+            sharedSecretBase64 = sharedSecretBase64,
+            idempotencyKey = event.idempotencyKey,
+            timestampMillis = timestampMillis,
+            nonce = nonce
+        )
+    }
+
+    fun signBody(
+        body: ByteArray,
+        deviceId: String,
+        sharedSecretBase64: String,
+        idempotencyKey: String,
+        timestampMillis: Long,
+        nonce: String
+    ): SignedGatewayRequest {
+        val sharedSecret = Base64.getDecoder().decode(sharedSecretBase64)
         val bodyHash = sha256Hex(body)
         val canonical = listOf(
             timestampMillis.toString(),
             nonce,
             deviceId,
-            event.idempotencyKey,
+            idempotencyKey,
             bodyHash
         ).joinToString("\n")
         val mac = Mac.getInstance("HmacSHA256")

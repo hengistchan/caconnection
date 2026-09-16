@@ -16,6 +16,7 @@ public class OutgoingSmsEventEntity {
     public int requestedSubscriptionId;
     public int requestedSlotIndex;
     public String requestedCarrierName;
+    public String remoteCommandId;
     public String status;
     public int partCount;
     public int sentPartCount;
@@ -36,6 +37,7 @@ public class OutgoingSmsEventEntity {
             int requestedSubscriptionId,
             int requestedSlotIndex,
             String requestedCarrierName,
+            String remoteCommandId,
             String status,
             int partCount,
             int sentPartCount,
@@ -55,6 +57,7 @@ public class OutgoingSmsEventEntity {
         this.requestedSubscriptionId = requestedSubscriptionId;
         this.requestedSlotIndex = requestedSlotIndex;
         this.requestedCarrierName = requestedCarrierName;
+        this.remoteCommandId = remoteCommandId;
         this.status = status;
         this.partCount = partCount;
         this.sentPartCount = sentPartCount;

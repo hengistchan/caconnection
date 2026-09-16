@@ -20,31 +20,16 @@ android {
     defaultConfig {
         applicationId = "com.caconnection"
         minSdk = 31
+        targetSdk = 37
         versionCode = 2
         versionName = "0.2.0"
+        buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
+        manifestPlaceholders = [appLabel: "CA connection"]
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments += ["room.schemaLocation": "$projectDir/schemas"]
             }
-        }
-    }
-
-    flavorDimensions += "targetApi"
-    productFlavors {
-        sdk36 {
-            dimension = "targetApi"
-            targetSdk = 36
-            versionNameSuffix = "-target36"
-            buildConfigField("String", "POC_BUILD", '"targetSdk 36"')
-            manifestPlaceholders = [appLabel: "CA connection"]
-        }
-        sdk37 {
-            dimension = "targetApi"
-            targetSdk = 37
-            versionNameSuffix = "-target37"
-            buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
-            manifestPlaceholders = [appLabel: "CA connection"]
         }
     }
 

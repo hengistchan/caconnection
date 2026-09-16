@@ -177,6 +177,42 @@ class OutboxHelperTest {
         assertTrue(outbox.payloadData.contains("\"resolutionConfidence\":\"HIGH\""))
     }
 
+    @Test
+    fun remoteOutgoingStatusContainsNoRecipientOrMessageBody() {
+        val event = OutgoingSmsEventEntity(
+            "remote-command-0001",
+            "+15551234567",
+            "Sensitive remote message",
+            4_000L,
+            4_100L,
+            2,
+            1,
+            "Carrier",
+            "remote-command-0001",
+            OutgoingStatus.SENT_TO_MODEM.name,
+            1,
+            1,
+            0,
+            0,
+            -1,
+            null,
+            "NOT_ATTEMPTED",
+            null,
+            null
+        )
+
+        val outbox = requireNotNull(
+            OutboxHelper.createOutboxForOutgoingStatus(event)
+        )
+
+        assertEquals("OUTBOUND_SMS_STATUS", outbox.payloadType)
+        assertEquals("remote-command-0001", outbox.incomingEventId)
+        assertTrue(outbox.payloadData.contains("remote-command-0001"))
+        assertTrue(outbox.payloadData.contains("SENT_TO_MODEM"))
+        assertTrue(!outbox.payloadData.contains("+15551234567"))
+        assertTrue(!outbox.payloadData.contains("Sensitive remote message"))
+    }
+
     private fun incoming(
         eventId: String = UUID.randomUUID().toString(),
         originatingAddress: String = "+1234567890",

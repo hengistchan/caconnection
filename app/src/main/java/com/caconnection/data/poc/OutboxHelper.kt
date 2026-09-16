@@ -117,6 +117,38 @@ object OutboxHelper {
         )
     }
 
+    fun createOutboxForOutgoingStatus(
+        event: OutgoingSmsEventEntity
+    ): OutboxEventEntity? {
+        val commandId = event.remoteCommandId ?: return null
+        val now = System.currentTimeMillis()
+        val statusKey = listOf(
+            commandId,
+            event.status,
+            event.updatedAt,
+            event.sentPartCount,
+            event.deliveredPartCount,
+            event.failedPartCount,
+            event.lastResultCode
+        ).joinToString("|")
+        return OutboxEventEntity(
+            UUID.randomUUID().toString(),
+            "outbound_status_${sha256(statusKey)}",
+            commandId,
+            OutboxStatus.PENDING.name,
+            0,
+            now,
+            now,
+            now,
+            event.requestedSubscriptionId,
+            event.requestedSlotIndex,
+            "OUTBOUND_SMS_STATUS",
+            gson.toJson(OutgoingSmsStatusPayload.fromEntity(event)),
+            null,
+            null
+        )
+    }
+
     /**
      * The full SHA-256 digest avoids the silent collision risk of Java's
      * 32-bit hashCode. Slot/subscription are included so identical content
@@ -269,6 +301,25 @@ object OutboxHelper {
                     observedAt = entity.observedAt,
                     respondedAt = entity.respondedAt,
                     decision = entity.decision
+                )
+        }
+    }
+
+    data class OutgoingSmsStatusPayload(
+        val commandId: String,
+        val status: String,
+        val updatedAt: Long,
+        val resultCode: Int?,
+        val errorDetail: String?
+    ) {
+        companion object {
+            fun fromEntity(entity: OutgoingSmsEventEntity) =
+                OutgoingSmsStatusPayload(
+                    commandId = requireNotNull(entity.remoteCommandId),
+                    status = entity.status,
+                    updatedAt = entity.updatedAt,
+                    resultCode = entity.lastResultCode,
+                    errorDetail = entity.errorDetail?.take(256)
                 )
         }
     }

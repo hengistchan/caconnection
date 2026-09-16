@@ -19,11 +19,9 @@ import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
@@ -50,7 +48,6 @@ import com.caconnection.notifications.NotificationHelper
 import com.caconnection.telephony.call.CallScreeningRoleController
 import com.caconnection.telephony.call.CallStateMonitor
 import com.caconnection.telephony.diagnostics.TelephonyDiagnostics
-import com.caconnection.telephony.outbound.SmsGatewaySender
 import com.caconnection.telephony.smsrole.SmsRoleController
 import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.telephony.subscription.SubscriptionSnapshot
@@ -64,6 +61,7 @@ import com.caconnection.transport.GatewayPairingException
 import com.caconnection.transport.PairingFailure
 import com.caconnection.ui.UiPrivacy
 import com.caconnection.worker.OutboxScheduler
+import com.caconnection.worker.RemoteCommandScheduler
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.google.android.material.bottomnavigation.BottomNavigationView
@@ -119,12 +117,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var otpMetric: TextView
     private lateinit var messageList: LinearLayout
     private lateinit var messageEmpty: TextView
-    private lateinit var composerCard: MaterialCardView
-    private lateinit var composeToggle: MaterialButton
-    private lateinit var recipientInput: EditText
-    private lateinit var messageInput: EditText
-    private lateinit var simSpinner: Spinner
-
     private lateinit var logList: LinearLayout
     private lateinit var logEmpty: TextView
     private lateinit var diagnosticsCard: MaterialCardView
@@ -406,50 +398,6 @@ class MainActivity : AppCompatActivity() {
         metricsRow.addView(otp.first, weightedParams())
         metrics.addView(metricsRow)
         messagesContent.addView(metrics)
-
-        composeToggle = primaryButton(getString(R.string.write_message), R.drawable.ic_edit)
-        composeToggle.setOnClickListener {
-            composerCard.visibility =
-                if (composerCard.visibility == View.VISIBLE) View.GONE else View.VISIBLE
-            composeToggle.setText(
-                if (composerCard.visibility == View.VISIBLE) {
-                    R.string.close_composer
-                } else {
-                    R.string.write_message
-                }
-            )
-        }
-        messagesContent.addView(composeToggle, topMarginParams(12))
-
-        composerCard = card(radius = 22).apply { visibility = View.GONE }
-        val composer = vertical(padding = 18)
-        composer.addView(primaryText(getString(R.string.new_message), 18, true))
-        val recipientField = textField(
-            getString(R.string.recipient),
-            InputType.TYPE_CLASS_PHONE
-        )
-        recipientInput = recipientField.editText
-        composer.addView(recipientField.layout, topMarginParams(12))
-        val messageField = textField(
-            getString(R.string.message),
-            InputType.TYPE_CLASS_TEXT or
-                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or
-                InputType.TYPE_TEXT_FLAG_MULTI_LINE,
-            minLines = 4
-        )
-        messageInput = messageField.editText
-        composer.addView(messageField.layout, topMarginParams(8))
-        simSpinner = Spinner(this).apply {
-            minimumHeight = dp(52)
-            setPadding(dp(12), 0, dp(12), 0)
-            background = roundedDrawable(R.color.card_background, 10, R.color.control_stroke)
-        }
-        composer.addView(simSpinner, topMarginParams(8))
-        val send = primaryButton(getString(R.string.send_selected_sim), R.drawable.ic_send)
-        send.setOnClickListener { sendSms() }
-        composer.addView(send, topMarginParams(10))
-        composerCard.addView(composer)
-        messagesContent.addView(composerCard, topMarginParams(10))
 
         val filters = ChipGroup(this).apply {
             isSingleSelection = true
@@ -763,17 +711,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun applyIntent(intent: Intent?) {
         intent ?: return
-        intent.getStringExtra(EXTRA_RECIPIENT)
-            ?.takeIf(String::isNotBlank)
-            ?.let {
-                recipientInput.setText(it)
-                composerCard.visibility = View.VISIBLE
-                composeToggle.setText(R.string.close_composer)
-                bottomNavigation.selectedItemId = R.id.nav_messages
-            }
         when (intent.getStringExtra(EXTRA_OPEN_PAGE)) {
             PAGE_DASHBOARD, PAGE_HOME -> bottomNavigation.selectedItemId = R.id.nav_home
-            PAGE_INCOMING, PAGE_SEND, PAGE_MESSAGES ->
+            PAGE_INCOMING, PAGE_MESSAGES ->
                 bottomNavigation.selectedItemId = R.id.nav_messages
             PAGE_DIAGNOSTICS, PAGE_SIGNALS, PAGE_ACTIVITY ->
                 bottomNavigation.selectedItemId = R.id.nav_activity
@@ -804,7 +744,6 @@ class MainActivity : AppCompatActivity() {
         activeSubscriptions = runCatching {
             subscriptionRepository.getActiveSubscriptions()
         }.getOrDefault(emptyList())
-        updateSimSpinner()
         lastRefreshAt = System.currentTimeMillis()
         eventStore.replaceSubscriptions(subscriptionRepository.captureEntities()) {
             refreshStoredEvents()
@@ -1754,6 +1693,7 @@ class MainActivity : AppCompatActivity() {
         }.onSuccess {
             transportSecretInput.text.clear()
             OutboxScheduler.enqueueNow(this)
+            RemoteCommandScheduler.enqueueNow(this)
             toast(R.string.transport_saved)
             refreshStoredEvents()
         }.onFailure {
@@ -1912,59 +1852,6 @@ class MainActivity : AppCompatActivity() {
         transportDeviceIdInput.setText(settings.deviceId)
         transportCertificatePinInput.setText(settings.certificatePinSha256Base64)
         transportEnabledSwitch.isChecked = settings.enabled
-    }
-
-    private fun sendSms() {
-        val recipient = recipientInput.text.toString().trim()
-        val body = messageInput.text.toString()
-        if (recipient.isBlank()) {
-            toast(R.string.recipient_required)
-            recipientInput.requestFocus()
-            return
-        }
-        if (body.isBlank()) {
-            toast(R.string.message_required)
-            messageInput.requestFocus()
-            return
-        }
-        val subscription = activeSubscriptions.getOrNull(simSpinner.selectedItemPosition)
-        if (subscription == null) {
-            toast(R.string.no_active_sim)
-            return
-        }
-        SmsGatewaySender(this).send(
-            recipient = recipient,
-            body = body,
-            subscription = subscription,
-            onAccepted = {
-                runOnUiThread {
-                    toast(getString(R.string.message_sent_accepted, subscription.lineLabel))
-                    recipientInput.text.clear()
-                    messageInput.text.clear()
-                    composerCard.visibility = View.GONE
-                    composeToggle.setText(R.string.write_message)
-                    refreshStoredEvents()
-                }
-            },
-            onRejected = { runOnUiThread { toast(it) } }
-        )
-    }
-
-    private fun updateSimSpinner() {
-        val labels = if (activeSubscriptions.isEmpty()) {
-            listOf(getString(R.string.no_active_subscriptions))
-        } else {
-            activeSubscriptions.map {
-                "${getString(R.string.sim_number, it.slotIndex + 1)} · " +
-                    it.carrierName.ifBlank { it.displayName.ifBlank { getString(R.string.unknown_carrier) } }
-            }
-        }
-        simSpinner.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            labels
-        )
-        simSpinner.isEnabled = activeSubscriptions.isNotEmpty()
     }
 
     private fun requestPocPermissions() {
@@ -2540,11 +2427,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
-        const val EXTRA_RECIPIENT = "recipient"
         const val EXTRA_OPEN_PAGE = "open_page"
         const val PAGE_DASHBOARD = "dashboard"
         const val PAGE_INCOMING = "incoming"
-        const val PAGE_SEND = "send"
         const val PAGE_DIAGNOSTICS = "diagnostics"
         const val PAGE_SIGNALS = "signals"
         const val PAGE_TRANSPORT = "transport"

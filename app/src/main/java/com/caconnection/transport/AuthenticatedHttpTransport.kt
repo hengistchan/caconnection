@@ -9,7 +9,8 @@ import javax.net.ssl.HttpsURLConnection
 
 data class GatewayHttpResponse(
     val statusCode: Int,
-    val retryAfterMillis: Long?
+    val retryAfterMillis: Long?,
+    val body: String = ""
 )
 
 fun interface GatewayHttpClient {
@@ -49,15 +50,15 @@ class UrlConnectionGatewayHttpClient(
                 ?.trim()
                 ?.toLongOrNull()
                 ?.times(1_000L)
-            runCatching {
+            val responseBody = runCatching {
                 val stream = if (statusCode >= 400) {
                     connection.errorStream
                 } else {
                     connection.inputStream
                 }
-                stream?.use { it.readBytes() }
-            }
-            GatewayHttpResponse(statusCode, retryAfterMillis)
+                stream?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty()
+            }.getOrDefault("")
+            GatewayHttpResponse(statusCode, retryAfterMillis, responseBody)
         } finally {
             connection.disconnect()
         }

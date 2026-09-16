@@ -3,9 +3,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-./gradlew verifyProductionSigning assembleSdk37Release
+./gradlew verifyProductionSigning assembleRelease
 
-APK="app/build/outputs/apk/sdk37/release/app-sdk37-release.apk"
+APK="app/build/outputs/apk/release/app-release.apk"
 test -f "$APK"
 
 echo "Production APK: $APK"

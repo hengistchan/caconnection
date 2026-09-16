@@ -21,6 +21,41 @@ class SmsGatewaySender(private val context: Context) {
         subscription: SubscriptionSnapshot,
         onAccepted: (String) -> Unit,
         onRejected: (String) -> Unit
+    ) = sendInternal(
+        eventId = UUID.randomUUID().toString(),
+        remoteCommandId = null,
+        recipient = recipient,
+        body = body,
+        subscription = subscription,
+        onAccepted = onAccepted,
+        onRejected = onRejected
+    )
+
+    fun sendRemote(
+        commandId: String,
+        recipient: String,
+        body: String,
+        subscription: SubscriptionSnapshot,
+        onAccepted: (String) -> Unit = {},
+        onRejected: (String) -> Unit = {}
+    ) = sendInternal(
+        eventId = commandId,
+        remoteCommandId = commandId,
+        recipient = recipient,
+        body = body,
+        subscription = subscription,
+        onAccepted = onAccepted,
+        onRejected = onRejected
+    )
+
+    private fun sendInternal(
+        eventId: String,
+        remoteCommandId: String?,
+        recipient: String,
+        body: String,
+        subscription: SubscriptionSnapshot,
+        onAccepted: (String) -> Unit,
+        onRejected: (String) -> Unit
     ) {
         val validation = validate(recipient, body)
         if (validation != null) {
@@ -34,7 +69,6 @@ class SmsGatewaySender(private val context: Context) {
             return
         }
 
-        val eventId = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         val event = OutgoingSmsEventEntity(
             eventId,
@@ -45,6 +79,7 @@ class SmsGatewaySender(private val context: Context) {
             subscription.subscriptionId,
             subscription.slotIndex,
             subscription.carrierName,
+            remoteCommandId,
             OutgoingStatus.CREATED.name,
             0,
             0,
@@ -110,7 +145,7 @@ class SmsGatewaySender(private val context: Context) {
         } catch (error: Throwable) {
             PocEventStore.get(context).markDispatchFailure(
                 event.eventId,
-                "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+                "${error.javaClass.simpleName}: SMS dispatch failed"
             )
         }
     }

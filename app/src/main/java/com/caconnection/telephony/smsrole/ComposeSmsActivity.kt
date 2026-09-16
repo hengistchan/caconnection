@@ -8,12 +8,9 @@ import com.caconnection.MainActivity
 class ComposeSmsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val recipient = intent?.data?.schemeSpecificPart
-            ?.substringBefore("?")
-            .orEmpty()
         startActivity(
             Intent(this, MainActivity::class.java)
-                .putExtra(MainActivity.EXTRA_RECIPIENT, recipient)
+                .putExtra(MainActivity.EXTRA_OPEN_PAGE, MainActivity.PAGE_MESSAGES)
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         )
         finish()

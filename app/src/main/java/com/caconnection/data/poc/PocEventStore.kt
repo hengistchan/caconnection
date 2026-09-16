@@ -100,11 +100,37 @@ class PocEventStore private constructor(private val context: Context) {
         }
     }
 
-    fun insertOutgoingAndDispatch(event: OutgoingSmsEventEntity, dispatch: () -> Unit) {
+    fun insertOutgoingAndDispatch(
+        event: OutgoingSmsEventEntity,
+        dispatch: () -> Unit
+    ) {
         executor.execute {
-            dao.insertOutgoing(event)
+            var inserted = false
+            var statusQueued = false
+            database.runInTransaction {
+                if (dao.findOutgoing(event.eventId) == null) {
+                    dao.insertOutgoing(event)
+                    inserted = true
+                    statusQueued = queueOutgoingStatus(event)
+                }
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
             notifyChanged()
-            dispatch()
+            if (inserted) dispatch()
+        }
+    }
+
+    fun insertRemoteCommandFailure(event: OutgoingSmsEventEntity) {
+        executor.execute {
+            var statusQueued = false
+            database.runInTransaction {
+                if (dao.findOutgoing(event.eventId) == null) {
+                    dao.insertOutgoing(event)
+                    statusQueued = queueOutgoingStatus(event)
+                }
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
+            notifyChanged()
         }
     }
 
@@ -114,7 +140,11 @@ class PocEventStore private constructor(private val context: Context) {
             event.status = OutgoingStatus.DISPATCHING.name
             event.partCount = partCount
             event.updatedAt = System.currentTimeMillis()
-            dao.updateOutgoing(event)
+            val statusQueued = database.runInTransaction<Boolean> {
+                dao.updateOutgoing(event)
+                queueOutgoingStatus(event)
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
             notifyChanged()
         }
     }
@@ -126,7 +156,11 @@ class PocEventStore private constructor(private val context: Context) {
             event.failedPartCount = maxOf(1, event.failedPartCount)
             event.errorDetail = detail
             event.updatedAt = System.currentTimeMillis()
-            dao.updateOutgoing(event)
+            val statusQueued = database.runInTransaction<Boolean> {
+                dao.updateOutgoing(event)
+                queueOutgoingStatus(event)
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
             notifyChanged()
         }
     }
@@ -152,7 +186,11 @@ class PocEventStore private constructor(private val context: Context) {
                 event.status = OutgoingStatus.FAILED.name
                 event.errorDetail = smsResultDescription(resultCode)
             }
-            dao.updateOutgoing(event)
+            val statusQueued = database.runInTransaction<Boolean> {
+                dao.updateOutgoing(event)
+                queueOutgoingStatus(event)
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
             notifyChanged()
         }
     }
@@ -170,7 +208,11 @@ class PocEventStore private constructor(private val context: Context) {
             } else {
                 event.errorDetail = "Delivery report result=$resultCode (operator-dependent)"
             }
-            dao.updateOutgoing(event)
+            val statusQueued = database.runInTransaction<Boolean> {
+                dao.updateOutgoing(event)
+                queueOutgoingStatus(event)
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
             notifyChanged()
         }
     }
@@ -227,6 +269,13 @@ class PocEventStore private constructor(private val context: Context) {
             Intent(ACTION_DATA_CHANGED)
                 .setPackage(context.packageName)
         )
+    }
+
+    private fun queueOutgoingStatus(event: OutgoingSmsEventEntity): Boolean {
+        val outbox = OutboxHelper.createOutboxForOutgoingStatus(event)
+            ?: return false
+        dao.insertOutbox(outbox)
+        return true
     }
 
     private fun smsResultDescription(resultCode: Int): String = when (resultCode) {

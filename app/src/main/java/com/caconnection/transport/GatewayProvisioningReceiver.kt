@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import com.caconnection.worker.OutboxScheduler
+import com.caconnection.worker.RemoteCommandScheduler
 import java.io.File
 
 class GatewayProvisioningReceiver : BroadcastReceiver() {
@@ -29,6 +30,7 @@ class GatewayProvisioningReceiver : BroadcastReceiver() {
                     document.certificatePinSha256Base64.orEmpty()
             )
             OutboxScheduler.enqueueNow(context)
+            RemoteCommandScheduler.enqueueNow(context)
         }
         provisioning?.delete()
         result.onSuccess {

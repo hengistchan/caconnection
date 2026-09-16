@@ -81,13 +81,6 @@
     <string name="outgoing">发出</string>
     <string name="otp_candidates">验证码</string>
     <string name="all">全部</string>
-    <string name="write_message">编写短信</string>
-    <string name="close_composer">收起编辑器</string>
-    <string name="new_message">新短信</string>
-    <string name="recipient">收件号码或服务号</string>
-    <string name="message">短信内容</string>
-    <string name="send_selected_sim">使用所选 SIM 卡发送</string>
-    <string name="no_active_subscriptions">未发现有效 SIM 卡</string>
     <string name="no_messages">没有符合当前筛选条件的消息。</string>
     <string name="from_sender">来自 %1$s</string>
     <string name="to_recipient">发送至 %1$s</string>
@@ -97,10 +90,6 @@
     <string name="otp_candidate">可能的验证码：%1$s</string>
     <string name="copy_code">复制验证码</string>
     <string name="code_copied">验证码已复制</string>
-    <string name="message_sent_accepted">已为 %1$s 创建短信发送任务</string>
-    <string name="recipient_required">请输入收件号码。</string>
-    <string name="message_required">请输入短信内容。</string>
-    <string name="no_active_sim">没有可用的 SIM 卡。</string>
     <string name="log_privacy_notice">调试日志导出会自动脱敏：不会包含短信正文、完整号码、来电名称、密钥或加密载荷。</string>
     <string name="errors">错误</string>
     <string name="sms">短信</string>

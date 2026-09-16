@@ -81,13 +81,6 @@
     <string name="outgoing">Outgoing</string>
     <string name="otp_candidates">OTP</string>
     <string name="all">All</string>
-    <string name="write_message">Write a message</string>
-    <string name="close_composer">Close composer</string>
-    <string name="new_message">New message</string>
-    <string name="recipient">Recipient or short code</string>
-    <string name="message">Message</string>
-    <string name="send_selected_sim">Send using selected SIM</string>
-    <string name="no_active_subscriptions">No active subscriptions visible</string>
     <string name="no_messages">No messages match this filter.</string>
     <string name="from_sender">From %1$s</string>
     <string name="to_recipient">To %1$s</string>
@@ -97,10 +90,6 @@
     <string name="otp_candidate">OTP candidate: %1$s</string>
     <string name="copy_code">Copy code</string>
     <string name="code_copied">Code copied</string>
-    <string name="message_sent_accepted">SMS dispatch created for %1$s</string>
-    <string name="recipient_required">Enter a recipient.</string>
-    <string name="message_required">Enter a message.</string>
-    <string name="no_active_sim">No active SIM is available.</string>
     <string name="log_privacy_notice">Debug exports are sanitized: message bodies, full phone numbers, caller names, secrets and encrypted payloads are excluded.</string>
     <string name="errors">Errors</string>
     <string name="sms">SMS</string>
