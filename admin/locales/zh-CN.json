@@ -9,7 +9,8 @@
     "messages": "短信与通知",
     "logout": "退出登录",
     "language": "语言",
-    "devices": "设备"
+    "devices": "设备",
+    "outbound": "远程发短信"
   },
   "login": {
     "title": "管理后台登录",
@@ -227,5 +228,43 @@
     "deleteSuccess": "设备已删除",
     "deleteDialogTitle": "删除网关设备",
     "loadError": "无法读取网关设备。"
+  },
+  "outbound": {
+    "title": "远程发短信",
+    "description": "为已认证的网关设备创建短信发送任务；Android 网关 App 不提供本地编辑和发送入口。",
+    "refresh": "刷新记录",
+    "warning": "发送短信可能产生运营商费用。确认前请核对网关设备、SIM、收件号码和短信正文。",
+    "device": "网关设备",
+    "selectDevice": "选择设备",
+    "simLabel": "发送 SIM",
+    "sim": "SIM {sim}",
+    "recipient": "收件号码",
+    "recipientPlaceholder": "手机号码或服务短号",
+    "body": "短信正文",
+    "bodyPlaceholder": "输入短信内容",
+    "reviewSend": "检查并发送",
+    "confirmTitle": "确认远程发送短信",
+    "confirmMessage": "确定为设备 {deviceId} 的 SIM {sim} 向 {recipient} 创建短信发送任务吗？可能产生运营商费用。",
+    "confirmSend": "创建发送任务",
+    "sendQueued": "短信发送任务已排队",
+    "sendError": "无法创建短信发送任务",
+    "invalidRequest": "请选择设备和 SIM，并输入有效的收件号码及短信正文。",
+    "history": "发送记录",
+    "loadedSummary": "已加载 {count} 条任务",
+    "empty": "暂无远程短信发送任务。",
+    "loadError": "无法加载远程短信发送记录。",
+    "commandId": "任务 ID",
+    "updatedAt": "最后更新",
+    "resultCode": "结果代码",
+    "status": {
+      "QUEUED": "排队中",
+      "CLAIMED": "已领取",
+      "CREATED": "已创建",
+      "DISPATCHING": "正在发送",
+      "SENT_TO_MODEM": "已提交基带",
+      "DELIVERED": "已送达",
+      "FAILED": "失败",
+      "EXPIRED": "已过期"
+    }
   }
 }

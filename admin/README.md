@@ -1,8 +1,9 @@
 # CA Connection Admin UI
 
 A secure admin console for the CA Connection Personal Communication Gateway.
-SMS and notification content is read-only; device inventory changes and pairing
-are explicit authenticated administrative actions.
+Inbound SMS and notification content is read-only. Remote SMS sending, device
+inventory changes, and pairing are explicit authenticated administrative
+actions.
 
 ## Features
 
@@ -20,6 +21,8 @@ are explicit authenticated administrative actions.
 - **Device Workspace**: Add, edit, rotate secrets, pair, and delete Gateway
   devices from one dedicated tab
 - **OTP Claim**: One-time verification code extraction
+- **Remote SMS**: Queue a message for a selected gateway and SIM, confirm the
+  carrier-charge warning, and track modem/delivery status
 - **Privacy Protection**: Sensitive content hidden by default
 
 ## Security Architecture
@@ -40,8 +43,8 @@ The token is stored as a Docker secret and only accessible server-side.
 2. Login attempts rate-limited per IP (5 attempts / 15 minutes)
 3. Sessions use HMAC-SHA256 signed, stateless HttpOnly cookies
 4. Cookie restricted to `/admin` path with `SameSite=Strict`
-5. OTP, pairing, device mutations, and logout requests require a signed-session
-   CSRF token
+5. Remote SMS, OTP, pairing, device mutations, and logout requests require a
+   signed-session CSRF token
 6. Proxy IP headers are accepted only when `TRUST_PROXY_HEADERS=true` and the
    direct peer is a loopback/private reverse proxy
 
@@ -235,6 +238,17 @@ This ensures:
   - Notification title (hidden by default)
   - Notification body (hidden by default)
   - Channel and category
+
+### Remote SMS (`/admin/` - Remote SMS tab)
+
+- Select the gateway device and physical SIM slot
+- Review a carrier-charge warning and explicit confirmation before queueing
+- Use a unique idempotency key for each confirmed send
+- Mask recipient and message body by default in history
+- Track queued, claimed, dispatching, modem, delivery, failure, and expiry
+  states
+- Keep the Android gateway app read-only while its background worker executes
+  authenticated remote commands
 
 ### Devices (`/admin/` - Devices tab)
 

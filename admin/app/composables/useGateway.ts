@@ -68,6 +68,32 @@ export interface GatewayDeviceDetail {
   lastSeenAt: number | null
 }
 
+export type GatewayOutboundStatus =
+  | 'QUEUED'
+  | 'CLAIMED'
+  | 'CREATED'
+  | 'DISPATCHING'
+  | 'SENT_TO_MODEM'
+  | 'DELIVERED'
+  | 'FAILED'
+  | 'EXPIRED'
+
+export interface GatewayOutboundMessage {
+  id: number
+  commandId: string
+  deviceId: string
+  slotIndex: number
+  recipient: string
+  body: string
+  status: GatewayOutboundStatus
+  createdAt: number
+  expiresAt: number
+  claimedAt: number | null
+  updatedAt: number
+  lastResultCode: number | null
+  errorDetail: string | null
+}
+
 export function useGateway() {
   const { csrfToken } = useAuth()
   const status = useState<GatewayStatus | null>('gateway-status', () => null)
@@ -76,11 +102,27 @@ export function useGateway() {
     'gateway-notifications',
     () => [],
   )
+  const outboundMessages = useState<GatewayOutboundMessage[]>(
+    'gateway-outbound-messages',
+    () => [],
+  )
   const statusLoading = useState<boolean>('gateway-status-loading', () => false)
   const messageLoading = useState<boolean>('gateway-message-loading', () => false)
   const notificationLoading = useState<boolean>(
     'gateway-notification-loading',
     () => false,
+  )
+  const outboundLoading = useState<boolean>(
+    'gateway-outbound-loading',
+    () => false,
+  )
+  const outboundError = useState<string | null>(
+    'gateway-outbound-error',
+    () => null,
+  )
+  const outboundHasMore = useState<boolean>(
+    'gateway-outbound-has-more',
+    () => true,
   )
   const messageHasMore = useState<boolean>('gateway-message-has-more', () => true)
   const notificationHasMore = useState<boolean>(
@@ -234,6 +276,75 @@ export function useGateway() {
     }
   }
 
+  async function fetchOutboundMessages(options: {
+    limit?: number
+    beforeId?: number | null
+    deviceId?: string
+    append?: boolean
+  } = {}): Promise<boolean> {
+    outboundLoading.value = true
+    try {
+      const params = new URLSearchParams()
+      if (options.limit) params.set('limit', options.limit.toString())
+      if (options.beforeId !== undefined && options.beforeId !== null) {
+        params.set('beforeId', options.beforeId.toString())
+      }
+      if (options.deviceId) params.set('deviceId', options.deviceId)
+      const query = params.toString()
+      const data = await $fetch<{ outboundMessages: GatewayOutboundMessage[] }>(
+        `/admin/api/gateway/outbound-messages${query ? `?${query}` : ''}`,
+        { credentials: 'include' },
+      )
+      if (options.append) {
+        const merged = new Map(
+          outboundMessages.value.map(message => [message.id, message]),
+        )
+        data.outboundMessages.forEach(message => merged.set(message.id, message))
+        outboundMessages.value = [...merged.values()]
+          .sort((left, right) => right.id - left.id)
+      } else {
+        outboundMessages.value = data.outboundMessages
+      }
+      outboundHasMore.value
+        = data.outboundMessages.length === (options.limit ?? 50)
+      outboundError.value = null
+      return true
+    } catch (err: unknown) {
+      const fetchError = err as { statusCode?: number; data?: { message?: string } }
+      if (fetchError.statusCode === 401) navigateTo('/login')
+      outboundError.value
+        = fetchError.data?.message || 'Failed to fetch outbound messages'
+      return false
+    } finally {
+      outboundLoading.value = false
+    }
+  }
+
+  async function sendOutboundMessage(options: {
+    deviceId: string
+    slotIndex: number
+    recipient: string
+    body: string
+    expiresInSeconds?: number
+    idempotencyKey: string
+  }): Promise<GatewayOutboundMessage> {
+    const data = await $fetch<{ outboundMessage: GatewayOutboundMessage }>(
+      '/admin/api/gateway/outbound-messages',
+      {
+        method: 'POST',
+        body: {
+          ...options,
+          expiresInSeconds: options.expiresInSeconds ?? 300,
+        },
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+    return data.outboundMessage
+  }
+
   /**
    * Claim OTP
    */
@@ -375,13 +486,16 @@ export function useGateway() {
     status: readonly(status),
     messages: readonly(messages),
     notifications: readonly(notifications),
+    outboundMessages: readonly(outboundMessages),
     isLoading: computed(() =>
       messageLoading.value || notificationLoading.value),
     statusLoading: readonly(statusLoading),
     messageLoading: readonly(messageLoading),
     notificationLoading: readonly(notificationLoading),
+    outboundLoading: readonly(outboundLoading),
     messageHasMore: readonly(messageHasMore),
     notificationHasMore: readonly(notificationHasMore),
+    outboundHasMore: readonly(outboundHasMore),
     statusLastSuccessAt: readonly(statusLastSuccessAt),
     messageLastSuccessAt: readonly(messageLastSuccessAt),
     notificationLastSuccessAt: readonly(notificationLastSuccessAt),
@@ -390,11 +504,14 @@ export function useGateway() {
     statusError: readonly(statusError),
     messageError: readonly(messageError),
     notificationError: readonly(notificationError),
+    outboundError: readonly(outboundError),
     simCounts,
     latestMessageTime,
     fetchStatus,
     fetchMessages,
     fetchNotifications,
+    fetchOutboundMessages,
+    sendOutboundMessage,
     claimOtp,
     fetchDevices,
     createPairing,

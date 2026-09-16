@@ -248,6 +248,38 @@ export interface GatewayPairingResponse {
   }
 }
 
+export interface GatewayOutboundMessage {
+  id: number
+  commandId: string
+  deviceId: string
+  slotIndex: number
+  recipient: string
+  body: string
+  status:
+    | 'QUEUED'
+    | 'CLAIMED'
+    | 'CREATED'
+    | 'DISPATCHING'
+    | 'SENT_TO_MODEM'
+    | 'DELIVERED'
+    | 'FAILED'
+    | 'EXPIRED'
+  createdAt: number
+  expiresAt: number
+  claimedAt: number | null
+  updatedAt: number
+  lastResultCode: number | null
+  errorDetail: string | null
+}
+
+export interface GatewayOutboundMessagesResponse {
+  outboundMessages: GatewayOutboundMessage[]
+}
+
+export interface GatewayOutboundMessageResponse {
+  outboundMessage: GatewayOutboundMessage
+}
+
 function parseStatusResponse(value: unknown): GatewayHealthResponse {
   if (!isRecord(value) || typeof value.status !== 'string') {
     return invalidGatewayResponse()
@@ -333,6 +365,65 @@ function parseNotificationsResponse(value: unknown): GatewayNotificationsRespons
     return invalidGatewayResponse()
   }
   return { notifications: value.notifications.map(parseNotification) }
+}
+
+function parseOutboundMessage(value: unknown): GatewayOutboundMessage {
+  if (
+    !isRecord(value)
+    || typeof value.id !== 'number'
+    || !Number.isSafeInteger(value.id)
+    || typeof value.commandId !== 'string'
+    || typeof value.deviceId !== 'string'
+    || typeof value.slotIndex !== 'number'
+    || !Number.isSafeInteger(value.slotIndex)
+    || ![0, 1].includes(value.slotIndex)
+    || typeof value.recipient !== 'string'
+    || typeof value.body !== 'string'
+    || ![
+      'QUEUED',
+      'CLAIMED',
+      'CREATED',
+      'DISPATCHING',
+      'SENT_TO_MODEM',
+      'DELIVERED',
+      'FAILED',
+      'EXPIRED',
+    ].includes(String(value.status))
+    || typeof value.createdAt !== 'number'
+    || !Number.isSafeInteger(value.createdAt)
+    || typeof value.expiresAt !== 'number'
+    || !Number.isSafeInteger(value.expiresAt)
+    || !isNullableInteger(value.claimedAt)
+    || typeof value.updatedAt !== 'number'
+    || !Number.isSafeInteger(value.updatedAt)
+    || !isNullableInteger(value.lastResultCode)
+    || !(value.errorDetail === null || typeof value.errorDetail === 'string')
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayOutboundMessage
+}
+
+function parseOutboundMessagesResponse(
+  value: unknown,
+): GatewayOutboundMessagesResponse {
+  if (!isRecord(value) || !Array.isArray(value.outboundMessages)) {
+    return invalidGatewayResponse()
+  }
+  return {
+    outboundMessages: value.outboundMessages.map(parseOutboundMessage),
+  }
+}
+
+function parseOutboundMessageResponse(
+  value: unknown,
+): GatewayOutboundMessageResponse {
+  if (!isRecord(value) || !isRecord(value.outboundMessage)) {
+    return invalidGatewayResponse()
+  }
+  return {
+    outboundMessage: parseOutboundMessage(value.outboundMessage),
+  }
 }
 
 function parseDevicesResponse(value: unknown): GatewayDevicesResponse {
@@ -434,6 +525,39 @@ export async function getGatewayNotifications(options: {
   const query = params.toString()
   return parseNotificationsResponse(
     await gatewayFetch(`/v1/notifications${query ? `?${query}` : ''}`),
+  )
+}
+
+export async function getGatewayOutboundMessages(options: {
+  limit?: number
+  beforeId?: number | null
+  deviceId?: string
+} = {}): Promise<GatewayOutboundMessagesResponse> {
+  const params = new URLSearchParams()
+  if (options.limit) params.set('limit', options.limit.toString())
+  if (options.beforeId !== undefined && options.beforeId !== null) {
+    params.set('beforeId', options.beforeId.toString())
+  }
+  if (options.deviceId) params.set('deviceId', options.deviceId)
+  const query = params.toString()
+  return parseOutboundMessagesResponse(
+    await gatewayFetch(`/v1/outbound-messages${query ? `?${query}` : ''}`),
+  )
+}
+
+export async function createGatewayOutboundMessage(options: {
+  deviceId: string
+  slotIndex: number
+  recipient: string
+  body: string
+  expiresInSeconds: number
+  idempotencyKey: string
+}): Promise<GatewayOutboundMessageResponse> {
+  return parseOutboundMessageResponse(
+    await gatewayFetch('/v1/outbound-messages', {
+      method: 'POST',
+      body: options,
+    }),
   )
 }
 

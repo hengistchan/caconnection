@@ -86,4 +86,50 @@ describe('useGateway content loading', () => {
     expect(gateway.messages.value.map(item => item.id)).toEqual([3, 2, 1])
     expect(fetchMock.mock.calls[1][0]).toContain('beforeId=2')
   })
+
+  it('sends outbound messages with CSRF protection and default expiry', async () => {
+    const outboundMessage = {
+      id: 1,
+      commandId: 'abcdefghijklmnop',
+      deviceId: 'phone-1',
+      slotIndex: 1,
+      recipient: '10086',
+      body: 'Remote message',
+      status: 'QUEUED' as const,
+      createdAt: 100,
+      expiresAt: 300_100,
+      claimedAt: null,
+      updatedAt: 100,
+      lastResultCode: null,
+      errorDetail: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue({ outboundMessage })
+    vi.stubGlobal('$fetch', fetchMock)
+
+    const gateway = useGateway()
+    await expect(gateway.sendOutboundMessage({
+      deviceId: 'phone-1',
+      slotIndex: 1,
+      recipient: '10086',
+      body: 'Remote message',
+      idempotencyKey: 'admin-send-command-0001',
+    })).resolves.toEqual(outboundMessage)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/admin/api/gateway/outbound-messages',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'X-CSRF-Token': 'csrf-token' },
+        body: {
+          deviceId: 'phone-1',
+          slotIndex: 1,
+          recipient: '10086',
+          body: 'Remote message',
+          idempotencyKey: 'admin-send-command-0001',
+          expiresInSeconds: 300,
+        },
+      }),
+    )
+  })
 })

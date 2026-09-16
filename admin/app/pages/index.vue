@@ -324,6 +324,140 @@
         </section>
 
         <section
+          v-if="activeTab === 'outbound'"
+          id="outbound-panel"
+          role="tabpanel"
+          aria-labelledby="outbound-tab"
+        >
+          <div class="section-header">
+            <div>
+              <h2>{{ t('outbound.title') }}</h2>
+              <p class="section-subtitle">{{ t('outbound.description') }}</p>
+            </div>
+            <button
+              class="btn btn-secondary btn-sm"
+              :disabled="outboundLoading"
+              @click="refreshOutbound"
+            >
+              <span v-if="outboundLoading" class="spinner" aria-hidden="true" />
+              {{ t('outbound.refresh') }}
+            </button>
+          </div>
+
+          <div class="notice-bar outbound-warning" role="note">
+            <span class="notice-icon" aria-hidden="true">!</span>
+            <span>{{ t('outbound.warning') }}</span>
+          </div>
+
+          <form class="card outbound-form" @submit.prevent="requestOutboundSend">
+            <div class="form-grid">
+              <label class="form-field">
+                <span>{{ t('outbound.device') }}</span>
+                <select
+                  v-model="outboundDeviceId"
+                  class="filter-select"
+                  :disabled="outboundSendLoading || deviceDetails.length === 0"
+                >
+                  <option value="" disabled>{{ t('outbound.selectDevice') }}</option>
+                  <option
+                    v-for="device in deviceDetails"
+                    :key="device.deviceId"
+                    :value="device.deviceId"
+                  >
+                    {{ device.description
+                      ? `${device.deviceId} · ${device.description}`
+                      : device.deviceId }}
+                  </option>
+                </select>
+              </label>
+              <label class="form-field">
+                <span>{{ t('outbound.simLabel') }}</span>
+                <select
+                  v-model.number="outboundSlotIndex"
+                  class="filter-select"
+                  :disabled="outboundSendLoading"
+                >
+                  <option :value="0">{{ t('messages.filter.sim1') }}</option>
+                  <option :value="1">{{ t('messages.filter.sim2') }}</option>
+                </select>
+              </label>
+              <label class="form-field">
+                <span>{{ t('outbound.recipient') }}</span>
+                <input
+                  v-model.trim="outboundRecipient"
+                  class="form-input"
+                  type="tel"
+                  autocomplete="off"
+                  :placeholder="t('outbound.recipientPlaceholder')"
+                  :disabled="outboundSendLoading"
+                >
+              </label>
+              <label class="form-field form-field-wide">
+                <span>{{ t('outbound.body') }}</span>
+                <textarea
+                  v-model="outboundBody"
+                  class="form-input outbound-body-input"
+                  rows="4"
+                  maxlength="2000"
+                  :placeholder="t('outbound.bodyPlaceholder')"
+                  :disabled="outboundSendLoading"
+                />
+                <small>{{ outboundBody.length }} / 2000</small>
+              </label>
+            </div>
+            <p v-if="outboundSendError" class="inline-alert inline-alert-error" role="alert">
+              {{ outboundSendError }}
+            </p>
+            <button
+              class="btn btn-primary"
+              type="submit"
+              :disabled="!canRequestOutboundSend || outboundSendLoading"
+            >
+              <span v-if="outboundSendLoading" class="spinner" aria-hidden="true" />
+              {{ t('outbound.reviewSend') }}
+            </button>
+          </form>
+
+          <div class="section-header outbound-history-heading">
+            <div>
+              <h3>{{ t('outbound.history') }}</h3>
+              <p class="section-subtitle">
+                {{ t('outbound.loadedSummary', { count: outboundMessages.length }) }}
+              </p>
+            </div>
+          </div>
+
+          <p v-if="outboundError" class="inline-alert inline-alert-warning" role="alert">
+            {{ t('outbound.loadError') }}
+          </p>
+          <div v-if="outboundLoading && outboundMessages.length === 0" class="loading-state">
+            <div class="spinner spinner-lg" aria-hidden="true" />
+            <p>{{ t('common.loading') }}</p>
+          </div>
+          <div v-else-if="outboundMessages.length === 0" class="empty-state card">
+            <div class="empty-state-icon" aria-hidden="true">—</div>
+            <p>{{ t('outbound.empty') }}</p>
+          </div>
+          <div v-else class="messages-list">
+            <OutboundMessageCard
+              v-for="message in outboundMessages"
+              :key="message.commandId"
+              :message="message"
+            />
+          </div>
+          <div v-if="outboundHasMore && outboundMessages.length" class="load-more-row">
+            <button
+              class="btn btn-secondary"
+              :disabled="outboundLoading"
+              @click="loadOlderOutbound"
+            >
+              <span v-if="outboundLoading" class="spinner" aria-hidden="true" />
+              {{ t('messages.loadMore') }}
+            </button>
+          </div>
+        </section>
+
+        <section
           v-if="activeTab === 'devices'"
           id="devices-panel"
           role="tabpanel"
@@ -508,6 +642,21 @@
     </main>
 
     <AdminConfirmDialog
+      :open="Boolean(pendingOutbound)"
+      :title="t('outbound.confirmTitle')"
+      :message="t('outbound.confirmMessage', {
+        deviceId: pendingOutbound?.deviceId || '',
+        sim: (pendingOutbound?.slotIndex ?? 0) + 1,
+        recipient: pendingOutbound?.recipient || '',
+      })"
+      :confirm-label="t('outbound.confirmSend')"
+      :cancel-label="t('common.cancel')"
+      :busy="outboundSendLoading"
+      @confirm="confirmOutboundSend"
+      @cancel="pendingOutbound = null"
+    />
+
+    <AdminConfirmDialog
       :open="Boolean(pendingDeleteDevice)"
       :title="t('devices.deleteDialogTitle')"
       :message="t('devices.deleteConfirm', { deviceId: pendingDeleteDevice?.deviceId || '' })"
@@ -541,7 +690,7 @@ import {
 } from '~/utils/deviceSecret'
 import type { SecretValidation } from '~/utils/deviceSecret'
 
-type AdminTab = 'dashboard' | 'messages' | 'devices'
+type AdminTab = 'dashboard' | 'messages' | 'outbound' | 'devices'
 type ContentFilter = 'all' | 'sms' | 'notifications'
 type DateRange = 'all' | 'today' | '7d' | '30d'
 type TimelineItem =
@@ -556,21 +705,27 @@ const {
   status,
   messages,
   notifications,
+  outboundMessages,
   messageLoading,
   notificationLoading,
+  outboundLoading,
   messageHasMore,
   notificationHasMore,
+  outboundHasMore,
   statusLastSuccessAt,
   messageLastSuccessAt,
   notificationLastSuccessAt,
   statusError,
   messageError,
   notificationError,
+  outboundError,
   simCounts,
   latestMessageTime,
   fetchStatus,
   fetchMessages,
   fetchNotifications,
+  fetchOutboundMessages,
+  sendOutboundMessage,
   fetchDeviceDetails,
   addDevice,
   updateDevice,
@@ -581,12 +736,17 @@ const {
 const tabs: Array<{ id: AdminTab; label: string }> = [
   { id: 'dashboard', label: 'nav.dashboard' },
   { id: 'messages', label: 'nav.messages' },
+  { id: 'outbound', label: 'nav.outbound' },
   { id: 'devices', label: 'nav.devices' },
 ]
 const tabRefs = new Map<AdminTab, HTMLButtonElement>()
 const initialTab = route.query.view
 const activeTab = ref<AdminTab>(
-  initialTab === 'messages' || initialTab === 'devices' ? initialTab : 'dashboard',
+  initialTab === 'messages'
+  || initialTab === 'outbound'
+  || initialTab === 'devices'
+    ? initialTab
+    : 'dashboard',
 )
 const contentFilter = ref<ContentFilter>(
   route.query.type === 'sms' || route.query.type === 'notifications'
@@ -608,6 +768,19 @@ const deviceDetails = ref<GatewayDeviceDetail[]>([])
 const deviceLoading = ref(false)
 const deviceError = ref('')
 const dashboardRefreshing = ref(false)
+
+const outboundDeviceId = ref('')
+const outboundSlotIndex = ref(0)
+const outboundRecipient = ref('')
+const outboundBody = ref('')
+const outboundSendLoading = ref(false)
+const outboundSendError = ref('')
+const pendingOutbound = ref<{
+  deviceId: string
+  slotIndex: number
+  recipient: string
+  body: string
+} | null>(null)
 
 const showAddDevice = ref(false)
 const newDeviceId = ref('')
@@ -643,6 +816,15 @@ const toast = reactive<{
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const contentLoading = computed(() => messageLoading.value || notificationLoading.value)
+const canRequestOutboundSend = computed(() =>
+  Boolean(outboundDeviceId.value)
+  && [0, 1].includes(outboundSlotIndex.value)
+  && outboundRecipient.value.length > 0
+  && outboundRecipient.value.length <= 64
+  && !/[A-Za-z]/.test(outboundRecipient.value)
+  && outboundBody.value.length > 0
+  && outboundBody.value.length <= 2_000,
+)
 const postedNotifications = computed(() =>
   notifications.value.filter(notification => notification.eventType === 'POSTED'),
 )
@@ -761,6 +943,14 @@ watch(notificationSources, (sources) => {
     sourcePackageFilter.value = ''
   }
 })
+watch(deviceDetails, (devices) => {
+  if (
+    devices.length > 0
+    && !devices.some(device => device.deviceId === outboundDeviceId.value)
+  ) {
+    outboundDeviceId.value = devices[0].deviceId
+  }
+})
 watch(activeTab, (tab) => {
   if (tab !== 'messages') hideAllSensitive()
 })
@@ -832,6 +1022,7 @@ async function refreshDashboard(silent = false): Promise<void> {
     fetchStatus(),
     fetchMessages({ limit: 50 }),
     fetchNotifications({ limit: 50 }),
+    fetchOutboundMessages({ limit: 20 }),
     loadDevices(),
   ])
   dashboardRefreshing.value = false
@@ -852,6 +1043,65 @@ async function refreshContent(): Promise<void> {
   if (successes === results.length) showToast(t('common.refreshSuccess'), 'success')
   else if (successes > 0) showToast(t('common.partialRefresh'), 'info')
   else showToast(t('common.refreshFailed'), 'error')
+}
+
+async function refreshOutbound(): Promise<void> {
+  const success = await fetchOutboundMessages({ limit: 50 })
+  showToast(
+    success ? t('common.refreshSuccess') : t('common.refreshFailed'),
+    success ? 'success' : 'error',
+  )
+}
+
+async function loadOlderOutbound(): Promise<void> {
+  if (!outboundMessages.value.length || !outboundHasMore.value) return
+  await fetchOutboundMessages({
+    limit: 50,
+    beforeId: Math.min(...outboundMessages.value.map(message => message.id)),
+    append: true,
+  })
+}
+
+function requestOutboundSend(): void {
+  outboundSendError.value = ''
+  if (!canRequestOutboundSend.value) {
+    outboundSendError.value = t('outbound.invalidRequest')
+    return
+  }
+  pendingOutbound.value = {
+    deviceId: outboundDeviceId.value,
+    slotIndex: outboundSlotIndex.value,
+    recipient: outboundRecipient.value,
+    body: outboundBody.value,
+  }
+}
+
+async function confirmOutboundSend(): Promise<void> {
+  const request = pendingOutbound.value
+  if (!request) return
+  outboundSendLoading.value = true
+  outboundSendError.value = ''
+  try {
+    await sendOutboundMessage({
+      ...request,
+      expiresInSeconds: 300,
+      idempotencyKey: crypto.randomUUID(),
+    })
+    pendingOutbound.value = null
+    outboundRecipient.value = ''
+    outboundBody.value = ''
+    showToast(t('outbound.sendQueued'), 'success')
+    await fetchOutboundMessages({ limit: 50 })
+  } catch (error) {
+    pendingOutbound.value = null
+    outboundSendError.value = gatewayErrorText(
+      error,
+      t('outbound.sendError'),
+    )
+    showToast(outboundSendError.value, 'error')
+  } finally {
+    outboundSendLoading.value = false
+  }
 }
 
 async function retryMessages(): Promise<void> {
@@ -1145,7 +1395,10 @@ async function handleLogout(): Promise<void> {
 .partial-alerts { margin-bottom: var(--space-md); }
 .messages-list, .device-list { display: grid; gap: var(--space-md); }
 .load-more-row { display: flex; justify-content: center; padding: var(--space-lg) 0; }
-.device-form { margin-bottom: var(--space-lg); }
+.device-form, .outbound-form { margin-bottom: var(--space-lg); }
+.outbound-warning { margin-bottom: var(--space-md); }
+.outbound-body-input { min-height: 7rem; resize: vertical; }
+.outbound-history-heading { margin-top: var(--space-xl); }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-md); margin: var(--space-md) 0; }
 .form-field-wide { grid-column: 1 / -1; }
 .secret-field { gap: var(--space-sm); }

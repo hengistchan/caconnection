@@ -9,7 +9,8 @@
     "messages": "Messages & Notifications",
     "logout": "Logout",
     "language": "Language",
-    "devices": "Devices"
+    "devices": "Devices",
+    "outbound": "Send SMS"
   },
   "login": {
     "title": "Admin Login",
@@ -227,5 +228,43 @@
     "deleteSuccess": "Device deleted",
     "deleteDialogTitle": "Delete gateway device",
     "loadError": "Could not load gateway devices."
+  },
+  "outbound": {
+    "title": "Remote SMS",
+    "description": "Queue an SMS for an authenticated gateway device. The Android app has no local compose action.",
+    "refresh": "Refresh history",
+    "warning": "Sending SMS may incur carrier charges. Verify the gateway device, SIM, recipient, and message before confirming.",
+    "device": "Gateway device",
+    "selectDevice": "Select a device",
+    "simLabel": "Sending SIM",
+    "sim": "SIM {sim}",
+    "recipient": "Recipient",
+    "recipientPlaceholder": "Phone number or short code",
+    "body": "Message body",
+    "bodyPlaceholder": "Enter the SMS content",
+    "reviewSend": "Review and send",
+    "confirmTitle": "Confirm remote SMS",
+    "confirmMessage": "Queue this SMS for device {deviceId}, SIM {sim}, recipient {recipient}? Carrier charges may apply.",
+    "confirmSend": "Queue SMS",
+    "sendQueued": "SMS command queued",
+    "sendError": "Unable to queue SMS",
+    "invalidRequest": "Select a device and SIM, then enter a valid recipient and message.",
+    "history": "Sending history",
+    "loadedSummary": "{count} commands loaded",
+    "empty": "No remote SMS commands have been queued.",
+    "loadError": "Unable to load remote SMS history.",
+    "commandId": "Command ID",
+    "updatedAt": "Last updated",
+    "resultCode": "Result code",
+    "status": {
+      "QUEUED": "Queued",
+      "CLAIMED": "Claimed",
+      "CREATED": "Created",
+      "DISPATCHING": "Dispatching",
+      "SENT_TO_MODEM": "Sent to modem",
+      "DELIVERED": "Delivered",
+      "FAILED": "Failed",
+      "EXPIRED": "Expired"
+    }
   }
 }

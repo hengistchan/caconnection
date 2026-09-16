@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   claimGatewayOtp,
   clearGatewayConfigForTests,
+  createGatewayOutboundMessage,
   gatewayFetch,
   getGatewayMessages,
   getGatewayNotifications,
+  getGatewayOutboundMessages,
 } from '../server/utils/gateway'
 
 const messageFixture = {
@@ -37,6 +39,22 @@ const notificationFixture = {
   title: 'Payment received',
   body: 'You received CNY 88.00',
 } as const
+
+const outboundFixture = {
+  id: 44,
+  commandId: 'abcdefghijklmnop',
+  deviceId: 'phone-1',
+  slotIndex: 1,
+  recipient: '10086',
+  body: 'Remote message',
+  status: 'QUEUED',
+  createdAt: 1_757_894_404_000,
+  expiresAt: 1_757_894_704_000,
+  claimedAt: null,
+  updatedAt: 1_757_894_404_000,
+  lastResultCode: null,
+  errorDetail: null,
+}
 
 describe('Gateway BFF client', () => {
   beforeEach(() => {
@@ -90,6 +108,42 @@ describe('Gateway BFF client', () => {
     expect(fetchMock.mock.calls[1][0]).toBe(
       'http://gateway.test/v1/notifications?limit=50&beforeId=80',
     )
+  })
+
+  it('validates and forwards remote outbound messages', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        outboundMessages: [outboundFixture],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        outboundMessage: outboundFixture,
+      }), { status: 201 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(getGatewayOutboundMessages({
+      limit: 25,
+      beforeId: 50,
+      deviceId: 'phone-1',
+    })).resolves.toEqual({ outboundMessages: [outboundFixture] })
+    await expect(createGatewayOutboundMessage({
+      deviceId: 'phone-1',
+      slotIndex: 1,
+      recipient: '10086',
+      body: 'Remote message',
+      expiresInSeconds: 300,
+      idempotencyKey: 'admin-send-command-0001',
+    })).resolves.toEqual({ outboundMessage: outboundFixture })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://gateway.test/v1/outbound-messages?limit=25&beforeId=50&deviceId=phone-1',
+    )
+    const request = fetchMock.mock.calls[1][1] as RequestInit
+    expect(request.method).toBe('POST')
+    expect(JSON.parse(request.body as string)).toMatchObject({
+      deviceId: 'phone-1',
+      slotIndex: 1,
+      recipient: '10086',
+    })
   })
 
   it('omits unknown slotIndex from exact-event OTP claims', async () => {
