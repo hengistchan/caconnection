@@ -75,6 +75,34 @@ describe('MessageCard', () => {
     expect(wrapper.text()).toContain('+8613800000000')
   })
 
+  it('reveals and hides all card content with one control', async () => {
+    const wrapper = mount(MessageCard, {
+      props: {
+        message: {
+          id: 44,
+          deviceId: 'phone-1',
+          createdAt: 1_757_894_400_000,
+          receivedAt: 1_757_894_401_000,
+          subscriptionId: 1,
+          slotIndex: 0,
+          sender: 'Service',
+          body: 'Private content',
+          partCount: 1,
+          resolutionMethod: null,
+          resolutionConfidence: null,
+          otpCandidates: [],
+        },
+      },
+    })
+
+    await wrapper.find('.message-header .btn-ghost').trigger('click')
+    expect(wrapper.text()).toContain('Service')
+    expect(wrapper.text()).toContain('Private content')
+
+    await wrapper.find('.message-header .btn-ghost').trigger('click')
+    expect(wrapper.text()).not.toContain('Private content')
+  })
+
   it('opens an accessible modal, focuses it, and closes on Escape', async () => {
     const wrapper = mount(MessageCard, {
       attachTo: document.body,

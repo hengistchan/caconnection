@@ -3,8 +3,9 @@ info:
   title: CA Connection Gateway API
   version: 0.2.0
   description: >
-    Production API for Android gateway ingestion, authenticated SMS retrieval,
-    and one-time OTP claims. Sensitive response bodies must never be logged.
+    Production API for Android gateway ingestion, authenticated SMS and
+    notification retrieval, device management, pairing, and one-time OTP
+    claims. Sensitive response bodies must never be logged.
 servers:
   - url: https://gateway.example.com
 paths:
@@ -122,6 +123,115 @@ paths:
           description: API authentication failed
         "403":
           description: Token lacks pairing:create scope
+    post:
+      summary: Add a gateway device
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceCreate"
+      responses:
+        "201":
+          description: Device created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device]
+                properties:
+                  device:
+                    $ref: "#/components/schemas/GatewayDevice"
+        "400":
+          description: Invalid request
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+        "409":
+          description: Device already exists
+  /v1/devices/detail:
+    get:
+      summary: List gateway device metadata without exposing secrets
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Device inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [devices]
+                properties:
+                  devices:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GatewayDevice"
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+  /v1/devices/{deviceId}:
+    parameters:
+      - in: path
+        name: deviceId
+        required: true
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+    put:
+      summary: Update a device description or rotate its shared secret
+      description: >
+        Secret rotation atomically re-encrypts historical event payloads so
+        previously captured messages remain readable.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceUpdate"
+      responses:
+        "200":
+          description: Device updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device]
+                properties:
+                  device:
+                    $ref: "#/components/schemas/GatewayDevice"
+        "400":
+          description: Invalid request
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+        "404":
+          description: Device not found
+    delete:
+      summary: Delete a gateway device
+      description: >
+        Deleting a device removes its decryption secret. Historical encrypted
+        content captured from that device will no longer be readable.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Device deleted
+        "400":
+          description: Invalid device ID
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+        "404":
+          description: Device not found
   /v1/pairings/claim:
     post:
       summary: Atomically exchange a one-time pairing token for provisioning
@@ -166,6 +276,12 @@ paths:
             type: integer
             minimum: 0
         - in: query
+          name: beforeId
+          description: Return older records whose ID is lower than this cursor.
+          schema:
+            type: integer
+            minimum: 1
+        - in: query
           name: slotIndex
           schema:
             type: integer
@@ -183,6 +299,51 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/IncomingMessage"
+        "400":
+          description: Invalid query
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks messages:read scope
+        "429":
+          description: Rate limit exceeded
+  /v1/notifications:
+    get:
+      summary: Read decrypted notifications captured from allowlisted apps
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: afterId
+          schema:
+            type: integer
+            minimum: 0
+        - in: query
+          name: beforeId
+          description: Return older records whose ID is lower than this cursor.
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Notifications, including sensitive title and body fields
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CapturedNotification"
         "400":
           description: Invalid query
         "401":
@@ -245,6 +406,52 @@ components:
       type: http
       scheme: bearer
   schemas:
+    GatewayDevice:
+      type: object
+      additionalProperties: false
+      required:
+        - deviceId
+        - description
+        - createdAt
+        - lastSeenAt
+      properties:
+        deviceId:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+        description:
+          type: string
+        createdAt:
+          type: integer
+        lastSeenAt:
+          type: [integer, "null"]
+    DeviceCreate:
+      type: object
+      additionalProperties: false
+      required:
+        - deviceId
+        - secretBase64
+      properties:
+        deviceId:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+        secretBase64:
+          type: string
+          description: Base64-encoded shared secret containing at least 32 bytes.
+        description:
+          type: string
+          default: ""
+    DeviceUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        secretBase64:
+          type: string
+          description: >
+            New Base64-encoded shared secret containing at least 32 bytes.
+            Existing encrypted event payloads are re-encrypted atomically.
+        description:
+          type: string
     EncryptedEnvelope:
       type: object
       additionalProperties: true
@@ -339,6 +546,50 @@ components:
           items:
             type: string
             pattern: "^[0-9]{4,8}$"
+    CapturedNotification:
+      type: object
+      required:
+        - id
+        - deviceId
+        - createdAt
+        - receivedAt
+        - eventType
+        - sourcePackage
+        - notificationId
+        - postedAt
+        - observedAt
+        - channelId
+        - category
+        - title
+        - body
+      properties:
+        id:
+          type: integer
+        deviceId:
+          type: string
+        createdAt:
+          type: integer
+        receivedAt:
+          type: integer
+        eventType:
+          type: [string, "null"]
+          enum: [POSTED, REMOVED, null]
+        sourcePackage:
+          type: [string, "null"]
+        notificationId:
+          type: [integer, "null"]
+        postedAt:
+          type: [integer, "null"]
+        observedAt:
+          type: [integer, "null"]
+        channelId:
+          type: [string, "null"]
+        category:
+          type: [string, "null"]
+        title:
+          type: [string, "null"]
+        body:
+          type: [string, "null"]
     OtpClaim:
       type: object
       required:

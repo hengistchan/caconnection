@@ -4,6 +4,7 @@ import {
   clearGatewayConfigForTests,
   gatewayFetch,
   getGatewayMessages,
+  getGatewayNotifications,
 } from '../server/utils/gateway'
 
 const messageFixture = {
@@ -20,6 +21,22 @@ const messageFixture = {
   resolutionConfidence: 'LOW',
   otpCandidates: ['482913'],
 }
+
+const notificationFixture = {
+  id: 43,
+  deviceId: 'phone-1',
+  createdAt: 1_757_894_402_000,
+  receivedAt: 1_757_894_403_000,
+  eventType: 'POSTED',
+  sourcePackage: 'com.example.bank',
+  notificationId: 7,
+  postedAt: 1_757_894_400_000,
+  observedAt: 1_757_894_401_000,
+  channelId: 'transactions',
+  category: 'msg',
+  title: 'Payment received',
+  body: 'You received CNY 88.00',
+} as const
 
 describe('Gateway BFF client', () => {
   beforeEach(() => {
@@ -46,6 +63,35 @@ describe('Gateway BFF client', () => {
     })
   })
 
+  it('accepts notification title and body fields', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ notifications: [notificationFixture] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ))
+    await expect(getGatewayNotifications()).resolves.toEqual({
+      notifications: [notificationFixture],
+    })
+  })
+
+  it('forwards older-page cursors for message and notification queries', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ notifications: [] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getGatewayMessages({ limit: 25, beforeId: 40 })
+    await getGatewayNotifications({ limit: 50, beforeId: 80 })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://gateway.test/v1/messages?limit=25&beforeId=40',
+    )
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'http://gateway.test/v1/notifications?limit=50&beforeId=80',
+    )
+  })
+
   it('omits unknown slotIndex from exact-event OTP claims', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({
@@ -69,7 +115,7 @@ describe('Gateway BFF client', () => {
     })
   })
 
-  it.each([400, 401, 403, 404, 410, 429, 503])(
+  it.each([400, 401, 403, 404, 409, 410, 429, 503])(
     'preserves safe Gateway status %i without exposing response text',
     async (status) => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
@@ -103,6 +149,17 @@ describe('Gateway BFF client', () => {
       }), { status: 200 }),
     ))
     await expect(getGatewayMessages()).rejects.toMatchObject({
+      statusCode: 502,
+    })
+  })
+
+  it('rejects malformed notification content fields', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        notifications: [{ ...notificationFixture, title: 123 }],
+      }), { status: 200 }),
+    ))
+    await expect(getGatewayNotifications()).rejects.toMatchObject({
       statusCode: 502,
     })
   })

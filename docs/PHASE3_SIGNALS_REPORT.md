@@ -2,6 +2,10 @@
 
 Date: 2026-09-13
 
+> Historical note (2026-09-16): the notification pipeline now persists and
+> uploads the title and body for explicitly allowlisted applications. The
+> metadata-only boundary described below documents the original Phase 3A POC.
+
 ## Scope
 
 This slice answers two additional gateway questions without adding a network

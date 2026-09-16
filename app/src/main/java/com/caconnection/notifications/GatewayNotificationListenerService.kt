@@ -44,7 +44,7 @@ class GatewayNotificationListenerService : NotificationListenerService() {
         }
 
         runCatching {
-            RedactedNotificationFactory.create(sbn, eventType, removalReason)
+            NotificationEventFactory.create(sbn, eventType, removalReason)
         }.onSuccess { event ->
             val shouldCapture = when (eventType) {
                 EVENT_POSTED ->
@@ -57,7 +57,7 @@ class GatewayNotificationListenerService : NotificationListenerService() {
                 PocEventStore.get(this).insertNotificationWithOutbox(event)
             }
         }.onFailure {
-            Log.e(TAG, "Unable to capture redacted notification metadata", it)
+            Log.e(TAG, "Unable to capture allowlisted notification content", it)
         }
     }
 

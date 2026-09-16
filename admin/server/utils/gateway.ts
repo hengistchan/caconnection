@@ -7,7 +7,7 @@ let gatewayConfig: {
   baseUrl: string
 } | null = null
 
-const FORWARDED_STATUS_CODES = new Set([400, 401, 403, 404, 410, 429, 503])
+const FORWARDED_STATUS_CODES = new Set([400, 401, 403, 404, 409, 410, 429, 503])
 
 interface GatewayErrorData {
   retryAfter?: string
@@ -85,6 +85,7 @@ function gatewayErrorMessage(status: number): string {
     case 401: return 'Gateway authentication failed'
     case 403: return 'Gateway denied the request'
     case 404: return 'Gateway resource was not found'
+    case 409: return 'Gateway resource already exists'
     case 410: return 'Gateway resource is no longer available'
     case 429: return 'Gateway rate limit exceeded'
     case 503: return 'Gateway service is not ready'
@@ -95,7 +96,7 @@ function gatewayErrorMessage(status: number): string {
 export async function gatewayFetch(
   path: string,
   options: {
-    method?: 'GET' | 'POST'
+    method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
     body?: Record<string, unknown>
     timeout?: number
   } = {},
@@ -115,7 +116,7 @@ export async function gatewayFetch(
     headers,
     signal: AbortSignal.timeout(timeout),
   }
-  if (body && method === 'POST') {
+  if (body && (method === 'POST' || method === 'PUT')) {
     headers['Content-Type'] = 'application/json'
     fetchOptions.body = JSON.stringify(body)
   }
@@ -188,6 +189,26 @@ export interface GatewayMessagesResponse {
   messages: GatewayMessage[]
 }
 
+export interface GatewayNotification {
+  id: number
+  deviceId: string
+  createdAt: number
+  receivedAt: number
+  eventType: 'POSTED' | 'REMOVED' | null
+  sourcePackage: string | null
+  notificationId: number | null
+  postedAt: number | null
+  observedAt: number | null
+  channelId: string | null
+  category: string | null
+  title: string | null
+  body: string | null
+}
+
+export interface GatewayNotificationsResponse {
+  notifications: GatewayNotification[]
+}
+
 export interface GatewayOtpClaimResponse {
   otp: {
     eventId: number
@@ -202,6 +223,21 @@ export interface GatewayOtpClaimResponse {
 
 export interface GatewayDevicesResponse {
   devices: string[]
+}
+
+export interface GatewayDeviceDetail {
+  deviceId: string
+  description: string
+  createdAt: number
+  lastSeenAt: number | null
+}
+
+export interface GatewayDeviceDetailResponse {
+  devices: GatewayDeviceDetail[]
+}
+
+export interface GatewayDeviceResponse {
+  device: GatewayDeviceDetail
 }
 
 export interface GatewayPairingResponse {
@@ -265,6 +301,38 @@ function parseMessagesResponse(value: unknown): GatewayMessagesResponse {
     return invalidGatewayResponse()
   }
   return { messages: value.messages.map(parseMessage) }
+}
+
+function parseNotification(value: unknown): GatewayNotification {
+  if (
+    !isRecord(value)
+    || typeof value.id !== 'number'
+    || !Number.isSafeInteger(value.id)
+    || typeof value.deviceId !== 'string'
+    || typeof value.createdAt !== 'number'
+    || !Number.isSafeInteger(value.createdAt)
+    || typeof value.receivedAt !== 'number'
+    || !Number.isSafeInteger(value.receivedAt)
+    || !(value.eventType === null || value.eventType === 'POSTED' || value.eventType === 'REMOVED')
+    || !(value.sourcePackage === null || typeof value.sourcePackage === 'string')
+    || !isNullableInteger(value.notificationId)
+    || !isNullableInteger(value.postedAt)
+    || !isNullableInteger(value.observedAt)
+    || !(value.channelId === null || typeof value.channelId === 'string')
+    || !(value.category === null || typeof value.category === 'string')
+    || !(value.title === null || typeof value.title === 'string')
+    || !(value.body === null || typeof value.body === 'string')
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayNotification
+}
+
+function parseNotificationsResponse(value: unknown): GatewayNotificationsResponse {
+  if (!isRecord(value) || !Array.isArray(value.notifications)) {
+    return invalidGatewayResponse()
+  }
+  return { notifications: value.notifications.map(parseNotification) }
 }
 
 function parseDevicesResponse(value: unknown): GatewayDevicesResponse {
@@ -331,6 +399,7 @@ export async function getGatewayMessages(options: {
   limit?: number
   slotIndex?: number | null
   afterId?: number | null
+  beforeId?: number | null
 } = {}): Promise<GatewayMessagesResponse> {
   const params = new URLSearchParams()
   if (options.limit) params.set('limit', options.limit.toString())
@@ -340,9 +409,31 @@ export async function getGatewayMessages(options: {
   if (options.afterId !== undefined && options.afterId !== null) {
     params.set('afterId', options.afterId.toString())
   }
+  if (options.beforeId !== undefined && options.beforeId !== null) {
+    params.set('beforeId', options.beforeId.toString())
+  }
   const query = params.toString()
   return parseMessagesResponse(
     await gatewayFetch(`/v1/messages${query ? `?${query}` : ''}`),
+  )
+}
+
+export async function getGatewayNotifications(options: {
+  limit?: number
+  afterId?: number | null
+  beforeId?: number | null
+} = {}): Promise<GatewayNotificationsResponse> {
+  const params = new URLSearchParams()
+  if (options.limit) params.set('limit', options.limit.toString())
+  if (options.afterId !== undefined && options.afterId !== null) {
+    params.set('afterId', options.afterId.toString())
+  }
+  if (options.beforeId !== undefined && options.beforeId !== null) {
+    params.set('beforeId', options.beforeId.toString())
+  }
+  const query = params.toString()
+  return parseNotificationsResponse(
+    await gatewayFetch(`/v1/notifications${query ? `?${query}` : ''}`),
   )
 }
 
@@ -379,4 +470,63 @@ export async function claimGatewayOtp(options: {
 
 export function clearGatewayConfigForTests(): void {
   gatewayConfig = null
+}
+
+function parseDeviceDetail(value: unknown): GatewayDeviceDetail {
+  if (
+    !isRecord(value)
+    || typeof value.deviceId !== 'string'
+    || typeof value.description !== 'string'
+    || typeof value.createdAt !== 'number'
+    || !Number.isSafeInteger(value.createdAt)
+    || !(value.lastSeenAt === null || (typeof value.lastSeenAt === 'number' && Number.isSafeInteger(value.lastSeenAt)))
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayDeviceDetail
+}
+
+function parseDeviceDetailResponse(value: unknown): GatewayDeviceDetailResponse {
+  if (!isRecord(value) || !Array.isArray(value.devices)) {
+    return invalidGatewayResponse()
+  }
+  return { devices: value.devices.map(parseDeviceDetail) }
+}
+
+function parseSingleDeviceResponse(value: unknown): GatewayDeviceResponse {
+  if (!isRecord(value) || !isRecord(value.device)) {
+    return invalidGatewayResponse()
+  }
+  return { device: parseDeviceDetail(value.device) }
+}
+
+export async function getGatewayDeviceDetails(): Promise<GatewayDeviceDetailResponse> {
+  return parseDeviceDetailResponse(await gatewayFetch('/v1/devices/detail'))
+}
+
+export async function createGatewayDevice(options: {
+  deviceId: string
+  secretBase64: string
+  description?: string
+}): Promise<GatewayDeviceResponse> {
+  return parseSingleDeviceResponse(await gatewayFetch('/v1/devices', {
+    method: 'POST',
+    body: options,
+  }))
+}
+
+export async function updateGatewayDevice(
+  deviceId: string,
+  options: { description?: string; secretBase64?: string },
+): Promise<GatewayDeviceResponse> {
+  return parseSingleDeviceResponse(await gatewayFetch(`/v1/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'PUT',
+    body: options,
+  }))
+}
+
+export async function deleteGatewayDevice(deviceId: string): Promise<void> {
+  await gatewayFetch(`/v1/devices/${encodeURIComponent(deviceId)}`, {
+    method: 'DELETE',
+  })
 }

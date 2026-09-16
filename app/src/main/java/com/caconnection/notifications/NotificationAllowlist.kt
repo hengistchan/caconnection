@@ -23,6 +23,47 @@ object NotificationAllowlist {
         return packages
     }
 
+    /**
+     * Add a single package to the allowlist.
+     * Returns the updated set of allowed packages.
+     */
+    fun addPackage(context: Context, packageName: String): Set<String> {
+        if (packageName == context.packageName || !packagePattern.matches(packageName)) {
+            return get(context)
+        }
+        val current = get(context).toMutableSet()
+        current.add(packageName)
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit { putStringSet(KEY_PACKAGES, current) }
+        return current.toSortedSet()
+    }
+
+    /**
+     * Remove a single package from the allowlist.
+     * Returns the updated set of allowed packages.
+     */
+    fun removePackage(context: Context, packageName: String): Set<String> {
+        val current = get(context).toMutableSet()
+        current.remove(packageName)
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit { putStringSet(KEY_PACKAGES, current) }
+        return current.toSortedSet()
+    }
+
+    /**
+     * Set a single package (replace all existing with this one).
+     * Returns the updated set containing only the specified package.
+     */
+    fun setSingle(context: Context, packageName: String): Set<String> {
+        if (packageName == context.packageName || !packagePattern.matches(packageName)) {
+            return get(context)
+        }
+        val packages = sortedSetOf(packageName)
+        context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+            .edit { putStringSet(KEY_PACKAGES, packages) }
+        return packages
+    }
+
     fun isAllowed(context: Context, packageName: String): Boolean =
         packageName != context.packageName && packageName in get(context)
 

@@ -133,7 +133,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var settingsReadinessList: LinearLayout
     private lateinit var notificationAccessStatus: TextView
-    private lateinit var notificationAllowlistInput: EditText
+    private lateinit var selectedAppName: TextView
+    private lateinit var selectAppButton: MaterialButton
     private lateinit var transportStatusTitle: TextView
     private lateinit var transportStatusDetail: TextView
     private lateinit var transportEndpointInput: EditText
@@ -184,6 +185,15 @@ class MainActivity : AppCompatActivity() {
                 launchQrScanner()
             } else {
                 toast(R.string.camera_permission_required)
+            }
+        }
+
+    private val installedAppsPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) {
+                showAppSelectionDialog()
+            } else {
+                toast(R.string.installed_apps_permission_required)
             }
         }
 
@@ -605,21 +615,17 @@ class MainActivity : AppCompatActivity() {
             },
             topMarginParams(12)
         )
-        val allowlist = textField(
-            getString(R.string.notification_allowlist_label),
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
-            helper = getString(R.string.notification_allowlist_helper),
-            minLines = 4
-        )
-        notificationAllowlistInput = allowlist.editText
-        notificationAllowlistInput.setText(NotificationAllowlist.get(this).joinToString("\n"))
-        notificationBody.addView(allowlist.layout, topMarginParams(10))
-        notificationBody.addView(
-            primaryButton(getString(R.string.save_notification_allowlist)).apply {
-                setOnClickListener { saveNotificationAllowlist() }
-            },
-            topMarginParams(10)
-        )
+        // Selected app display
+        val selectedAppContainer = horizontal(gravity = Gravity.CENTER_VERTICAL)
+        selectedAppName = secondaryText(getString(R.string.no_app_selected), 14)
+        selectedAppContainer.addView(selectedAppName, weightedParams())
+        notificationBody.addView(selectedAppContainer, topMarginParams(16))
+        // Update display with current selection
+        updateSelectedAppDisplay()
+        selectAppButton = primaryButton(getString(R.string.select_app)).apply {
+            setOnClickListener { showAppSelectionDialog() }
+        }
+        notificationBody.addView(selectAppButton, topMarginParams(10))
         notificationCard.addView(notificationBody)
         settingsContent.addView(notificationCard)
 
@@ -1483,16 +1489,255 @@ class MainActivity : AppCompatActivity() {
         return row
     }
 
-    private fun saveNotificationAllowlist() {
-        val packages = NotificationAllowlist.set(
-            this,
-            notificationAllowlistInput.text.toString()
-        )
-        notificationAllowlistInput.setText(packages.joinToString("\n"))
-        NotificationAccess.requestRebindIfEnabled(this)
-        toast(getString(R.string.allowlist_saved, packages.size))
-        refreshStoredEvents()
+    private fun updateSelectedAppDisplay() {
+        val allowedPackages = NotificationAllowlist.get(this)
+        if (allowedPackages.isEmpty()) {
+            selectedAppName.text = getString(R.string.no_app_selected)
+        } else if (allowedPackages.size == 1) {
+            val packageName = allowedPackages.first()
+            val appName = getAppName(packageName)
+            selectedAppName.text = "$appName\n$packageName"
+        } else {
+            selectedAppName.text = getString(R.string.apps_selected, allowedPackages.size)
+        }
     }
+
+    private fun getAppName(packageName: String): String {
+        return try {
+            val appInfo = packageManager.getApplicationInfo(packageName, 0)
+            packageManager.getApplicationLabel(appInfo).toString()
+        } catch (e: Exception) {
+            packageName
+        }
+    }
+
+    private fun showAppSelectionDialog() {
+        // Check GET_INSTALLED_APPS permission first (required for MIUI/HyperOS)
+        val permission = "com.android.permission.GET_INSTALLED_APPS"
+        try {
+            val permissionInfo = packageManager.getPermissionInfo(permission, 0)
+            if (permissionInfo != null &&
+                permissionInfo.packageName == "com.lbe.security.miui" &&
+                ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+            ) {
+                // Need to request permission on MIUI/HyperOS
+                installedAppsPermissionLauncher.launch(permission)
+                return
+            }
+        } catch (_: Exception) {
+            // Permission doesn't exist, proceed normally
+        }
+
+        // Show loading state
+        selectAppButton.isEnabled = false
+        selectAppButton.text = getString(R.string.loading_apps)
+
+        activityScope.launch {
+            val allApps = withContext(Dispatchers.IO) {
+                getInstalledApps()
+            }
+
+            // Restore button state
+            selectAppButton.isEnabled = true
+            selectAppButton.text = getString(R.string.select_app)
+
+            if (allApps.isEmpty()) {
+                toast(R.string.no_apps_found)
+                return@launch
+            }
+
+            showAppSelectionDialogWithApps(allApps)
+        }
+    }
+
+    private fun showAppSelectionDialogWithApps(allApps: List<AppInfo>) {
+        val currentAllowed = NotificationAllowlist.get(this)
+        val selectedPackages = allApps
+            .filter { it.packageName in currentAllowed }
+            .map { it.packageName }
+            .toMutableSet()
+
+        // Split into user and system apps
+        val userApps = allApps.filter { it.isUserApp }
+        val systemApps = allApps.filter { !it.isUserApp }
+
+        // Create dialog with custom layout
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val dp16 = dp(16)
+            setPadding(dp16, dp16, dp16, 0)
+        }
+
+        // Search input
+        val searchInput = EditText(this).apply {
+            hint = getString(R.string.search_apps)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_NORMAL
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.bottomMargin = dp(12)
+            layoutParams = params
+        }
+        dialogView.addView(searchInput)
+
+        // ScrollView with CheckBox list
+        val scrollView = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Store all checkbox views for filtering
+        data class AppCheckBox(
+            val checkBox: android.widget.CheckBox,
+            val sectionHeader: TextView?,
+            val appInfo: AppInfo
+        )
+        val appCheckBoxes = mutableListOf<AppCheckBox>()
+
+        fun addSectionHeader(title: String): TextView {
+            val header = TextView(this@MainActivity).apply {
+                text = title
+                textSize = 14f
+                setTextColor(color(R.color.brand_blue))
+                setPadding(0, dp(8), 0, dp(4))
+                setTypeface(null, Typeface.BOLD)
+            }
+            listContainer.addView(header)
+            return header
+        }
+
+        fun addAppCheckBox(app: AppInfo, header: TextView?) {
+            val checkBox = android.widget.CheckBox(this@MainActivity).apply {
+                text = "${app.appName}\n${app.packageName}"
+                textSize = 13f
+                isChecked = app.packageName in selectedPackages
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                setOnCheckedChangeListener { _, isChecked ->
+                    if (isChecked) {
+                        selectedPackages.add(app.packageName)
+                    } else {
+                        selectedPackages.remove(app.packageName)
+                    }
+                }
+            }
+            listContainer.addView(checkBox)
+            appCheckBoxes.add(AppCheckBox(checkBox, header, app))
+        }
+
+        // Add user apps section
+        val userHeader = if (userApps.isNotEmpty()) {
+            addSectionHeader(getString(R.string.user_apps))
+        } else null
+        userApps.forEach { addAppCheckBox(it, userHeader) }
+
+        // Add system apps section
+        val systemHeader = if (systemApps.isNotEmpty()) {
+            addSectionHeader(getString(R.string.system_apps))
+        } else null
+        systemApps.forEach { addAppCheckBox(it, systemHeader) }
+
+        scrollView.addView(listContainer)
+        dialogView.addView(scrollView)
+
+        // Search filter
+        searchInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val query = s?.toString()?.lowercase() ?: ""
+                var hasVisibleUserApps = false
+                var hasVisibleSystemApps = false
+
+                appCheckBoxes.forEach { item ->
+                    val matches = query.isEmpty() ||
+                        item.appInfo.appName.lowercase().contains(query) ||
+                        item.appInfo.packageName.lowercase().contains(query)
+                    item.checkBox.visibility = if (matches) View.VISIBLE else View.GONE
+
+                    if (matches) {
+                        if (item.appInfo.isUserApp) hasVisibleUserApps = true
+                        else hasVisibleSystemApps = true
+                    }
+                }
+
+                userHeader?.visibility = if (hasVisibleUserApps) View.VISIBLE else View.GONE
+                systemHeader?.visibility = if (hasVisibleSystemApps) View.VISIBLE else View.GONE
+            }
+        })
+
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.select_app)
+            .setView(dialogView)
+            .setPositiveButton(R.string.confirm) { dialog, _ ->
+                NotificationAllowlist.set(this, selectedPackages.joinToString(","))
+                updateSelectedAppDisplay()
+                NotificationAccess.requestRebindIfEnabled(this)
+                toast(getString(R.string.allowlist_saved, selectedPackages.size))
+                refreshStoredEvents()
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun isSystemPackage(appInfo: android.content.pm.ApplicationInfo): Boolean {
+        // Check if installed in system partition
+        val sourceDir = appInfo.sourceDir ?: return false
+        if (sourceDir.startsWith("/system/") || sourceDir.startsWith("/vendor/") ||
+            sourceDir.startsWith("/product/") || sourceDir.startsWith("/oem/")) {
+            return true
+        }
+        // Check FLAG_SYSTEM but not FLAG_UPDATED_SYSTEM_APP
+        val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+        val isUpdated = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+        // Log for debugging
+        android.util.Log.d("AppFilter", "sourceDir=$sourceDir, isSystem=$isSystem, isUpdated=$isUpdated, flags=${appInfo.flags}")
+        return isSystem && !isUpdated
+    }
+
+    private fun getInstalledApps(): List<AppInfo> {
+        // Get all installed packages
+        val packages = packageManager.getInstalledPackages(0)
+        android.util.Log.d("AppFilter", "Total packages: ${packages.size}")
+
+        val apps = packages
+            .asSequence()
+            .filter { it.packageName != packageName }
+            .mapNotNull { packageInfo ->
+                val appPackageName = packageInfo.packageName
+                val appInfo = packageInfo.applicationInfo ?: return@mapNotNull null
+                val appName = packageManager.getApplicationLabel(appInfo).toString()
+                val icon = try {
+                    packageManager.getApplicationIcon(appInfo)
+                } catch (e: Exception) {
+                    null
+                }
+                val isUserApp = !isSystemPackage(appInfo)
+                AppInfo(appPackageName, appName, icon, isUserApp)
+            }
+            .distinctBy { it.packageName }
+            .sortedWith(compareBy<AppInfo> { !it.isUserApp }.thenBy { it.appName.lowercase() })
+            .toList()
+
+        android.util.Log.d("AppFilter", "User apps: ${apps.count { it.isUserApp }}, System apps: ${apps.count { !it.isUserApp }}")
+        return apps
+    }
+
+    private data class AppInfo(
+        val packageName: String,
+        val appName: String,
+        val icon: android.graphics.drawable.Drawable?,
+        val isUserApp: Boolean = true
+    )
 
     private fun saveTransportConfiguration() {
         runCatching {

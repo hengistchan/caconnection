@@ -24,6 +24,8 @@ class NotificationEventDeduplicator(
             event.sourcePackage,
             event.notificationKeyHash.orEmpty(),
             event.postedAt.toString(),
+            event.title.orEmpty(),
+            event.body.orEmpty(),
             event.titleLength.toString(),
             event.textLength.toString()
         ).joinToString("|")

@@ -18,7 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 CallIdentityEventEntity.class,
                 OutboxEventEntity.class
         },
-        version = 4,
+        version = 5,
         exportSchema = true
 )
 public abstract class PocDatabase extends RoomDatabase {
@@ -117,6 +117,18 @@ public abstract class PocDatabase extends RoomDatabase {
         }
     };
 
+    static final Migration MIGRATION_4_5 = new Migration(4, 5) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "ALTER TABLE `notification_events` ADD COLUMN `title` TEXT"
+            );
+            database.execSQL(
+                "ALTER TABLE `notification_events` ADD COLUMN `body` TEXT"
+            );
+        }
+    };
+
     public abstract PocDao pocDao();
 
     public static PocDatabase get(Context context) {
@@ -131,7 +143,8 @@ public abstract class PocDatabase extends RoomDatabase {
                             .addMigrations(
                                     MIGRATION_1_2,
                                     MIGRATION_2_3,
-                                    MIGRATION_3_4
+                                    MIGRATION_3_4,
+                                    MIGRATION_4_5
                             )
                             .build();
                 }

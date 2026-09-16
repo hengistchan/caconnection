@@ -7,7 +7,14 @@
           {{ formattedTime }}
         </time>
       </div>
-      <span class="message-id text-muted">#{{ message.id }}</span>
+      <button
+        v-if="message.sender || message.body"
+        type="button"
+        class="btn btn-ghost btn-sm"
+        @click="toggleCardContent"
+      >
+        {{ cardContentVisible ? t('messages.hideContent') : t('messages.showContent') }}
+      </button>
     </header>
 
     <dl class="message-fields">
@@ -52,20 +59,31 @@
       </div>
     </dl>
 
-    <dl v-if="hasDetails" class="message-details">
-      <div v-if="message.partCount && message.partCount > 1" class="detail-item">
-        <dt>{{ t('messages.partCount') }}</dt>
-        <dd>{{ message.partCount }}</dd>
-      </div>
-      <div v-if="message.resolutionMethod" class="detail-item">
-        <dt>{{ t('messages.resolutionMethod') }}</dt>
-        <dd>{{ message.resolutionMethod }}</dd>
-      </div>
-      <div v-if="message.resolutionConfidence" class="detail-item">
-        <dt>{{ t('messages.resolutionConfidence') }}</dt>
-        <dd>{{ confidenceLabel }}</dd>
-      </div>
-    </dl>
+    <details class="technical-details">
+      <summary>{{ t('messages.technicalDetails') }}</summary>
+      <dl class="message-details">
+        <div class="detail-item">
+          <dt>{{ t('messages.eventId') }}</dt>
+          <dd>#{{ message.id }}</dd>
+        </div>
+        <div class="detail-item">
+          <dt>{{ t('messages.deviceId') }}</dt>
+          <dd>{{ message.deviceId }}</dd>
+        </div>
+        <div v-if="message.partCount && message.partCount > 1" class="detail-item">
+          <dt>{{ t('messages.partCount') }}</dt>
+          <dd>{{ message.partCount }}</dd>
+        </div>
+        <div v-if="message.resolutionMethod" class="detail-item">
+          <dt>{{ t('messages.resolutionMethod') }}</dt>
+          <dd>{{ message.resolutionMethod }}</dd>
+        </div>
+        <div v-if="message.resolutionConfidence" class="detail-item">
+          <dt>{{ t('messages.resolutionConfidence') }}</dt>
+          <dd>{{ confidenceLabel }}</dd>
+        </div>
+      </dl>
+    </details>
 
     <section v-if="hasOtp" class="message-otp">
       <div class="otp-heading">
@@ -145,7 +163,12 @@ import type { GatewayMessage } from '~/composables/useGateway'
 
 const { t, locale } = useI18n()
 const { claimOtp } = useGateway()
-const props = defineProps<{ message: GatewayMessage }>()
+const props = withDefaults(defineProps<{
+  message: GatewayMessage
+  revealAll?: boolean
+}>(), {
+  revealAll: false,
+})
 
 const senderVisible = ref(false)
 const bodyVisible = ref(false)
@@ -196,12 +219,9 @@ const maskedSender = computed(() => {
 
 const maskedBody = computed(() => props.message.body ? '••••••••' : '—')
 const hasOtp = computed(() => props.message.otpCandidates.length > 0)
-const hasDetails = computed(() =>
-  Boolean(
-    (props.message.partCount && props.message.partCount > 1)
-    || props.message.resolutionMethod
-    || props.message.resolutionConfidence,
-  ),
+const cardContentVisible = computed(() =>
+  (!props.message.sender || senderVisible.value)
+  && (!props.message.body || bodyVisible.value),
 )
 
 const confidenceLabel = computed(() => {
@@ -232,6 +252,17 @@ watch(showClaimConfirm, async (isOpen) => {
     document.body.style.overflow = previousBodyOverflow
   }
 })
+
+watch(() => props.revealAll, (reveal) => {
+  senderVisible.value = reveal
+  bodyVisible.value = reveal
+}, { immediate: true })
+
+function toggleCardContent(): void {
+  const reveal = !cardContentVisible.value
+  senderVisible.value = reveal
+  bodyVisible.value = reveal
+}
 
 function openClaimDialog() {
   showClaimConfirm.value = true
@@ -343,17 +374,12 @@ onUnmounted(() => {
   gap: var(--space-sm);
 }
 
-.message-time,
-.message-id {
+.message-time {
   font-size: 0.75rem;
 }
 
 .message-time {
   color: var(--color-text-secondary);
-}
-
-.message-id {
-  font-family: var(--font-mono);
 }
 
 .message-fields {
@@ -417,14 +443,25 @@ onUnmounted(() => {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-lg);
-  margin-top: var(--space-md);
-  padding-top: var(--space-md);
-  border-top: 1px solid var(--color-border);
+  margin-top: var(--space-sm);
 }
 
 .detail-item {
   display: grid;
   gap: 0.1rem;
+}
+
+.technical-details {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--color-border);
+}
+
+.technical-details summary {
+  color: var(--color-primary-text);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  font-weight: 650;
 }
 
 .message-otp {

@@ -5,11 +5,11 @@ import androidx.room.Entity;
 import androidx.room.PrimaryKey;
 
 /**
- * Metadata-only notification observation.
+ * Notification observation captured from an explicitly allowlisted app.
  *
- * Raw title, body, subtext, actions, and notification extras are deliberately
- * not persisted. This lets the POC prove that a listener callback happened
- * without creating another store of OTP or private notification content.
+ * The user-visible title and body are persisted so they can be delivered to
+ * the Gateway API and Admin UI. Actions and arbitrary notification extras are
+ * still excluded.
  */
 @Entity(tableName = "notification_events")
 public class NotificationEventEntity {
@@ -29,6 +29,8 @@ public class NotificationEventEntity {
     public long observedAt;
     public String channelId;
     public String category;
+    public String title;
+    public String body;
     public boolean titleExposed;
     public boolean textExposed;
     public int titleLength;
@@ -36,7 +38,7 @@ public class NotificationEventEntity {
     public Integer removalReason;
 
     @NonNull
-    public String redactionPolicy; // METADATA_ONLY
+    public String redactionPolicy; // Legacy field; current value is ALLOWLIST_CONTENT
 
     public NotificationEventEntity(
             @NonNull String eventId,
@@ -48,6 +50,8 @@ public class NotificationEventEntity {
             long observedAt,
             String channelId,
             String category,
+            String title,
+            String body,
             boolean titleExposed,
             boolean textExposed,
             int titleLength,
@@ -64,6 +68,8 @@ public class NotificationEventEntity {
         this.observedAt = observedAt;
         this.channelId = channelId;
         this.category = category;
+        this.title = title;
+        this.body = body;
         this.titleExposed = titleExposed;
         this.textExposed = textExposed;
         this.titleLength = titleLength;

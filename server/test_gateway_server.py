@@ -131,6 +131,61 @@ class GatewayServerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^invalid encrypted payload$"):
             decrypt_payload(tampered, "device", secret)
 
+    def test_device_secret_rotation_reencrypts_existing_events(self) -> None:
+        old_secret = b"o" * 32
+        new_secret = b"n" * 32
+        self.store.add_device(
+            "device",
+            base64.b64encode(old_secret).decode(),
+            "Gateway",
+            1_000,
+        )
+        envelope = {
+            **self.envelope,
+            "eventType": "INCOMING_SMS",
+            "payload": {
+                "originatingAddress": "service",
+                "body": "Historical message",
+                "partCount": 1,
+            },
+        }
+        encrypted = encrypt_payload(envelope, "device", old_secret)
+        self.store.accept(
+            "device",
+            "rotation-key",
+            "rotation-nonce",
+            encrypted,
+            2_000,
+        )
+
+        updated = self.store.update_device(
+            "device",
+            secret_base64=base64.b64encode(new_secret).decode(),
+        )
+
+        self.assertIsNotNone(updated)
+        stored = self.store.latest()[0]["envelope"]
+        self.assertEqual(
+            "Historical message",
+            decrypt_payload(stored, "device", new_secret)["payload"]["body"],
+        )
+        with self.assertRaisesRegex(ValueError, "^invalid encrypted payload$"):
+            decrypt_payload(stored, "device", old_secret)
+
+    def test_config_device_migration_is_one_time(self) -> None:
+        config_devices = {"device": b"x" * 32}
+
+        self.assertEqual(
+            1,
+            self.store.migrate_devices_from_config(config_devices),
+        )
+        self.assertTrue(self.store.delete_device("device"))
+        self.assertEqual(
+            0,
+            self.store.migrate_devices_from_config(config_devices),
+        )
+        self.assertEqual({}, self.store.load_devices())
+
     def test_protocol_v2_golden_vector_matches_android(self) -> None:
         body = (
             '{"schemaVersion":2,"deliveryId":"delivery-1",'
@@ -531,6 +586,122 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         raw = json.dumps(self.store.latest()[0]["envelope"])
         self.assertNotIn("482913", raw)
 
+    def test_authenticated_notification_api_returns_title_and_body(self) -> None:
+        body = self.encrypted_body(
+            event_type="NOTIFICATION",
+            payload={
+                "eventId": "notification-source-event",
+                "eventType": "POSTED",
+                "sourcePackage": "com.example.bank",
+                "notificationId": 42,
+                "postedAt": 1_757_894_400_000,
+                "observedAt": 1_757_894_401_000,
+                "channelId": "transactions",
+                "category": "msg",
+                "title": "Payment received",
+                "body": "You received CNY 88.00",
+            },
+        )
+        self.assertEqual(
+            201,
+            self.request(
+                body=body,
+                nonce="notification-nonce",
+                idempotency_key="notification-key",
+            )[0],
+        )
+
+        self.assertEqual(
+            401, self.api_request("GET", "/v1/notifications")[0]
+        )
+        status, response = self.api_request(
+            "GET",
+            "/v1/notifications?limit=10",
+            token=self.api_token,
+        )
+
+        self.assertEqual(200, status)
+        self.assertEqual(1, len(response["notifications"]))
+        notification = response["notifications"][0]
+        self.assertEqual("POSTED", notification["eventType"])
+        self.assertEqual("com.example.bank", notification["sourcePackage"])
+        self.assertEqual("Payment received", notification["title"])
+        self.assertEqual("You received CNY 88.00", notification["body"])
+        self.assertEqual("transactions", notification["channelId"])
+
+    def test_message_and_notification_apis_support_older_page_cursor(self) -> None:
+        for index in range(3):
+            sms_body = self.encrypted_body(
+                event_type="INCOMING_SMS",
+                slot_index=0,
+                payload={
+                    "originatingAddress": f"service-{index}",
+                    "body": f"Message {index}",
+                    "partCount": 1,
+                    "resolutionMethod": "TEST",
+                    "resolutionConfidence": "HIGH",
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=sms_body,
+                    nonce=f"page-sms-nonce-{index}",
+                    idempotency_key=f"page-sms-key-{index}",
+                )[0],
+            )
+        status, newest = self.api_request(
+            "GET", "/v1/messages?limit=2", token=self.api_token
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(2, len(newest["messages"]))
+        oldest_loaded_id = min(message["id"] for message in newest["messages"])
+        status, older = self.api_request(
+            "GET",
+            f"/v1/messages?limit=2&beforeId={oldest_loaded_id}",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(1, len(older["messages"]))
+        self.assertLess(older["messages"][0]["id"], oldest_loaded_id)
+
+        for index in range(3):
+            notification_body = self.encrypted_body(
+                event_type="NOTIFICATION",
+                payload={
+                    "eventType": "POSTED",
+                    "sourcePackage": "com.example.app",
+                    "notificationId": index,
+                    "postedAt": 1_000 + index,
+                    "observedAt": 1_100 + index,
+                    "title": f"Title {index}",
+                    "body": f"Body {index}",
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=notification_body,
+                    nonce=f"page-notification-nonce-{index}",
+                    idempotency_key=f"page-notification-key-{index}",
+                )[0],
+            )
+        status, newest_notifications = self.api_request(
+            "GET", "/v1/notifications?limit=2", token=self.api_token
+        )
+        self.assertEqual(200, status)
+        notification_cursor = min(
+            notification["id"]
+            for notification in newest_notifications["notifications"]
+        )
+        status, older_notifications = self.api_request(
+            "GET",
+            f"/v1/notifications?limit=2&beforeId={notification_cursor}",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(1, len(older_notifications["notifications"]))
+
     def test_pairing_session_claim_is_one_time_and_returns_provisioning(self) -> None:
         status, created = self.api_request(
             "POST",
@@ -656,6 +827,79 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                 "/v1/pairings",
                 token=self.api_token,
                 value={"deviceId": "unknown"},
+            ),
+        )
+
+    def test_device_crud_api_supports_description_clear_and_delete(self) -> None:
+        secret_base64 = base64.b64encode(b"d" * 32).decode()
+        self.assertEqual(
+            (400, {"error": "invalid request"}),
+            self.api_request(
+                "POST",
+                "/v1/devices",
+                token=self.api_token,
+                value={
+                    "deviceId": "short-secret",
+                    "secretBase64": base64.b64encode(b"short").decode(),
+                },
+            ),
+        )
+        status, created = self.api_request(
+            "POST",
+            "/v1/devices",
+            token=self.api_token,
+            value={
+                "deviceId": "managed-device",
+                "secretBase64": secret_base64,
+                "description": "Managed from Admin",
+            },
+        )
+        self.assertEqual(201, status)
+        self.assertEqual("Managed from Admin", created["device"]["description"])
+
+        status, detailed = self.api_request(
+            "GET",
+            "/v1/devices/detail",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["managed-device"],
+            [device["deviceId"] for device in detailed["devices"]],
+        )
+        self.assertEqual(
+            (400, {"error": "invalid request"}),
+            self.api_request(
+                "PUT",
+                "/v1/devices/managed-device",
+                token=self.api_token,
+                value={"unsupported": True},
+            ),
+        )
+
+        status, updated = self.api_request(
+            "PUT",
+            "/v1/devices/managed-device",
+            token=self.api_token,
+            value={"description": ""},
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("", updated["device"]["description"])
+
+        self.assertEqual(
+            (200, {"deleted": True}),
+            self.api_request(
+                "DELETE",
+                "/v1/devices/managed-device",
+                token=self.api_token,
+            ),
+        )
+        self.assertEqual(
+            (200, {"devices": []}),
+            self.api_request(
+                "GET",
+                "/v1/devices",
+                token=self.api_token,
             ),
         )
 
@@ -828,6 +1072,30 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             self.api_request(
                 "GET",
                 "/v1/messages?unknown=value",
+                token=self.api_token,
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "GET",
+                "/v1/notifications?limit=0",
+                token=self.api_token,
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "GET",
+                "/v1/notifications?sourcePackage=com.example",
+                token=self.api_token,
+            )[0],
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "GET",
+                "/v1/messages?afterId=1&beforeId=2",
                 token=self.api_token,
             )[0],
         )

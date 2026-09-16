@@ -7,24 +7,28 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.UUID
 
-data class RedactedContentMetadata(
+data class NotificationContent(
+    val title: String?,
+    val body: String?,
     val titleExposed: Boolean,
     val textExposed: Boolean,
     val titleLength: Int,
     val textLength: Int
 )
 
-object RedactedNotificationFactory {
-    const val REDACTION_POLICY = "METADATA_ONLY"
+object NotificationEventFactory {
+    const val REDACTION_POLICY = "ALLOWLIST_CONTENT"
 
-    fun contentMetadata(title: CharSequence?, text: CharSequence?): RedactedContentMetadata {
-        val safeTitle = title?.toString().orEmpty()
-        val safeText = text?.toString().orEmpty()
-        return RedactedContentMetadata(
-            titleExposed = safeTitle.isNotEmpty(),
-            textExposed = safeText.isNotEmpty(),
-            titleLength = safeTitle.length,
-            textLength = safeText.length
+    fun content(title: CharSequence?, text: CharSequence?): NotificationContent {
+        val safeTitle = title?.toString()?.takeIf { it.isNotBlank() }
+        val safeText = text?.toString()?.takeIf { it.isNotBlank() }
+        return NotificationContent(
+            title = safeTitle,
+            body = safeText,
+            titleExposed = safeTitle != null,
+            textExposed = safeText != null,
+            titleLength = safeTitle?.length ?: 0,
+            textLength = safeText?.length ?: 0
         )
     }
 
@@ -38,7 +42,7 @@ object RedactedNotificationFactory {
         val title = extras?.getCharSequence(Notification.EXTRA_TITLE)
         val text = extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)
             ?: extras?.getCharSequence(Notification.EXTRA_TEXT)
-        val content = contentMetadata(title, text)
+        val content = content(title, text)
         return NotificationEventEntity(
             UUID.randomUUID().toString(),
             eventType,
@@ -49,6 +53,8 @@ object RedactedNotificationFactory {
             observedAt,
             sbn.notification.channelId,
             sbn.notification.category,
+            content.title,
+            content.body,
             content.titleExposed,
             content.textExposed,
             content.titleLength,

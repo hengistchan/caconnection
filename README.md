@@ -45,8 +45,8 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 - A no-network Mock Transport and local Outbox self-test.
 - User-granted `NotificationListenerService` capture behind an explicit source
   package allowlist.
-- Metadata-only notification persistence and Outbox payloads; notification
-  title/body values are never stored.
+- Allowlisted notification title/body persistence and encrypted Outbox
+  delivery.
 - Runtime `TelephonyCallback.CallStateListener` registration for each active
   SIM subscription.
 - Per-SIM `RINGING` / `OFFHOOK` / `IDLE` events and local Outbox delivery,
@@ -75,7 +75,7 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
   container restart, private backend networking, read-only/non-root container
   hardening, request concurrency limits, and per-IP/per-device/per-client rate
   limits.
-- Authenticated `GET /v1/messages` and atomic one-time
+- Authenticated `GET /v1/messages`, `GET /v1/notifications`, and atomic one-time
   `POST /v1/otp/claim` APIs.
 - Optional exact-message OTP claims plus a redacted SIM1/SIM2 cutover
   acceptance tool.
@@ -238,8 +238,8 @@ The `Signals` page exposes two additional local-only paths:
 ```text
 Allowed app notification
   -> NotificationListenerService
-  -> metadata-only NotificationEvent + OutboxEvent
-  -> Mock Transport
+  -> allowlisted title/body NotificationEvent + OutboxEvent
+  -> active Transport
 
 Per-SIM TelephonyCallback
   -> RINGING / OFFHOOK / IDLE CallEvent + OutboxEvent
@@ -251,8 +251,11 @@ source allowlist captures nothing. The call path uses the existing
 `READ_PHONE_STATE` permission and retains the explicit managed-process
 assumption because `TelephonyCallback` is a runtime registration.
 
-Android may redact sensitive notification content before it reaches an
-untrusted notification listener. Raw SMS reception remains the OTP path.
+Notification title/body values are persisted only for apps explicitly selected
+in the allowlist and are transported inside the existing encrypted event
+envelope. Android may still redact sensitive notification content before it
+reaches an untrusted notification listener. Raw SMS reception remains the most
+reliable OTP path.
 
 See [docs/PHASE3_SIGNALS_REPORT.md](docs/PHASE3_SIGNALS_REPORT.md).
 
@@ -378,8 +381,9 @@ See:
 
 ## Admin UI
 
-A secure, read-only admin dashboard is available for monitoring messages and
-claiming verification codes:
+A secure admin console is available for monitoring read-only SMS and
+notification content, claiming verification codes, and explicitly managing
+gateway devices:
 
 ```text
 https://caconnection-gatway.hengistchan.online/admin/
@@ -389,9 +393,17 @@ https://caconnection-gatway.hengistchan.online/admin/
 
 - **Multi-language**: Simplified Chinese (default) and English
 - **Gateway Status**: Real-time health, readiness, and version monitoring
-- **Message Viewer**: Browse SMS messages with SIM1/SIM2 filtering
+- **Communication Workspace**: Browse SMS and notification content with type,
+  SIM, source-app, text, and date filtering plus cursor-based loading
+- **Device Workspace**: Manage device descriptions, shared-secret rotation,
+  per-device pairing, and deletion from a dedicated tab
 - **OTP Claim**: One-time verification code extraction with confirmation
-- **Privacy Protection**: Sender and message body hidden by default
+- **Privacy Protection**: SMS and notification content hidden by default
+
+Secret rotation atomically re-encrypts historical event payloads so existing
+content remains readable. Device deletion removes the decryption secret, so the
+confirmation dialog warns that historical encrypted content from that device
+will no longer be readable.
 
 ### Security Architecture
 

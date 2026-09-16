@@ -84,7 +84,7 @@ class OutboxHelperTest {
     }
 
     @Test
-    fun notificationPayloadIsMetadataOnly() {
+    fun notificationPayloadContainsTitleAndBody() {
         val event = NotificationEventEntity(
             "notification-event",
             "POSTED",
@@ -95,12 +95,14 @@ class OutboxHelperTest {
             1_100L,
             "alerts",
             "msg",
+            "Bank alert",
+            "Code 123456",
             true,
             true,
             12,
             34,
             null,
-            "METADATA_ONLY"
+            "ALLOWLIST_CONTENT"
         )
 
         val outbox = OutboxHelper.createOutboxForNotification(event)
@@ -109,8 +111,10 @@ class OutboxHelperTest {
         assertEquals(event.eventId, outbox.incomingEventId)
         assertEquals("NOTIFICATION", outbox.payloadType)
         assertTrue(outbox.payloadData.contains("com.example.alerts"))
+        assertTrue(outbox.payloadData.contains("\"title\":\"Bank alert\""))
+        assertTrue(outbox.payloadData.contains("\"body\":\"Code 123456\""))
         assertTrue(outbox.payloadData.contains("\"titleLength\":12"))
-        assertTrue(outbox.payloadData.contains("\"redactionPolicy\":\"METADATA_ONLY\""))
+        assertTrue(outbox.payloadData.contains("\"redactionPolicy\":\"ALLOWLIST_CONTENT\""))
     }
 
     @Test

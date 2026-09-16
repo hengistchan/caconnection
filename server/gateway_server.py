@@ -307,6 +307,17 @@ class GatewayStore:
                     ON events(event_type, received_at DESC);
                 CREATE INDEX IF NOT EXISTS index_pairing_sessions_expiry
                     ON pairing_sessions(expires_at);
+                CREATE TABLE IF NOT EXISTS devices (
+                    device_id TEXT PRIMARY KEY,
+                    secret_base64 TEXT NOT NULL,
+                    description TEXT DEFAULT '',
+                    created_at INTEGER NOT NULL,
+                    last_seen_at INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS gateway_metadata (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
 
@@ -372,6 +383,241 @@ class GatewayStore:
             if cursor.rowcount != 1:
                 return None
             return str(row["device_id"])
+
+    # ── Device CRUD ──────────────────────────────────────────────
+
+    def get_devices(self) -> list[dict[str, Any]]:
+        """Return all devices from the database."""
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT device_id, secret_base64, description,
+                       created_at, last_seen_at
+                FROM devices
+                ORDER BY device_id
+                """
+            ).fetchall()
+        return [
+            {
+                "deviceId": row["device_id"],
+                "description": row["description"] or "",
+                "createdAt": row["created_at"],
+                "lastSeenAt": row["last_seen_at"],
+            }
+            for row in rows
+        ]
+
+    def get_device(self, device_id: str) -> Optional[dict[str, Any]]:
+        """Return a single device by ID."""
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT device_id, secret_base64, description,
+                       created_at, last_seen_at
+                FROM devices
+                WHERE device_id = ?
+                """,
+                (device_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "deviceId": row["device_id"],
+            "description": row["description"] or "",
+            "createdAt": row["created_at"],
+            "lastSeenAt": row["last_seen_at"],
+        }
+
+    def add_device(
+        self,
+        device_id: str,
+        secret_base64: str,
+        description: str,
+        now_ms: int,
+    ) -> dict[str, Any]:
+        """Add a new device. Raises ValueError if already exists."""
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", device_id):
+            raise ValueError("Invalid device ID format")
+        try:
+            secret_bytes = base64.b64decode(secret_base64, validate=True)
+        except (binascii.Error, ValueError) as e:
+            raise ValueError("Invalid base64 secret") from e
+        if len(secret_bytes) < 32:
+            raise ValueError("Secret must be at least 32 bytes")
+        with self._lock, self._connect() as db:
+            try:
+                db.execute(
+                    """
+                    INSERT INTO devices(device_id, secret_base64, description, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (device_id, secret_base64, description, now_ms),
+                )
+            except sqlite3.IntegrityError as e:
+                raise ValueError(f"Device '{device_id}' already exists") from e
+        return {
+            "deviceId": device_id,
+            "description": description,
+            "createdAt": now_ms,
+            "lastSeenAt": None,
+        }
+
+    def update_device(
+        self,
+        device_id: str,
+        description: Optional[str] = None,
+        secret_base64: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Update device description and/or secret.
+
+        Existing event payloads are encrypted with the device secret. Secret
+        rotation therefore re-encrypts those payloads in the same transaction
+        before storing the new secret, so historical messages remain readable.
+        """
+        new_secret: Optional[bytes] = None
+        if secret_base64 is not None:
+            try:
+                new_secret = base64.b64decode(secret_base64, validate=True)
+            except (binascii.Error, ValueError) as e:
+                raise ValueError("Invalid base64 secret") from e
+            if len(new_secret) < 32:
+                raise ValueError("Secret must be at least 32 bytes")
+        with self._lock, self._connect() as db:
+            existing = db.execute(
+                "SELECT secret_base64 FROM devices WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if existing is None:
+                return None
+            if description is not None:
+                db.execute(
+                    "UPDATE devices SET description = ? WHERE device_id = ?",
+                    (description, device_id),
+                )
+            if secret_base64 is not None and new_secret is not None:
+                try:
+                    old_secret = base64.b64decode(
+                        existing["secret_base64"], validate=True
+                    )
+                except (binascii.Error, ValueError) as error:
+                    raise ValueError("Stored device secret is invalid") from error
+                if old_secret != new_secret:
+                    event_rows = db.execute(
+                        """
+                        SELECT id, envelope_json
+                        FROM events
+                        WHERE device_id = ?
+                        """,
+                        (device_id,),
+                    ).fetchall()
+                    for event_row in event_rows:
+                        envelope = decrypt_payload(
+                            json.loads(event_row["envelope_json"]),
+                            device_id,
+                            old_secret,
+                        )
+                        envelope["schemaVersion"] = 1
+                        reencrypted = encrypt_payload(
+                            envelope,
+                            device_id,
+                            new_secret,
+                        )
+                        db.execute(
+                            "UPDATE events SET envelope_json = ? WHERE id = ?",
+                            (
+                                json.dumps(
+                                    reencrypted,
+                                    separators=(",", ":"),
+                                    ensure_ascii=False,
+                                ),
+                                event_row["id"],
+                            ),
+                        )
+                db.execute(
+                    "UPDATE devices SET secret_base64 = ? WHERE device_id = ?",
+                    (secret_base64, device_id),
+                )
+            row = db.execute(
+                "SELECT * FROM devices WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "deviceId": row["device_id"],
+            "description": row["description"] or "",
+            "createdAt": row["created_at"],
+            "lastSeenAt": row["last_seen_at"],
+        }
+
+    def delete_device(self, device_id: str) -> bool:
+        """Delete a device. Returns True if deleted."""
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                "DELETE FROM devices WHERE device_id = ?",
+                (device_id,),
+            )
+            return cursor.rowcount == 1
+
+    def touch_device(self, device_id: str, now_ms: int) -> None:
+        """Update device last_seen_at timestamp."""
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE devices SET last_seen_at = ? WHERE device_id = ?",
+                (now_ms, device_id),
+            )
+
+    def load_devices(self) -> dict[str, bytes]:
+        """Load all devices from database, return dict of device_id -> secret_bytes."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT device_id, secret_base64 FROM devices"
+            ).fetchall()
+        result = {}
+        for row in rows:
+            try:
+                secret = base64.b64decode(row["secret_base64"], validate=True)
+                if len(secret) >= 32:
+                    result[row["device_id"]] = secret
+            except (binascii.Error, ValueError):
+                continue
+        return result
+
+    def migrate_devices_from_config(self, config_devices: dict[str, bytes]) -> int:
+        """Migrate config devices once, then keep the database authoritative."""
+        marker_key = "config_devices_migrated_v1"
+        migrated = 0
+        now_ms = int(time.time() * 1000)
+        with self._lock, self._connect() as db:
+            marker = db.execute(
+                "SELECT value FROM gateway_metadata WHERE key = ?",
+                (marker_key,),
+            ).fetchone()
+            if marker is not None:
+                return 0
+            for device_id, secret_bytes in config_devices.items():
+                secret_base64 = base64.b64encode(secret_bytes).decode("ascii")
+                existing = db.execute(
+                    "SELECT 1 FROM devices WHERE device_id = ?",
+                    (device_id,),
+                ).fetchone()
+                if existing is None:
+                    db.execute(
+                        """
+                        INSERT INTO devices(device_id, secret_base64, description, created_at)
+                        VALUES (?, ?, ?, ?)
+                        """,
+                        (device_id, secret_base64, "Migrated from config", now_ms),
+                    )
+                    migrated += 1
+            db.execute(
+                """
+                INSERT INTO gateway_metadata(key, value)
+                VALUES (?, ?)
+                """,
+                (marker_key, str(now_ms)),
+            )
+        return migrated
 
     def accept(
         self,
@@ -462,6 +708,7 @@ class GatewayStore:
         devices: dict[str, bytes],
         limit: int,
         after_id: Optional[int] = None,
+        before_id: Optional[int] = None,
         slot_index: Optional[int] = None,
     ) -> list[dict[str, Any]]:
         clauses = ["event_type = 'INCOMING_SMS'"]
@@ -469,6 +716,9 @@ class GatewayStore:
         if after_id is not None:
             clauses.append("id > ?")
             parameters.append(after_id)
+        if before_id is not None:
+            clauses.append("id < ?")
+            parameters.append(before_id)
         if slot_index is not None:
             clauses.append("slot_index = ?")
             parameters.append(slot_index)
@@ -516,6 +766,84 @@ class GatewayStore:
                 }
             )
         return messages
+
+    def notifications(
+        self,
+        devices: dict[str, bytes],
+        limit: int,
+        after_id: Optional[int] = None,
+        before_id: Optional[int] = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["event_type = 'NOTIFICATION'"]
+        parameters: list[Any] = []
+        if after_id is not None:
+            clauses.append("id > ?")
+            parameters.append(after_id)
+        if before_id is not None:
+            clauses.append("id < ?")
+            parameters.append(before_id)
+        parameters.append(min(max(limit, 1), 100))
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT id, device_id, created_at, received_at, envelope_json
+                FROM events
+                WHERE %s
+                ORDER BY id DESC
+                LIMIT ?
+                """ % " AND ".join(clauses),
+                parameters,
+            ).fetchall()
+        notifications = []
+        for row in rows:
+            secret = devices.get(row["device_id"])
+            if secret is None:
+                continue
+            envelope = decrypt_payload(
+                json.loads(row["envelope_json"]), row["device_id"], secret
+            )
+            payload = envelope["payload"]
+
+            def optional_string(name: str) -> Optional[str]:
+                value = payload.get(name)
+                return value if isinstance(value, str) else None
+
+            notification_id = payload.get("notificationId")
+            posted_at = payload.get("postedAt")
+            observed_at = payload.get("observedAt")
+            notifications.append(
+                {
+                    "id": row["id"],
+                    "deviceId": row["device_id"],
+                    "createdAt": row["created_at"],
+                    "receivedAt": row["received_at"],
+                    "eventType": optional_string("eventType"),
+                    "sourcePackage": optional_string("sourcePackage"),
+                    "notificationId": (
+                        notification_id
+                        if isinstance(notification_id, int)
+                        and not isinstance(notification_id, bool)
+                        else None
+                    ),
+                    "postedAt": (
+                        posted_at
+                        if isinstance(posted_at, int)
+                        and not isinstance(posted_at, bool)
+                        else None
+                    ),
+                    "observedAt": (
+                        observed_at
+                        if isinstance(observed_at, int)
+                        and not isinstance(observed_at, bool)
+                        else None
+                    ),
+                    "channelId": optional_string("channelId"),
+                    "category": optional_string("category"),
+                    "title": optional_string("title"),
+                    "body": optional_string("body"),
+                }
+            )
+        return notifications
 
     def claim_latest_otp(
         self,
@@ -874,7 +1202,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             try:
                 if (
-                    set(query) - {"limit", "afterId", "slotIndex"}
+                    set(query) - {"limit", "afterId", "beforeId", "slotIndex"}
                     or any(len(values) != 1 for values in query.values())
                 ):
                     raise ValueError("invalid query")
@@ -887,6 +1215,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 )
                 if after_id is not None and after_id < 0:
                     raise ValueError("invalid afterId")
+                before_id_raw = query.get("beforeId", [None])[0]
+                before_id = (
+                    int(before_id_raw) if before_id_raw is not None else None
+                )
+                if before_id is not None and before_id < 1:
+                    raise ValueError("invalid beforeId")
+                if after_id is not None and before_id is not None:
+                    raise ValueError("conflicting cursors")
                 slot_raw = query.get("slotIndex", [None])[0]
                 slot_index = int(slot_raw) if slot_raw is not None else None
                 if slot_index is not None and slot_index not in (0, 1):
@@ -900,9 +1236,52 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.app.devices,
                 limit,
                 after_id=after_id,
+                before_id=before_id,
                 slot_index=slot_index,
             )
             self.send_json(HTTPStatus.OK, {"messages": messages})
+            return
+        if path == "/v1/notifications":
+            if self.authorize_api("messages:read") is None:
+                return
+            query = parse_qs(parsed.query)
+            try:
+                if (
+                    set(query) - {"limit", "afterId", "beforeId"}
+                    or any(len(values) != 1 for values in query.values())
+                ):
+                    raise ValueError("invalid query")
+                limit = int(query.get("limit", ["50"])[0])
+                if not 1 <= limit <= 100:
+                    raise ValueError("invalid limit")
+                after_id_raw = query.get("afterId", [None])[0]
+                after_id = (
+                    int(after_id_raw) if after_id_raw is not None else None
+                )
+                if after_id is not None and after_id < 0:
+                    raise ValueError("invalid afterId")
+                before_id_raw = query.get("beforeId", [None])[0]
+                before_id = (
+                    int(before_id_raw) if before_id_raw is not None else None
+                )
+                if before_id is not None and before_id < 1:
+                    raise ValueError("invalid beforeId")
+                if after_id is not None and before_id is not None:
+                    raise ValueError("conflicting cursors")
+            except (TypeError, ValueError):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST, {"error": "invalid query"}
+                )
+                return
+            notifications = self.app.store.notifications(
+                self.app.devices,
+                limit,
+                after_id=after_id,
+                before_id=before_id,
+            )
+            self.send_json(
+                HTTPStatus.OK, {"notifications": notifications}
+            )
             return
         if path == "/v1/devices":
             if self.authorize_api("pairing:create") is None:
@@ -911,6 +1290,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {"devices": sorted(self.app.devices)},
             )
+            return
+        if path == "/v1/devices/detail":
+            if self.authorize_api("pairing:create") is None:
+                return
+            devices = self.app.store.get_devices()
+            self.send_json(HTTPStatus.OK, {"devices": devices})
             return
         if not self.app.allow_viewer:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -941,6 +1326,47 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/v1/devices":
+            if self.authorize_api("pairing:create") is None:
+                return
+            try:
+                value = self.read_json_body(4_096)
+                if set(value) - {"deviceId", "secretBase64", "description"}:
+                    raise ValueError("unsupported request field")
+                device_id = value.get("deviceId")
+                secret_base64 = value.get("secretBase64")
+                description = value.get("description", "")
+                if (
+                    not isinstance(device_id, str)
+                    or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", device_id)
+                ):
+                    raise ValueError("deviceId is required")
+                if not isinstance(secret_base64, str) or not secret_base64:
+                    raise ValueError("secretBase64 is required")
+                if not isinstance(description, str):
+                    raise ValueError("description must be a string")
+                try:
+                    secret_bytes = base64.b64decode(
+                        secret_base64, validate=True
+                    )
+                except (binascii.Error, ValueError) as error:
+                    raise ValueError("invalid secretBase64") from error
+                if len(secret_bytes) < 32:
+                    raise ValueError("secretBase64 is too short")
+            except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid request"})
+                return
+            try:
+                now_ms = int(time.time() * 1000)
+                device = self.app.store.add_device(
+                    device_id, secret_base64, description, now_ms
+                )
+            except ValueError as e:
+                self.send_json(HTTPStatus.CONFLICT, {"error": str(e)})
+                return
+            self.app.refresh_devices()
+            self.send_json(HTTPStatus.CREATED, {"device": device})
+            return
         if path == "/v1/pairings":
             if not self.app.accept_ingestion:
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -1233,6 +1659,68 @@ class GatewayHandler(BaseHTTPRequestHandler):
             {"accepted": True, "duplicate": not inserted},
         )
 
+    def do_PUT(self) -> None:
+        path = urlparse(self.path).path
+        # PUT /v1/devices/{device_id}
+        if path.startswith("/v1/devices/"):
+            if self.authorize_api("pairing:create") is None:
+                return
+            device_id = path[len("/v1/devices/"):]
+            if not device_id or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", device_id):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid device_id"})
+                return
+            try:
+                value = self.read_json_body(4_096)
+                if (
+                    set(value) - {"description", "secretBase64"}
+                    or not value
+                ):
+                    raise ValueError("unsupported or empty request")
+                description = value.get("description")
+                secret_base64 = value.get("secretBase64")
+                if description is not None and not isinstance(description, str):
+                    raise ValueError("description must be a string")
+                if secret_base64 is not None and not isinstance(secret_base64, str):
+                    raise ValueError("secretBase64 must be a string")
+            except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid request"})
+                return
+            try:
+                device = self.app.store.update_device(
+                    device_id,
+                    description=description,
+                    secret_base64=secret_base64,
+                )
+            except ValueError as e:
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
+                return
+            if device is None:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "device not found"})
+                return
+            self.app.refresh_devices()
+            self.send_json(HTTPStatus.OK, {"device": device})
+            return
+        self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        # DELETE /v1/devices/{device_id}
+        if path.startswith("/v1/devices/"):
+            if self.authorize_api("pairing:create") is None:
+                return
+            device_id = path[len("/v1/devices/"):]
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", device_id):
+                self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid device_id"})
+                return
+            deleted = self.app.store.delete_device(device_id)
+            if not deleted:
+                self.send_json(HTTPStatus.NOT_FOUND, {"error": "device not found"})
+                return
+            self.app.refresh_devices()
+            self.send_json(HTTPStatus.OK, {"deleted": True})
+            return
+        self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
 
 class GatewayHttpServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -1366,6 +1854,10 @@ class GatewayHttpServer(ThreadingHTTPServer):
         )
         self.rate_limiter = SlidingWindowRateLimiter()
 
+    def refresh_devices(self) -> None:
+        """Reload devices from database."""
+        self.devices = self.store.load_devices()
+
     def process_request(
         self,
         request: Any,
@@ -1446,10 +1938,26 @@ def main() -> None:
     )
     args = parser.parse_args()
     config = json.loads(args.config.read_text(encoding="utf-8"))
-    devices = load_devices(args.config)
     api_clients = load_api_clients(config)
     server_settings = config.get("server", {})
     store = GatewayStore(args.database)
+
+    # Migrate devices from config file to database if needed
+    config_devices = {}
+    try:
+        config_devices = load_devices(args.config)
+    except (ValueError, FileNotFoundError):
+        pass
+    if config_devices:
+        migrated_devices = store.migrate_devices_from_config(config_devices)
+        if migrated_devices > 0:
+            print(f"Migrated {migrated_devices} device(s) from config to database")
+
+    # Load devices from database
+    devices = store.load_devices()
+    if not devices:
+        print("Warning: No devices configured")
+
     migrated = store.migrate_legacy_payloads(devices)
     server = GatewayHttpServer(
         (args.host, args.port),

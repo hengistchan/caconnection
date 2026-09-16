@@ -1,6 +1,8 @@
 # CA Connection Admin UI
 
-A secure, read-only admin dashboard for the CA Connection Personal Communication Gateway.
+A secure admin console for the CA Connection Personal Communication Gateway.
+SMS and notification content is read-only; device inventory changes and pairing
+are explicit authenticated administrative actions.
 
 ## Features
 
@@ -9,7 +11,14 @@ A secure, read-only admin dashboard for the CA Connection Personal Communication
 - **Session Management**: Stateless HMAC-signed HttpOnly cookies with bounded expiry
 - **Request Protection**: Per-session CSRF tokens on every authenticated mutation
 - **Gateway Status**: Real-time health and readiness monitoring
-- **Message Viewer**: Browse SMS messages with SIM filtering
+- **Communication Workspace**: Browse SMS and captured notifications with type,
+  SIM, source-app, text, and date filtering
+- **Cursor Pagination**: Load older SMS and notification records without
+  replacing the current list
+- **Privacy Controls**: Reveal a single card or all visible content for a
+  time-limited 30-second window
+- **Device Workspace**: Add, edit, rotate secrets, pair, and delete Gateway
+  devices from one dedicated tab
 - **OTP Claim**: One-time verification code extraction
 - **Privacy Protection**: Sensitive content hidden by default
 
@@ -31,7 +40,8 @@ The token is stored as a Docker secret and only accessible server-side.
 2. Login attempts rate-limited per IP (5 attempts / 15 minutes)
 3. Sessions use HMAC-SHA256 signed, stateless HttpOnly cookies
 4. Cookie restricted to `/admin` path with `SameSite=Strict`
-5. OTP, pairing, and logout requests require a signed-session CSRF token
+5. OTP, pairing, device mutations, and logout requests require a signed-session
+   CSRF token
 6. Proxy IP headers are accepted only when `TRUST_PROXY_HEADERS=true` and the
    direct peer is a loopback/private reverse proxy
 
@@ -177,7 +187,7 @@ ingress:
 This ensures:
 - `/admin/*` routes to Nuxt admin UI
 - `/v1/events` routes directly to Gateway (Android compatibility)
-- `/v1/messages`, `/v1/otp/claim` routes to Gateway
+- `/v1/messages`, `/v1/notifications`, `/v1/otp/claim` routes to Gateway
 - `/health`, `/ready`, `/version` routes to Gateway
 
 ## Pages
@@ -200,9 +210,17 @@ This ensures:
 - One-time QR pairing; creating a new code invalidates the previous code for
   the selected device
 
-### Messages (`/admin/` - Messages tab)
+### Messages and Notifications (`/admin/` - Messages tab)
 
-- Filter by SIM (All/SIM1/SIM2)
+- Filter by content type (All/SMS/Notifications)
+- Filter SMS by SIM (All/SIM1/SIM2)
+- Filter notifications by source application
+- Search sender, content, source app, or device ID
+- Filter by today, seven days, or thirty days
+- Preserve active filters in the page URL
+- Keep successful data visible when only one upstream source fails
+- Load older records using the Gateway `beforeId` cursor
+- Reveal all sensitive content for 30 seconds, with automatic hiding
 - Message cards with:
   - Event ID
   - SIM slot indicator
@@ -211,6 +229,25 @@ This ensures:
   - Message body (hidden by default)
   - OTP candidates
   - Claim verification code button
+- Notification cards with:
+  - Source package
+  - Received time
+  - Notification title (hidden by default)
+  - Notification body (hidden by default)
+  - Channel and category
+
+### Devices (`/admin/` - Devices tab)
+
+- Device inventory with created and last-seen timestamps
+- Client-side Base64 and decoded-length validation for shared secrets
+- Cryptographically secure 32-byte shared-secret generation
+- Hidden-by-default secret inputs with explicit copy controls
+- Description editing and optional shared-secret rotation
+- Atomic re-encryption of historical event payloads during secret rotation
+- Per-device pairing QR generation
+- Accessible custom confirmation dialog that warns device deletion also makes
+  its historical encrypted content unreadable
+- Toast feedback for successful and failed mutations
 
 ## Internationalization
 

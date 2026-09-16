@@ -25,6 +25,22 @@ export interface GatewayMessage {
   otpCandidates: string[]
 }
 
+export interface GatewayNotification {
+  id: number
+  deviceId: string
+  createdAt: number
+  receivedAt: number
+  eventType: 'POSTED' | 'REMOVED' | null
+  sourcePackage: string | null
+  notificationId: number | null
+  postedAt: number | null
+  observedAt: number | null
+  channelId: string | null
+  category: string | null
+  title: string | null
+  body: string | null
+}
+
 export interface OtpClaimResult {
   otp: {
     eventId: number
@@ -45,29 +61,73 @@ export interface PairingResult {
   }
 }
 
+export interface GatewayDeviceDetail {
+  deviceId: string
+  description: string
+  createdAt: number
+  lastSeenAt: number | null
+}
+
 export function useGateway() {
   const { csrfToken } = useAuth()
   const status = useState<GatewayStatus | null>('gateway-status', () => null)
   const messages = useState<GatewayMessage[]>('gateway-messages', () => [])
-  const isLoading = useState<boolean>('gateway-loading', () => false)
-  const error = useState<string | null>('gateway-error', () => null)
+  const notifications = useState<GatewayNotification[]>(
+    'gateway-notifications',
+    () => [],
+  )
+  const statusLoading = useState<boolean>('gateway-status-loading', () => false)
+  const messageLoading = useState<boolean>('gateway-message-loading', () => false)
+  const notificationLoading = useState<boolean>(
+    'gateway-notification-loading',
+    () => false,
+  )
+  const messageHasMore = useState<boolean>('gateway-message-has-more', () => true)
+  const notificationHasMore = useState<boolean>(
+    'gateway-notification-has-more',
+    () => true,
+  )
+  const statusLastSuccessAt = useState<number | null>(
+    'gateway-status-last-success-at',
+    () => null,
+  )
+  const messageLastSuccessAt = useState<number | null>(
+    'gateway-message-last-success-at',
+    () => null,
+  )
+  const notificationLastSuccessAt = useState<number | null>(
+    'gateway-notification-last-success-at',
+    () => null,
+  )
+  const statusError = useState<string | null>('gateway-status-error', () => null)
+  const messageError = useState<string | null>('gateway-message-error', () => null)
+  const notificationError = useState<string | null>(
+    'gateway-notification-error',
+    () => null,
+  )
 
   /**
    * Fetch gateway status
    */
-  async function fetchStatus(): Promise<void> {
+  async function fetchStatus(): Promise<boolean> {
+    statusLoading.value = true
     try {
       const data = await $fetch<GatewayStatus>('/admin/api/gateway/status', {
         credentials: 'include',
       })
       status.value = data
-      error.value = null
+      statusError.value = null
+      statusLastSuccessAt.value = Date.now()
+      return true
     } catch (err: unknown) {
       const fetchError = err as { statusCode?: number; data?: { message?: string } }
       if (fetchError.statusCode === 401) {
         navigateTo('/login')
       }
-      error.value = fetchError.data?.message || 'Failed to fetch status'
+      statusError.value = fetchError.data?.message || 'Failed to fetch status'
+      return false
+    } finally {
+      statusLoading.value = false
     }
   }
 
@@ -77,8 +137,10 @@ export function useGateway() {
   async function fetchMessages(options: {
     limit?: number
     slotIndex?: number | null
-  } = {}): Promise<void> {
-    isLoading.value = true
+    beforeId?: number | null
+    append?: boolean
+  } = {}): Promise<boolean> {
+    messageLoading.value = true
 
     try {
       const params = new URLSearchParams()
@@ -88,6 +150,9 @@ export function useGateway() {
       if (options.slotIndex !== undefined && options.slotIndex !== null) {
         params.set('slotIndex', options.slotIndex.toString())
       }
+      if (options.beforeId !== undefined && options.beforeId !== null) {
+        params.set('beforeId', options.beforeId.toString())
+      }
 
       const query = params.toString()
       const url = `/admin/api/gateway/messages${query ? `?${query}` : ''}`
@@ -96,16 +161,76 @@ export function useGateway() {
         credentials: 'include',
       })
 
-      messages.value = data.messages
-      error.value = null
+      if (options.append) {
+        const merged = new Map(messages.value.map(message => [message.id, message]))
+        data.messages.forEach(message => merged.set(message.id, message))
+        messages.value = [...merged.values()].sort((left, right) => right.id - left.id)
+      } else {
+        messages.value = data.messages
+      }
+      messageHasMore.value = data.messages.length === (options.limit ?? 50)
+      messageError.value = null
+      messageLastSuccessAt.value = Date.now()
+      return true
     } catch (err: unknown) {
       const fetchError = err as { statusCode?: number; data?: { message?: string } }
       if (fetchError.statusCode === 401) {
         navigateTo('/login')
       }
-      error.value = fetchError.data?.message || 'Failed to fetch messages'
+      messageError.value = fetchError.data?.message || 'Failed to fetch messages'
+      return false
     } finally {
-      isLoading.value = false
+      messageLoading.value = false
+    }
+  }
+
+  async function fetchNotifications(options: {
+    limit?: number
+    beforeId?: number | null
+    append?: boolean
+  } = {}): Promise<boolean> {
+    notificationLoading.value = true
+
+    try {
+      const params = new URLSearchParams()
+      if (options.limit) {
+        params.set('limit', options.limit.toString())
+      }
+      if (options.beforeId !== undefined && options.beforeId !== null) {
+        params.set('beforeId', options.beforeId.toString())
+      }
+      const query = params.toString()
+      const url = `/admin/api/gateway/notifications${query ? `?${query}` : ''}`
+      const data = await $fetch<{ notifications: GatewayNotification[] }>(url, {
+        credentials: 'include',
+      })
+
+      if (options.append) {
+        const merged = new Map(
+          notifications.value.map(notification => [notification.id, notification]),
+        )
+        data.notifications.forEach(notification =>
+          merged.set(notification.id, notification))
+        notifications.value = [...merged.values()]
+          .sort((left, right) => right.id - left.id)
+      } else {
+        notifications.value = data.notifications
+      }
+      notificationHasMore.value
+        = data.notifications.length === (options.limit ?? 50)
+      notificationError.value = null
+      notificationLastSuccessAt.value = Date.now()
+      return true
+    } catch (err: unknown) {
+      const fetchError = err as { statusCode?: number; data?: { message?: string } }
+      if (fetchError.statusCode === 401) {
+        navigateTo('/login')
+      }
+      notificationError.value
+        = fetchError.data?.message || 'Failed to fetch notifications'
+      return false
+    } finally {
+      notificationLoading.value = false
     }
   }
 
@@ -173,6 +298,59 @@ export function useGateway() {
     })
   }
 
+  async function fetchDeviceDetails(): Promise<GatewayDeviceDetail[]> {
+    const data = await $fetch<{ devices: GatewayDeviceDetail[] }>('/admin/api/gateway/devices/detail', {
+      credentials: 'include',
+    })
+    return data.devices
+  }
+
+  async function addDevice(options: {
+    deviceId: string
+    secretBase64: string
+    description?: string
+  }): Promise<GatewayDeviceDetail> {
+    const data = await $fetch<{ device: GatewayDeviceDetail }>('/admin/api/gateway/devices', {
+      method: 'POST',
+      body: options,
+      headers: csrfToken.value
+        ? { 'X-CSRF-Token': csrfToken.value }
+        : undefined,
+      credentials: 'include',
+    })
+    return data.device
+  }
+
+  async function updateDevice(
+    deviceId: string,
+    options: { description?: string; secretBase64?: string },
+  ): Promise<GatewayDeviceDetail> {
+    const data = await $fetch<{ device: GatewayDeviceDetail }>(
+      `/admin/api/gateway/devices/${encodeURIComponent(deviceId)}`,
+      {
+        method: 'PUT',
+        body: options,
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+    return data.device
+  }
+
+  async function removeDevice(deviceId: string): Promise<void> {
+    await $fetch(`/admin/api/gateway/devices/${encodeURIComponent(deviceId)}`,
+      {
+        method: 'DELETE',
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+  }
+
   /**
    * Calculate message counts by SIM slot
    */
@@ -196,14 +374,33 @@ export function useGateway() {
   return {
     status: readonly(status),
     messages: readonly(messages),
-    isLoading: readonly(isLoading),
-    error: readonly(error),
+    notifications: readonly(notifications),
+    isLoading: computed(() =>
+      messageLoading.value || notificationLoading.value),
+    statusLoading: readonly(statusLoading),
+    messageLoading: readonly(messageLoading),
+    notificationLoading: readonly(notificationLoading),
+    messageHasMore: readonly(messageHasMore),
+    notificationHasMore: readonly(notificationHasMore),
+    statusLastSuccessAt: readonly(statusLastSuccessAt),
+    messageLastSuccessAt: readonly(messageLastSuccessAt),
+    notificationLastSuccessAt: readonly(notificationLastSuccessAt),
+    error: computed(() =>
+      statusError.value || messageError.value || notificationError.value),
+    statusError: readonly(statusError),
+    messageError: readonly(messageError),
+    notificationError: readonly(notificationError),
     simCounts,
     latestMessageTime,
     fetchStatus,
     fetchMessages,
+    fetchNotifications,
     claimOtp,
     fetchDevices,
     createPairing,
+    fetchDeviceDetails,
+    addDevice,
+    updateDevice,
+    removeDevice,
   }
 }
