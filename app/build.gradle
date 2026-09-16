@@ -21,10 +21,10 @@ android {
         applicationId = "com.caconnection"
         minSdk = 31
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
         buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
-        manifestPlaceholders = [appLabel: "CA connection"]
+        manifestPlaceholders = [appLabel: "CA Connection"]
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         javaCompileOptions {
             annotationProcessorOptions {
@@ -51,7 +51,7 @@ android {
         }
         release {
             applicationIdSuffix = ".gateway"
-            manifestPlaceholders = [appLabel: "CA connection"]
+            manifestPlaceholders = [appLabel: "CA Connection"]
             minifyEnabled = false
             proguardFiles(getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro')
             if (productionSigningConfigured) {

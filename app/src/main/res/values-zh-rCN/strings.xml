@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="poc_title">CA connection</string>
+    <string name="poc_title">CA Connection</string>
     <string name="home">首页</string>
     <string name="messages">消息</string>
     <string name="activity_logs">活动</string>
     <string name="settings">设置</string>
-    <string name="home_title">CA connection</string>
+    <string name="home_title">CA Connection</string>
     <string name="home_subtitle">你的个人通信网关</string>
     <string name="messages_title">消息</string>
     <string name="messages_subtitle">双卡收件箱与短信发送</string>
@@ -101,7 +101,7 @@
     <string name="share_logs">分享</string>
     <string name="clear">清除</string>
     <string name="logs_copied">脱敏日志已复制</string>
-    <string name="share_logs_title">分享 CA connection 脱敏日志</string>
+    <string name="share_logs_title">分享 CA Connection 脱敏日志</string>
     <string name="clear_events_title">清除本地事件历史？</string>
     <string name="clear_events_message">这会删除本地短信、通话、通知和待上传队列记录，但会保留应用设置。</string>
     <string name="cancel">取消</string>
@@ -120,7 +120,7 @@
     <string name="log_call_detail">SIM %1$d · 订阅 %2$d</string>
     <string name="log_outbox_detail">%1$s · 重试 %2$d 次%3$s</string>
     <string name="log_error_suffix"> · %1$s</string>
-    <string name="sanitized_log_header">CA connection 脱敏调试日志</string>
+    <string name="sanitized_log_header">CA Connection 脱敏调试日志</string>
     <string name="generated_at">生成时间：%1$s</string>
     <string name="permissions_and_roles">权限与系统角色</string>
     <string name="grant_permissions">授予必要权限</string>
@@ -197,12 +197,12 @@
     <string name="run_outbox_self_test">运行本地待上传队列自检</string>
     <string name="transport_test_queued">传输自检任务已加入队列</string>
     <string name="outbox_test_queued">本地待上传队列自检任务已加入</string>
-    <string name="already_default_sms">CA connection 已经是默认短信应用。</string>
+    <string name="already_default_sms">CA Connection 已经是默认短信应用。</string>
     <string name="sms_role_unavailable">此设备不支持默认短信应用角色。</string>
-    <string name="already_call_screening">CA connection 已拥有来电号码识别角色。</string>
+    <string name="already_call_screening">CA Connection 已拥有来电号码识别角色。</string>
     <string name="call_screening_unavailable">此设备不支持来电筛选角色。</string>
     <string name="notification_channel_name">短信网关通知</string>
-    <string name="notification_channel_description">CA connection 采集短信事件时显示的通知</string>
+    <string name="notification_channel_description">CA Connection 采集短信事件时显示的通知</string>
     <string name="dashboard">概览</string>
     <string name="send">发送</string>
     <string name="diagnostics">诊断</string>

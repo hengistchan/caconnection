@@ -38,6 +38,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="${appLabel}"
         android:localeConfig="@xml/locales_config"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.CAConnection"
         tools:targetApi="tiramisu">

@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="poc_title">CA connection</string>
+    <string name="poc_title">CA Connection</string>
     <string name="home">Home</string>
     <string name="messages">Messages</string>
     <string name="activity_logs">Activity</string>
     <string name="settings">Settings</string>
-    <string name="home_title">CA connection</string>
+    <string name="home_title">CA Connection</string>
     <string name="home_subtitle">Your personal communication gateway</string>
     <string name="messages_title">Messages</string>
     <string name="messages_subtitle">Dual-SIM inbox and outgoing SMS</string>
@@ -101,7 +101,7 @@
     <string name="share_logs">Share</string>
     <string name="clear">Clear</string>
     <string name="logs_copied">Sanitized logs copied</string>
-    <string name="share_logs_title">Share sanitized CA connection logs</string>
+    <string name="share_logs_title">Share sanitized CA Connection logs</string>
     <string name="clear_events_title">Clear local event history?</string>
     <string name="clear_events_message">This removes local SMS, call, notification and Outbox event records. App settings are kept.</string>
     <string name="cancel">Cancel</string>
@@ -120,7 +120,7 @@
     <string name="log_call_detail">SIM %1$d · subscription %2$d</string>
     <string name="log_outbox_detail">%1$s · retry %2$d%3$s</string>
     <string name="log_error_suffix"> · %1$s</string>
-    <string name="sanitized_log_header">CA connection sanitized debug log</string>
+    <string name="sanitized_log_header">CA Connection sanitized debug log</string>
     <string name="generated_at">Generated at: %1$s</string>
     <string name="permissions_and_roles">Permissions &amp; roles</string>
     <string name="grant_permissions">Grant required permissions</string>
@@ -197,12 +197,12 @@
     <string name="run_outbox_self_test">Run local Outbox self-test</string>
     <string name="transport_test_queued">Transport self-test queued</string>
     <string name="outbox_test_queued">Local Outbox self-test queued</string>
-    <string name="already_default_sms">CA connection is already the default SMS app.</string>
+    <string name="already_default_sms">CA Connection is already the default SMS app.</string>
     <string name="sms_role_unavailable">The SMS role is not available on this device.</string>
-    <string name="already_call_screening">CA connection already has the incoming caller ID role.</string>
+    <string name="already_call_screening">CA Connection already has the incoming caller ID role.</string>
     <string name="call_screening_unavailable">The call-screening role is not available on this device.</string>
     <string name="notification_channel_name">Incoming SMS gateway</string>
-    <string name="notification_channel_description">Notifications for SMS events captured by CA connection</string>
+    <string name="notification_channel_description">Notifications for SMS events captured by CA Connection</string>
     <string name="dashboard">Dashboard</string>
     <string name="send">Send</string>
     <string name="diagnostics">Diagnostics</string>
