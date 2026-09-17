@@ -17,7 +17,7 @@ export default defineEventHandler(async (event) => {
   try {
     await deleteGatewayDevice(deviceId)
     setResponseHeaders(event, { 'Cache-Control': 'no-store' })
-    return { deleted: true }
+    return { retired: true }
   } catch (error) {
     applyGatewayErrorHeaders(event, error)
     throw error

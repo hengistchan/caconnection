@@ -3,6 +3,7 @@
     <header class="notification-header">
       <div class="notification-meta">
         <span class="badge badge-purple">{{ t('messages.notification') }}</span>
+        <span class="badge badge-info">{{ notification.deviceId }}</span>
         <span class="source-package">{{ notification.sourcePackage || '—' }}</span>
         <time class="notification-time" :datetime="receivedAtIso">
           {{ formattedTime }}

@@ -38,6 +38,23 @@
           <span>{{ t('dashboard.readOnlyNotice') }}</span>
         </div>
 
+        <div class="card fleet-context">
+          <label class="filter-field">
+            <span>{{ t('fleet.context') }}</span>
+            <select v-model="selectedDeviceId" class="filter-select">
+              <option value="all">{{ t('fleet.allDevices') }}</option>
+              <option
+                v-for="device in deviceDetails"
+                :key="device.deviceId"
+                :value="device.deviceId"
+              >
+                {{ device.deviceId }} · {{ t(`fleet.health.${device.health}`) }}
+              </option>
+            </select>
+          </label>
+          <span class="section-subtitle">{{ t('fleet.contextHelp') }}</span>
+        </div>
+
         <section
           v-if="activeTab === 'dashboard'"
           id="dashboard-panel"
@@ -211,7 +228,10 @@
                 </button>
               </div>
 
-              <label v-if="contentFilter !== 'notifications'" class="filter-field">
+              <label
+                v-if="contentFilter !== 'notifications' && selectedDeviceId !== 'all'"
+                class="filter-field"
+              >
                 <span>{{ t('messages.filter.sim') }}</span>
                 <select v-model="currentFilter" class="filter-select">
                   <option :value="null">{{ t('messages.filter.allSims') }}</option>
@@ -360,7 +380,7 @@
                 >
                   <option value="" disabled>{{ t('outbound.selectDevice') }}</option>
                   <option
-                    v-for="device in deviceDetails"
+                    v-for="device in activeDevices"
                     :key="device.deviceId"
                     :value="device.deviceId"
                   >
@@ -377,8 +397,14 @@
                   class="filter-select"
                   :disabled="outboundSendLoading"
                 >
-                  <option :value="0">{{ t('messages.filter.sim1') }}</option>
-                  <option :value="1">{{ t('messages.filter.sim2') }}</option>
+                  <option
+                    v-for="line in outboundLines"
+                    :key="line.slotIndex"
+                    :value="line.slotIndex"
+                  >
+                    SIM{{ line.slotIndex + 1 }} ·
+                    {{ line.carrierName || line.displayName || t('dashboard.unknown') }}
+                  </option>
                 </select>
               </label>
               <label class="form-field">
@@ -407,6 +433,15 @@
             </div>
             <p v-if="outboundSendError" class="inline-alert inline-alert-error" role="alert">
               {{ outboundSendError }}
+            </p>
+            <p
+              v-if="selectedOutboundDevice && selectedOutboundDevice.health !== 'ONLINE'"
+              class="inline-alert inline-alert-warning"
+              role="status"
+            >
+              {{ t('outbound.deviceHealthWarning', {
+                health: t(`fleet.health.${selectedOutboundDevice.health}`),
+              }) }}
             </p>
             <button
               class="btn btn-primary"
@@ -565,6 +600,19 @@
                   <span class="device-meta">
                     {{ t('devices.createdAt') }}: {{ formatTime(device.createdAt) }} ·
                     {{ t('devices.lastSeen') }}: {{ formatOptionalTime(device.lastSeenAt) }}
+                  </span>
+                  <span class="badge">{{ t(`fleet.health.${device.health}`) }}</span>
+                  <span class="device-meta">
+                    {{ device.status.manufacturer || '—' }}
+                    {{ device.status.model || '' }} ·
+                    {{ device.status.receiveMode || '—' }} ·
+                    SDK {{ device.status.targetSdk ?? '—' }}
+                  </span>
+                  <span class="device-meta">
+                    {{ t('fleet.permissions') }}:
+                    RECEIVE_SMS={{ device.status.permissions.receiveSms ?? '—' }},
+                    SEND_SMS={{ device.status.permissions.sendSms ?? '—' }},
+                    READ_PHONE_STATE={{ device.status.permissions.readPhoneState ?? '—' }}
                   </span>
                 </div>
                 <div class="device-actions">
@@ -763,6 +811,9 @@ const dateRange = ref<DateRange>(
     ? route.query.range as DateRange
     : 'all',
 )
+const selectedDeviceId = ref(
+  typeof route.query.device === 'string' ? route.query.device : 'all',
+)
 
 const deviceDetails = ref<GatewayDeviceDetail[]>([])
 const deviceLoading = ref(false)
@@ -816,9 +867,18 @@ const toast = reactive<{
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const contentLoading = computed(() => messageLoading.value || notificationLoading.value)
+const activeDevices = computed(() =>
+  deviceDetails.value.filter(device => device.retiredAt === null),
+)
+const selectedOutboundDevice = computed(() =>
+  deviceDetails.value.find(device => device.deviceId === outboundDeviceId.value) ?? null,
+)
+const outboundLines = computed(() =>
+  selectedOutboundDevice.value?.status.lines.filter(line => line.active) ?? [],
+)
 const canRequestOutboundSend = computed(() =>
   Boolean(outboundDeviceId.value)
-  && [0, 1].includes(outboundSlotIndex.value)
+  && outboundLines.value.some(line => line.slotIndex === outboundSlotIndex.value)
   && outboundRecipient.value.length > 0
   && outboundRecipient.value.length <= 64
   && !/[A-Za-z]/.test(outboundRecipient.value)
@@ -944,21 +1004,45 @@ watch(notificationSources, (sources) => {
   }
 })
 watch(deviceDetails, (devices) => {
-  if (
-    devices.length > 0
-    && !devices.some(device => device.deviceId === outboundDeviceId.value)
-  ) {
-    outboundDeviceId.value = devices[0].deviceId
+  if (!devices.some(device =>
+    device.deviceId === outboundDeviceId.value && device.retiredAt === null)) {
+    outboundDeviceId.value = ''
   }
+  if (
+    selectedDeviceId.value !== 'all'
+    && !devices.some(device => device.deviceId === selectedDeviceId.value)
+  ) selectedDeviceId.value = 'all'
+})
+watch(outboundDeviceId, () => {
+  outboundSlotIndex.value = outboundLines.value[0]?.slotIndex ?? -1
+})
+watch(selectedDeviceId, async () => {
+  currentFilter.value = null
+  const deviceId = selectedDeviceId.value === 'all'
+    ? undefined
+    : selectedDeviceId.value
+  await Promise.all([
+    fetchMessages({ limit: 50, deviceId }),
+    fetchNotifications({ limit: 50, deviceId }),
+  ])
 })
 watch(activeTab, (tab) => {
   if (tab !== 'messages') hideAllSensitive()
 })
 watch(
-  [activeTab, contentFilter, currentFilter, sourcePackageFilter, searchQuery, dateRange],
+  [
+    activeTab,
+    contentFilter,
+    currentFilter,
+    sourcePackageFilter,
+    searchQuery,
+    dateRange,
+    selectedDeviceId,
+  ],
   () => {
     const query: Record<string, string> = {}
     if (activeTab.value !== 'dashboard') query.view = activeTab.value
+    if (selectedDeviceId.value !== 'all') query.device = selectedDeviceId.value
     if (activeTab.value === 'messages') {
       if (contentFilter.value !== 'all') query.type = contentFilter.value
       if (currentFilter.value !== null) query.sim = String(currentFilter.value)
@@ -1018,11 +1102,14 @@ function formatOptionalTime(timestamp: number | null | undefined): string {
 
 async function refreshDashboard(silent = false): Promise<void> {
   dashboardRefreshing.value = true
+  const deviceId = selectedDeviceId.value === 'all'
+    ? undefined
+    : selectedDeviceId.value
   const results = await Promise.all([
     fetchStatus(),
-    fetchMessages({ limit: 50 }),
-    fetchNotifications({ limit: 50 }),
-    fetchOutboundMessages({ limit: 20 }),
+    fetchMessages({ limit: 50, deviceId }),
+    fetchNotifications({ limit: 50, deviceId }),
+    fetchOutboundMessages({ limit: 20, deviceId }),
     loadDevices(),
   ])
   dashboardRefreshing.value = false
@@ -1036,8 +1123,15 @@ async function refreshDashboard(silent = false): Promise<void> {
 
 async function refreshContent(): Promise<void> {
   const jobs: Array<Promise<boolean>> = []
-  if (contentFilter.value !== 'notifications') jobs.push(fetchMessages({ limit: 50 }))
-  if (contentFilter.value !== 'sms') jobs.push(fetchNotifications({ limit: 50 }))
+  const deviceId = selectedDeviceId.value === 'all'
+    ? undefined
+    : selectedDeviceId.value
+  if (contentFilter.value !== 'notifications') {
+    jobs.push(fetchMessages({ limit: 50, deviceId }))
+  }
+  if (contentFilter.value !== 'sms') {
+    jobs.push(fetchNotifications({ limit: 50, deviceId }))
+  }
   const results = await Promise.all(jobs)
   const successes = results.filter(Boolean).length
   if (successes === results.length) showToast(t('common.refreshSuccess'), 'success')
@@ -1046,7 +1140,12 @@ async function refreshContent(): Promise<void> {
 }
 
 async function refreshOutbound(): Promise<void> {
-  const success = await fetchOutboundMessages({ limit: 50 })
+  const success = await fetchOutboundMessages({
+    limit: 50,
+    deviceId: selectedDeviceId.value === 'all'
+      ? undefined
+      : selectedDeviceId.value,
+  })
   showToast(
     success ? t('common.refreshSuccess') : t('common.refreshFailed'),
     success ? 'success' : 'error',
@@ -1058,6 +1157,9 @@ async function loadOlderOutbound(): Promise<void> {
   await fetchOutboundMessages({
     limit: 50,
     beforeId: Math.min(...outboundMessages.value.map(message => message.id)),
+    deviceId: selectedDeviceId.value === 'all'
+      ? undefined
+      : selectedDeviceId.value,
     append: true,
   })
 }
@@ -1105,11 +1207,21 @@ async function confirmOutboundSend(): Promise<void> {
 }
 
 async function retryMessages(): Promise<void> {
-  await fetchMessages({ limit: 50 })
+  await fetchMessages({
+    limit: 50,
+    deviceId: selectedDeviceId.value === 'all'
+      ? undefined
+      : selectedDeviceId.value,
+  })
 }
 
 async function retryNotifications(): Promise<void> {
-  await fetchNotifications({ limit: 50 })
+  await fetchNotifications({
+    limit: 50,
+    deviceId: selectedDeviceId.value === 'all'
+      ? undefined
+      : selectedDeviceId.value,
+  })
 }
 
 async function loadMore(): Promise<void> {
@@ -1118,6 +1230,9 @@ async function loadMore(): Promise<void> {
     jobs.push(fetchMessages({
       limit: 50,
       beforeId: Math.min(...messages.value.map(message => message.id)),
+      deviceId: selectedDeviceId.value === 'all'
+        ? undefined
+        : selectedDeviceId.value,
       append: true,
     }))
   }
@@ -1125,6 +1240,9 @@ async function loadMore(): Promise<void> {
     jobs.push(fetchNotifications({
       limit: 50,
       beforeId: Math.min(...notifications.value.map(notification => notification.id)),
+      deviceId: selectedDeviceId.value === 'all'
+        ? undefined
+        : selectedDeviceId.value,
       append: true,
     }))
   }
@@ -1362,6 +1480,7 @@ async function handleLogout(): Promise<void> {
 .main-content { flex: 1; padding: var(--space-xl) 0; }
 .notice-bar { display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-xl); padding: var(--space-sm) var(--space-md); color: var(--color-info-text); background: var(--color-info-light); border: 1px solid color-mix(in srgb, var(--color-info) 45%, transparent); border-radius: var(--radius-md); font-size: 0.875rem; }
 .notice-icon { display: grid; flex: none; place-items: center; width: 1.25rem; height: 1.25rem; border: 1px solid currentColor; border-radius: 50%; font-size: 0.75rem; font-weight: 800; }
+.fleet-context { display: flex; align-items: end; gap: var(--space-md); margin-bottom: var(--space-xl); padding: var(--space-md); }
 .section-header { gap: var(--space-md); margin-bottom: var(--space-lg); }
 .section-subtitle { margin: var(--space-xs) 0 0; color: var(--color-text-secondary); font-size: 0.875rem; }
 .refresh-summary { flex-wrap: wrap; gap: var(--space-md); margin: calc(-1 * var(--space-sm)) 0 var(--space-lg); color: var(--color-text-muted); font-size: 0.75rem; }

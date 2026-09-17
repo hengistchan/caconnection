@@ -3,6 +3,7 @@
     <header class="message-header">
       <div class="message-meta">
         <span class="badge" :class="simBadgeClass">{{ simLabel }}</span>
+        <span class="badge badge-info">{{ message.deviceId }}</span>
         <time class="message-time" :datetime="receivedAtIso">
           {{ formattedTime }}
         </time>
@@ -309,6 +310,7 @@ async function handleClaimOtp() {
   try {
     const result = await claimOtp({
       eventId: props.message.id,
+      deviceId: props.message.deviceId,
       ...(props.message.slotIndex !== null
         ? { slotIndex: props.message.slotIndex }
         : {}),

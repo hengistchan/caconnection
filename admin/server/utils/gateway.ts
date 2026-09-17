@@ -230,6 +230,37 @@ export interface GatewayDeviceDetail {
   description: string
   createdAt: number
   lastSeenAt: number | null
+  retiredAt: number | null
+  health: 'ONLINE' | 'STALE' | 'OFFLINE' | 'NEVER' | 'RETIRED'
+  status: {
+    observedAt: number | null
+    appVersion: string | null
+    versionCode: number | null
+    targetSdk: number | null
+    androidVersion: string | null
+    manufacturer: string | null
+    model: string | null
+    receiveMode: 'OBSERVER' | 'DEFAULT_SMS' | null
+    defaultSmsRole: boolean | null
+    permissions: {
+      receiveSms: boolean | null
+      sendSms: boolean | null
+      readPhoneState: boolean | null
+    }
+    lastIncomingSmsAt: number | null
+    lastOtpAt: number | null
+    lastOrdinarySmsAt: number | null
+    lastReceiverAction: 'SMS_RECEIVED' | 'SMS_DELIVER' | null
+    lastReceiverActionAt: number | null
+    lines: Array<{
+      slotIndex: number
+      subscriptionId: number | null
+      carrierName: string | null
+      displayName: string | null
+      active: boolean
+      observedAt: number
+    }>
+  }
 }
 
 export interface GatewayDeviceDetailResponse {
@@ -491,6 +522,7 @@ export async function getGatewayMessages(options: {
   slotIndex?: number | null
   afterId?: number | null
   beforeId?: number | null
+  deviceId?: string
 } = {}): Promise<GatewayMessagesResponse> {
   const params = new URLSearchParams()
   if (options.limit) params.set('limit', options.limit.toString())
@@ -503,6 +535,7 @@ export async function getGatewayMessages(options: {
   if (options.beforeId !== undefined && options.beforeId !== null) {
     params.set('beforeId', options.beforeId.toString())
   }
+  if (options.deviceId) params.set('deviceId', options.deviceId)
   const query = params.toString()
   return parseMessagesResponse(
     await gatewayFetch(`/v1/messages${query ? `?${query}` : ''}`),
@@ -513,6 +546,7 @@ export async function getGatewayNotifications(options: {
   limit?: number
   afterId?: number | null
   beforeId?: number | null
+  deviceId?: string
 } = {}): Promise<GatewayNotificationsResponse> {
   const params = new URLSearchParams()
   if (options.limit) params.set('limit', options.limit.toString())
@@ -522,6 +556,7 @@ export async function getGatewayNotifications(options: {
   if (options.beforeId !== undefined && options.beforeId !== null) {
     params.set('beforeId', options.beforeId.toString())
   }
+  if (options.deviceId) params.set('deviceId', options.deviceId)
   const query = params.toString()
   return parseNotificationsResponse(
     await gatewayFetch(`/v1/notifications${query ? `?${query}` : ''}`),
@@ -576,6 +611,7 @@ export async function createGatewayPairing(options: {
 }
 
 export async function claimGatewayOtp(options: {
+  deviceId?: string
   slotIndex?: number
   maxAgeSeconds?: number
   eventId?: number
@@ -584,6 +620,7 @@ export async function claimGatewayOtp(options: {
     maxAgeSeconds: options.maxAgeSeconds ?? 600,
   }
   if (options.slotIndex !== undefined) body.slotIndex = options.slotIndex
+  if (options.deviceId !== undefined) body.deviceId = options.deviceId
   if (options.eventId !== undefined) body.eventId = options.eventId
 
   return parseOtpClaimResponse(await gatewayFetch('/v1/otp/claim', {
@@ -604,6 +641,11 @@ function parseDeviceDetail(value: unknown): GatewayDeviceDetail {
     || typeof value.createdAt !== 'number'
     || !Number.isSafeInteger(value.createdAt)
     || !(value.lastSeenAt === null || (typeof value.lastSeenAt === 'number' && Number.isSafeInteger(value.lastSeenAt)))
+    || !(value.retiredAt === null || (typeof value.retiredAt === 'number' && Number.isSafeInteger(value.retiredAt)))
+    || !['ONLINE', 'STALE', 'OFFLINE', 'NEVER', 'RETIRED'].includes(String(value.health))
+    || !isRecord(value.status)
+    || !isRecord(value.status.permissions)
+    || !Array.isArray(value.status.lines)
   ) {
     return invalidGatewayResponse()
   }

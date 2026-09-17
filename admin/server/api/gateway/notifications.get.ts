@@ -11,6 +11,7 @@ export default defineEventHandler(async (event) => {
   const limit = query.limit ? parseInt(query.limit as string, 10) : 50
   const afterId = query.afterId ? parseInt(query.afterId as string, 10) : null
   const beforeId = query.beforeId ? parseInt(query.beforeId as string, 10) : null
+  const deviceId = query.deviceId === undefined ? undefined : String(query.deviceId)
 
   if (isNaN(limit) || limit < 1 || limit > 100) {
     throw createError({
@@ -37,9 +38,12 @@ export default defineEventHandler(async (event) => {
       message: 'afterId and beforeId cannot be combined',
     })
   }
+  if (deviceId !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(deviceId)) {
+    throw createError({ statusCode: 400, message: 'Invalid deviceId parameter' })
+  }
 
   try {
-    const result = await getGatewayNotifications({ limit, afterId, beforeId })
+    const result = await getGatewayNotifications({ limit, afterId, beforeId, deviceId })
     setResponseHeaders(event, {
       'Cache-Control': 'no-store',
     })

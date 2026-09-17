@@ -19,7 +19,13 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const { slotIndex, maxAgeSeconds, eventId } = body
+  const { deviceId, slotIndex, maxAgeSeconds, eventId } = body
+  if (
+    deviceId !== undefined
+    && (typeof deviceId !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(deviceId))
+  ) {
+    throw createError({ statusCode: 400, message: 'Invalid deviceId' })
+  }
 
   // Validate parameters
   if (
@@ -68,6 +74,7 @@ export default defineEventHandler(async (event) => {
     // Claim OTP from Gateway
     const result = await claimGatewayOtp({
       ...(slotIndex !== undefined ? { slotIndex } : {}),
+      ...(deviceId !== undefined ? { deviceId } : {}),
       maxAgeSeconds: maxAgeSeconds ?? 600,
       eventId,
     })

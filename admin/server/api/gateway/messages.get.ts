@@ -17,6 +17,7 @@ export default defineEventHandler(async (event) => {
     : null
   const afterId = query.afterId ? parseInt(query.afterId as string, 10) : null
   const beforeId = query.beforeId ? parseInt(query.beforeId as string, 10) : null
+  const deviceId = query.deviceId === undefined ? undefined : String(query.deviceId)
 
   // Validate parameters
   if (isNaN(limit) || limit < 1 || limit > 100) {
@@ -51,6 +52,9 @@ export default defineEventHandler(async (event) => {
       message: 'afterId and beforeId cannot be combined',
     })
   }
+  if (deviceId !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(deviceId)) {
+    throw createError({ statusCode: 400, message: 'Invalid deviceId parameter' })
+  }
 
   // Fetch messages from Gateway
   try {
@@ -59,6 +63,7 @@ export default defineEventHandler(async (event) => {
       slotIndex,
       afterId,
       beforeId,
+      deviceId,
     })
     setResponseHeaders(event, {
       'Cache-Control': 'no-store',

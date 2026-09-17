@@ -25,7 +25,7 @@
     "submitting": "Logging in...",
     "error": "Login failed. Please check your password.",
     "rateLimit": "Too many login attempts. Please try again later.",
-    "securityNotice": "Security Notice: Sending messages is not supported. Pairing only creates short-lived, one-time connection codes."
+    "securityNotice": "Security notice: the admin can send SMS only through an explicitly selected gateway and SIM. Pairing codes are short-lived and single-use."
   },
   "dashboard": {
     "title": "Dashboard",
@@ -204,9 +204,9 @@
     "confirmAdd": "Add Device",
     "adding": "Adding...",
     "addError": "Failed to add device",
-    "delete": "Delete",
-    "deleteConfirm": "Delete device {deviceId}? It will no longer be able to upload, and its historical encrypted content will no longer be decryptable. This action cannot be undone.",
-    "deleteError": "Failed to delete device",
+    "delete": "Retire",
+    "deleteConfirm": "Retire device {deviceId}? Device authentication, pairing, and new commands will be disabled while historical encrypted content remains readable.",
+    "deleteError": "Failed to retire device",
     "empty": "No devices yet",
     "createdAt": "Created",
     "lastSeen": "Last seen",
@@ -225,8 +225,8 @@
     "addSuccess": "Device added",
     "updateSuccess": "Device updated",
     "updateError": "Failed to update device",
-    "deleteSuccess": "Device deleted",
-    "deleteDialogTitle": "Delete gateway device",
+    "deleteSuccess": "Device retired",
+    "deleteDialogTitle": "Retire gateway device",
     "loadError": "Could not load gateway devices."
   },
   "outbound": {
@@ -265,6 +265,20 @@
       "DELIVERED": "Delivered",
       "FAILED": "Failed",
       "EXPIRED": "Expired"
+    },
+    "deviceHealthWarning": "The selected gateway is {health}. The command will not be rerouted to another device."
+  },
+  "fleet": {
+    "context": "Gateway scope",
+    "allDevices": "All gateways",
+    "contextHelp": "The selection is preserved in the URL; SIM filters are enabled only for one gateway.",
+    "permissions": "Permissions",
+    "health": {
+      "ONLINE": "Online",
+      "STALE": "Stale",
+      "OFFLINE": "Offline",
+      "NEVER": "Never connected",
+      "RETIRED": "Retired"
     }
   }
 }

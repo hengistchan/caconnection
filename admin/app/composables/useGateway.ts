@@ -66,6 +66,37 @@ export interface GatewayDeviceDetail {
   description: string
   createdAt: number
   lastSeenAt: number | null
+  retiredAt: number | null
+  health: 'ONLINE' | 'STALE' | 'OFFLINE' | 'NEVER' | 'RETIRED'
+  status: {
+    observedAt: number | null
+    appVersion: string | null
+    versionCode: number | null
+    targetSdk: number | null
+    androidVersion: string | null
+    manufacturer: string | null
+    model: string | null
+    receiveMode: 'OBSERVER' | 'DEFAULT_SMS' | null
+    defaultSmsRole: boolean | null
+    permissions: {
+      receiveSms: boolean | null
+      sendSms: boolean | null
+      readPhoneState: boolean | null
+    }
+    lastIncomingSmsAt: number | null
+    lastOtpAt: number | null
+    lastOrdinarySmsAt: number | null
+    lastReceiverAction: 'SMS_RECEIVED' | 'SMS_DELIVER' | null
+    lastReceiverActionAt: number | null
+    lines: Array<{
+      slotIndex: number
+      subscriptionId: number | null
+      carrierName: string | null
+      displayName: string | null
+      active: boolean
+      observedAt: number
+    }>
+  }
 }
 
 export type GatewayOutboundStatus =
@@ -181,6 +212,7 @@ export function useGateway() {
     slotIndex?: number | null
     beforeId?: number | null
     append?: boolean
+    deviceId?: string
   } = {}): Promise<boolean> {
     messageLoading.value = true
 
@@ -195,6 +227,7 @@ export function useGateway() {
       if (options.beforeId !== undefined && options.beforeId !== null) {
         params.set('beforeId', options.beforeId.toString())
       }
+      if (options.deviceId) params.set('deviceId', options.deviceId)
 
       const query = params.toString()
       const url = `/admin/api/gateway/messages${query ? `?${query}` : ''}`
@@ -230,6 +263,7 @@ export function useGateway() {
     limit?: number
     beforeId?: number | null
     append?: boolean
+    deviceId?: string
   } = {}): Promise<boolean> {
     notificationLoading.value = true
 
@@ -241,6 +275,7 @@ export function useGateway() {
       if (options.beforeId !== undefined && options.beforeId !== null) {
         params.set('beforeId', options.beforeId.toString())
       }
+      if (options.deviceId) params.set('deviceId', options.deviceId)
       const query = params.toString()
       const url = `/admin/api/gateway/notifications${query ? `?${query}` : ''}`
       const data = await $fetch<{ notifications: GatewayNotification[] }>(url, {
@@ -350,6 +385,7 @@ export function useGateway() {
    */
   async function claimOtp(options: {
     eventId: number
+    deviceId?: string
     slotIndex?: number
     maxAgeSeconds?: number
   }): Promise<OtpClaimResult | null> {
@@ -358,6 +394,7 @@ export function useGateway() {
         method: 'POST',
         body: {
           eventId: options.eventId,
+          ...(options.deviceId ? { deviceId: options.deviceId } : {}),
           ...(options.slotIndex !== undefined
             ? { slotIndex: options.slotIndex }
             : {}),

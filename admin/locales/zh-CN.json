@@ -25,7 +25,7 @@
     "submitting": "登录中...",
     "error": "登录失败，请检查密码是否正确",
     "rateLimit": "登录尝试过于频繁，请稍后再试",
-    "securityNotice": "安全提示：后台不支持发送短信；配对功能只会生成短时有效的一次性连接码。"
+    "securityNotice": "安全提示：后台支持经明确选择的 Gateway 和 SIM 远程发短信；配对码短时有效且仅可使用一次。"
   },
   "dashboard": {
     "title": "仪表盘",
@@ -204,9 +204,9 @@
     "confirmAdd": "确认添加",
     "adding": "添加中...",
     "addError": "添加设备失败",
-    "delete": "删除",
-    "deleteConfirm": "确定要删除设备 {deviceId} 吗？删除后该设备将无法继续上传，且其历史加密内容将无法再解密。此操作不可撤销。",
-    "deleteError": "删除设备失败",
+    "delete": "退役",
+    "deleteConfirm": "确定要退役设备 {deviceId} 吗？设备认证、配对和新命令会被禁用，但历史加密内容仍可读取。",
+    "deleteError": "退役设备失败",
     "empty": "暂无设备",
     "createdAt": "创建时间",
     "lastSeen": "最后在线",
@@ -225,8 +225,8 @@
     "addSuccess": "设备添加成功",
     "updateSuccess": "设备更新成功",
     "updateError": "设备更新失败",
-    "deleteSuccess": "设备已删除",
-    "deleteDialogTitle": "删除网关设备",
+    "deleteSuccess": "设备已退役",
+    "deleteDialogTitle": "退役网关设备",
     "loadError": "无法读取网关设备。"
   },
   "outbound": {
@@ -265,6 +265,20 @@
       "DELIVERED": "已送达",
       "FAILED": "失败",
       "EXPIRED": "已过期"
+    },
+    "deviceHealthWarning": "所选 Gateway 当前状态为：{health}。命令不会自动改投其他设备。"
+  },
+  "fleet": {
+    "context": "Gateway 范围",
+    "allDevices": "全部 Gateway",
+    "contextHelp": "筛选会保留在 URL 中；SIM 筛选只在单个 Gateway 范围内启用。",
+    "permissions": "权限",
+    "health": {
+      "ONLINE": "在线",
+      "STALE": "状态延迟",
+      "OFFLINE": "离线",
+      "NEVER": "从未连接",
+      "RETIRED": "已退役"
     }
   }
 }
