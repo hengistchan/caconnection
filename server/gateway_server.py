@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 MAX_BODY_BYTES = 1_048_576
 MAX_CLOCK_SKEW_MS = 300_000
 NONCE_RETENTION_MS = 600_000
-SERVICE_VERSION = "0.2.0"
+SERVICE_VERSION = "0.3.0"
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_OTP_MAX_AGE_SECONDS = 600
 DEFAULT_INGEST_REQUESTS_PER_MINUTE = 120
@@ -37,6 +37,8 @@ DEFAULT_API_REQUESTS_PER_MINUTE = 60
 DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE = 20
 DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE = 20
 DEFAULT_MAX_CONCURRENT_REQUESTS = 32
+DEVICE_ONLINE_WINDOW_MS = 3 * 60 * 1000
+DEVICE_STALE_WINDOW_MS = 15 * 60 * 1000
 DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300
 MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS = 60
 MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS = 3600
@@ -50,6 +52,7 @@ ALLOWED_EVENT_TYPES = {
     "CALL_STATE",
     "CALL_IDENTITY",
     "OUTBOUND_SMS_STATUS",
+    "DEVICE_STATE",
     "LOCAL_SELF_TEST",
 }
 OUTBOUND_COMMAND_STATUSES = {
@@ -356,14 +359,67 @@ class GatewayStore:
                     secret_base64 TEXT NOT NULL,
                     description TEXT DEFAULT '',
                     created_at INTEGER NOT NULL,
-                    last_seen_at INTEGER
+                    last_seen_at INTEGER,
+                    retired_at INTEGER
                 );
+                CREATE TABLE IF NOT EXISTS device_status (
+                    device_id TEXT PRIMARY KEY,
+                    observed_at INTEGER NOT NULL,
+                    app_version TEXT,
+                    version_code INTEGER,
+                    target_sdk INTEGER,
+                    android_version TEXT,
+                    manufacturer TEXT,
+                    model TEXT,
+                    receive_mode TEXT,
+                    default_sms_role INTEGER,
+                    receive_sms_granted INTEGER,
+                    send_sms_granted INTEGER,
+                    read_phone_state_granted INTEGER,
+                    last_incoming_sms_at INTEGER,
+                    last_otp_at INTEGER,
+                    last_ordinary_sms_at INTEGER,
+                    last_receiver_action TEXT,
+                    last_receiver_action_at INTEGER,
+                    updated_at INTEGER NOT NULL,
+                    FOREIGN KEY(device_id) REFERENCES devices(device_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS device_lines (
+                    device_id TEXT NOT NULL,
+                    slot_index INTEGER NOT NULL,
+                    subscription_id INTEGER,
+                    carrier_name TEXT,
+                    display_name TEXT,
+                    is_active INTEGER NOT NULL,
+                    observed_at INTEGER NOT NULL,
+                    PRIMARY KEY(device_id, slot_index),
+                    FOREIGN KEY(device_id) REFERENCES devices(device_id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS admin_audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    occurred_at INTEGER NOT NULL,
+                    client_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    device_id TEXT,
+                    outcome TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS index_admin_audit_occurred
+                    ON admin_audit_log(occurred_at DESC);
                 CREATE TABLE IF NOT EXISTS gateway_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
                 """
             )
+            device_columns = {
+                row["name"]
+                for row in db.execute("PRAGMA table_info(devices)").fetchall()
+            }
+            if "retired_at" not in device_columns:
+                db.execute("ALTER TABLE devices ADD COLUMN retired_at INTEGER")
 
     def create_pairing(
         self,
@@ -725,47 +781,497 @@ class GatewayStore:
 
     # ── Device CRUD ──────────────────────────────────────────────
 
-    def get_devices(self) -> list[dict[str, Any]]:
-        """Return all devices from the database."""
-        with self._connect() as db:
-            rows = db.execute(
-                """
-                SELECT device_id, secret_base64, description,
-                       created_at, last_seen_at
-                FROM devices
-                ORDER BY device_id
-                """
-            ).fetchall()
-        return [
-            {
-                "deviceId": row["device_id"],
-                "description": row["description"] or "",
-                "createdAt": row["created_at"],
-                "lastSeenAt": row["last_seen_at"],
-            }
-            for row in rows
-        ]
+    @staticmethod
+    def _device_health(
+        last_seen_at: Optional[int],
+        retired_at: Optional[int],
+        now_ms: int,
+    ) -> str:
+        if retired_at is not None:
+            return "RETIRED"
+        if last_seen_at is None:
+            return "NEVER"
+        age = max(0, now_ms - last_seen_at)
+        if age <= DEVICE_ONLINE_WINDOW_MS:
+            return "ONLINE"
+        if age <= DEVICE_STALE_WINDOW_MS:
+            return "STALE"
+        return "OFFLINE"
 
-    def get_device(self, device_id: str) -> Optional[dict[str, Any]]:
-        """Return a single device by ID."""
-        with self._connect() as db:
-            row = db.execute(
-                """
-                SELECT device_id, secret_base64, description,
-                       created_at, last_seen_at
-                FROM devices
-                WHERE device_id = ?
-                """,
-                (device_id,),
-            ).fetchone()
-        if row is None:
-            return None
+    def _device_from_row(
+        self,
+        row: sqlite3.Row,
+        lines: list[dict[str, Any]],
+        now_ms: int,
+    ) -> dict[str, Any]:
+        def bool_or_none(name: str) -> Optional[bool]:
+            value = row[name]
+            return None if value is None else bool(value)
+
         return {
             "deviceId": row["device_id"],
             "description": row["description"] or "",
             "createdAt": row["created_at"],
             "lastSeenAt": row["last_seen_at"],
+            "retiredAt": row["retired_at"],
+            "health": self._device_health(
+                row["last_seen_at"],
+                row["retired_at"],
+                now_ms,
+            ),
+            "status": {
+                "observedAt": row["observed_at"],
+                "appVersion": row["app_version"],
+                "versionCode": row["version_code"],
+                "targetSdk": row["target_sdk"],
+                "androidVersion": row["android_version"],
+                "manufacturer": row["manufacturer"],
+                "model": row["model"],
+                "receiveMode": row["receive_mode"],
+                "defaultSmsRole": bool_or_none("default_sms_role"),
+                "permissions": {
+                    "receiveSms": bool_or_none("receive_sms_granted"),
+                    "sendSms": bool_or_none("send_sms_granted"),
+                    "readPhoneState": bool_or_none(
+                        "read_phone_state_granted"
+                    ),
+                },
+                "lastIncomingSmsAt": row["last_incoming_sms_at"],
+                "lastOtpAt": row["last_otp_at"],
+                "lastOrdinarySmsAt": row["last_ordinary_sms_at"],
+                "lastReceiverAction": row["last_receiver_action"],
+                "lastReceiverActionAt": row["last_receiver_action_at"],
+                "lines": lines,
+            },
         }
+
+    def get_devices(self) -> list[dict[str, Any]]:
+        """Return all devices from the database."""
+        now_ms = int(time.time() * 1000)
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT d.device_id, d.description, d.created_at,
+                       d.last_seen_at, d.retired_at,
+                       s.observed_at, s.app_version, s.version_code,
+                       s.target_sdk, s.android_version, s.manufacturer,
+                       s.model, s.receive_mode, s.default_sms_role,
+                       s.receive_sms_granted, s.send_sms_granted,
+                       s.read_phone_state_granted,
+                       s.last_incoming_sms_at, s.last_otp_at,
+                       s.last_ordinary_sms_at, s.last_receiver_action,
+                       s.last_receiver_action_at
+                FROM devices d
+                LEFT JOIN device_status s ON s.device_id = d.device_id
+                ORDER BY d.device_id
+                """
+            ).fetchall()
+            line_rows = db.execute(
+                """
+                SELECT device_id, slot_index, subscription_id,
+                       carrier_name, display_name, is_active, observed_at
+                FROM device_lines
+                ORDER BY device_id, slot_index
+                """
+            ).fetchall()
+        lines_by_device: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for line in line_rows:
+            lines_by_device[str(line["device_id"])].append(
+                {
+                    "slotIndex": line["slot_index"],
+                    "subscriptionId": line["subscription_id"],
+                    "carrierName": line["carrier_name"],
+                    "displayName": line["display_name"],
+                    "active": bool(line["is_active"]),
+                    "observedAt": line["observed_at"],
+                }
+            )
+        return [
+            self._device_from_row(
+                row,
+                lines_by_device.get(str(row["device_id"]), []),
+                now_ms,
+            )
+            for row in rows
+        ]
+
+    def get_device(self, device_id: str) -> Optional[dict[str, Any]]:
+        """Return a single device by ID."""
+        return next(
+            (
+                device
+                for device in self.get_devices()
+                if device["deviceId"] == device_id
+            ),
+            None,
+        )
+
+    def is_device_active(self, device_id: str) -> bool:
+        with self._connect() as db:
+            row = db.execute(
+                """
+                SELECT retired_at
+                FROM devices
+                WHERE device_id = ?
+                """,
+                (device_id,),
+            ).fetchone()
+        # Legacy/in-memory test configurations have no database device row.
+        return row is None or row["retired_at"] is None
+
+    def upsert_device_state(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        now_ms: int,
+    ) -> None:
+        required_boolean_fields = (
+            "defaultSmsRole",
+            "receiveSmsGranted",
+            "sendSmsGranted",
+            "readPhoneStateGranted",
+        )
+        for name in required_boolean_fields:
+            if not isinstance(payload.get(name), bool):
+                raise ValueError(f"invalid {name}")
+        observed_at = payload.get("observedAt")
+        version_code = payload.get("versionCode")
+        target_sdk = payload.get("targetSdk")
+        if (
+            not isinstance(observed_at, int)
+            or isinstance(observed_at, bool)
+            or observed_at < 0
+            or not isinstance(version_code, int)
+            or isinstance(version_code, bool)
+            or version_code < 0
+            or not isinstance(target_sdk, int)
+            or isinstance(target_sdk, bool)
+            or target_sdk < 1
+        ):
+            raise ValueError("invalid device state")
+        string_fields = (
+            "appVersion",
+            "androidVersion",
+            "manufacturer",
+            "model",
+            "receiveMode",
+        )
+        if any(
+            not isinstance(payload.get(name), str)
+            or not str(payload[name]).strip()
+            or len(str(payload[name])) > 128
+            for name in string_fields
+        ):
+            raise ValueError("invalid device state")
+        receive_mode = str(payload["receiveMode"])
+        if receive_mode not in {"OBSERVER", "DEFAULT_SMS"}:
+            raise ValueError("invalid receiveMode")
+        raw_lines = payload.get("lines")
+        if not isinstance(raw_lines, list) or len(raw_lines) > 4:
+            raise ValueError("invalid lines")
+        lines: list[dict[str, Any]] = []
+        seen_slots = set()
+        for line in raw_lines:
+            if not isinstance(line, dict) or set(line) - {
+                "slotIndex",
+                "subscriptionId",
+                "carrierName",
+                "displayName",
+                "active",
+            }:
+                raise ValueError("invalid line")
+            slot_index = line.get("slotIndex")
+            subscription_id = line.get("subscriptionId")
+            if (
+                not isinstance(slot_index, int)
+                or isinstance(slot_index, bool)
+                or not 0 <= slot_index <= 3
+                or slot_index in seen_slots
+                or (
+                    subscription_id is not None
+                    and (
+                        not isinstance(subscription_id, int)
+                        or isinstance(subscription_id, bool)
+                    )
+                )
+                or not isinstance(line.get("active"), bool)
+            ):
+                raise ValueError("invalid line")
+            for name in ("carrierName", "displayName"):
+                value = line.get(name)
+                if value is not None and (
+                    not isinstance(value, str) or len(value) > 128
+                ):
+                    raise ValueError("invalid line")
+            seen_slots.add(slot_index)
+            lines.append(line)
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO device_status(
+                    device_id, observed_at, app_version, version_code,
+                    target_sdk, android_version, manufacturer, model,
+                    receive_mode, default_sms_role, receive_sms_granted,
+                    send_sms_granted, read_phone_state_granted, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    observed_at = excluded.observed_at,
+                    app_version = excluded.app_version,
+                    version_code = excluded.version_code,
+                    target_sdk = excluded.target_sdk,
+                    android_version = excluded.android_version,
+                    manufacturer = excluded.manufacturer,
+                    model = excluded.model,
+                    receive_mode = excluded.receive_mode,
+                    default_sms_role = excluded.default_sms_role,
+                    receive_sms_granted = excluded.receive_sms_granted,
+                    send_sms_granted = excluded.send_sms_granted,
+                    read_phone_state_granted =
+                        excluded.read_phone_state_granted,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    device_id,
+                    observed_at,
+                    str(payload["appVersion"]).strip(),
+                    version_code,
+                    target_sdk,
+                    str(payload["androidVersion"]).strip(),
+                    str(payload["manufacturer"]).strip(),
+                    str(payload["model"]).strip(),
+                    receive_mode,
+                    int(payload["defaultSmsRole"]),
+                    int(payload["receiveSmsGranted"]),
+                    int(payload["sendSmsGranted"]),
+                    int(payload["readPhoneStateGranted"]),
+                    now_ms,
+                ),
+            )
+            db.execute(
+                "DELETE FROM device_lines WHERE device_id = ?",
+                (device_id,),
+            )
+            for line in lines:
+                db.execute(
+                    """
+                    INSERT INTO device_lines(
+                        device_id, slot_index, subscription_id,
+                        carrier_name, display_name, is_active, observed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        device_id,
+                        line["slotIndex"],
+                        line.get("subscriptionId"),
+                        line.get("carrierName"),
+                        line.get("displayName"),
+                        int(line["active"]),
+                        observed_at,
+                    ),
+                )
+
+    def observe_incoming_sms(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        received_at: int,
+    ) -> None:
+        body = payload.get("body")
+        candidates = extract_otp_candidates(body if isinstance(body, str) else "")
+        action = payload.get("action")
+        if action not in {"SMS_RECEIVED", "SMS_DELIVER"}:
+            action = None
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO device_status(
+                    device_id, observed_at, updated_at,
+                    last_incoming_sms_at, last_otp_at,
+                    last_ordinary_sms_at, last_receiver_action,
+                    last_receiver_action_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(device_id) DO UPDATE SET
+                    last_incoming_sms_at = excluded.last_incoming_sms_at,
+                    last_otp_at = COALESCE(
+                        excluded.last_otp_at,
+                        device_status.last_otp_at
+                    ),
+                    last_ordinary_sms_at = COALESCE(
+                        excluded.last_ordinary_sms_at,
+                        device_status.last_ordinary_sms_at
+                    ),
+                    last_receiver_action = COALESCE(
+                        excluded.last_receiver_action,
+                        device_status.last_receiver_action
+                    ),
+                    last_receiver_action_at = COALESCE(
+                        excluded.last_receiver_action_at,
+                        device_status.last_receiver_action_at
+                    ),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    device_id,
+                    received_at,
+                    received_at,
+                    received_at,
+                    received_at if candidates else None,
+                    received_at if not candidates else None,
+                    action,
+                    received_at if action else None,
+                ),
+            )
+
+    def retire_device(self, device_id: str, now_ms: int) -> bool:
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                """
+                UPDATE devices
+                SET retired_at = COALESCE(retired_at, ?)
+                WHERE device_id = ?
+                """,
+                (now_ms, device_id),
+            )
+            db.execute(
+                """
+                UPDATE pairing_sessions
+                SET consumed_at = COALESCE(consumed_at, ?)
+                WHERE device_id = ?
+                """,
+                (now_ms, device_id),
+            )
+            db.execute(
+                """
+                UPDATE outbound_commands
+                SET status = 'EXPIRED', updated_at = ?
+                WHERE device_id = ? AND status IN ('QUEUED', 'CLAIMED')
+                """,
+                (now_ms, device_id),
+            )
+            return cursor.rowcount == 1
+
+    def restore_device(self, device_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                "UPDATE devices SET retired_at = NULL WHERE device_id = ?",
+                (device_id,),
+            )
+            return cursor.rowcount == 1
+
+    def purge_device(self, device_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute(
+                "SELECT 1 FROM devices WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if existing is None:
+                return False
+            event_ids = [
+                row["id"]
+                for row in db.execute(
+                    "SELECT id FROM events WHERE device_id = ?",
+                    (device_id,),
+                ).fetchall()
+            ]
+            if event_ids:
+                placeholders = ",".join("?" for _ in event_ids)
+                db.execute(
+                    f"DELETE FROM otp_claims WHERE event_id IN ({placeholders})",
+                    event_ids,
+                )
+            for table in (
+                "events",
+                "request_nonces",
+                "pairing_sessions",
+                "outbound_commands",
+                "device_lines",
+                "device_status",
+            ):
+                db.execute(
+                    f"DELETE FROM {table} WHERE device_id = ?",
+                    (device_id,),
+                )
+            db.execute(
+                "DELETE FROM devices WHERE device_id = ?",
+                (device_id,),
+            )
+            return True
+
+    def record_audit(
+        self,
+        client_id: str,
+        action: str,
+        device_id: Optional[str],
+        outcome: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        safe_metadata = metadata or {}
+        with self._lock, self._connect() as db:
+            db.execute(
+                """
+                INSERT INTO admin_audit_log(
+                    occurred_at, client_id, action,
+                    device_id, outcome, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(time.time() * 1000),
+                    client_id,
+                    action,
+                    device_id,
+                    outcome,
+                    json.dumps(
+                        safe_metadata,
+                        separators=(",", ":"),
+                        ensure_ascii=True,
+                    ),
+                ),
+            )
+
+    def list_audit(
+        self,
+        limit: int,
+        before_id: Optional[int] = None,
+        device_ids: Optional[set[str]] = None,
+    ) -> list[dict[str, Any]]:
+        clauses = []
+        parameters: list[Any] = []
+        if before_id is not None:
+            clauses.append("id < ?")
+            parameters.append(before_id)
+        if device_ids is not None:
+            if not device_ids:
+                return []
+            placeholders = ",".join("?" for _ in device_ids)
+            clauses.append(f"(device_id IS NULL OR device_id IN ({placeholders}))")
+            parameters.extend(sorted(device_ids))
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.append(min(max(limit, 1), 100))
+        with self._connect() as db:
+            rows = db.execute(
+                f"""
+                SELECT id, occurred_at, client_id, action,
+                       device_id, outcome, metadata_json
+                FROM admin_audit_log
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "occurredAt": row["occurred_at"],
+                "clientId": row["client_id"],
+                "action": row["action"],
+                "deviceId": row["device_id"],
+                "outcome": row["outcome"],
+                "metadata": json.loads(row["metadata_json"]),
+            }
+            for row in rows
+        ]
 
     def add_device(
         self,
@@ -794,12 +1300,10 @@ class GatewayStore:
                 )
             except sqlite3.IntegrityError as e:
                 raise ValueError(f"Device '{device_id}' already exists") from e
-        return {
-            "deviceId": device_id,
-            "description": description,
-            "createdAt": now_ms,
-            "lastSeenAt": None,
-        }
+        created = self.get_device(device_id)
+        if created is None:
+            raise RuntimeError("device creation failed")
+        return created
 
     def update_device(
         self,
@@ -917,12 +1421,7 @@ class GatewayStore:
             ).fetchone()
         if row is None:
             return None
-        return {
-            "deviceId": row["device_id"],
-            "description": row["description"] or "",
-            "createdAt": row["created_at"],
-            "lastSeenAt": row["last_seen_at"],
-        }
+        return self.get_device(device_id)
 
     def delete_device(self, device_id: str) -> bool:
         """Delete a device. Returns True if deleted."""
@@ -1628,6 +2127,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         now_ms = int(time.time() * 1000)
         if (
             secret is None
+            or not self.app.store.is_device_active(device_id)
             or not 1 <= len(nonce) <= 128
             or not 1 <= len(idempotency_key) <= 128
             or not 1 <= len(signature) <= 128
@@ -1905,7 +2405,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 HTTPStatus.OK,
                 {
                     "devices": sorted(
-                        self.api_device_secrets(client_id)
+                        device_id
+                        for device_id in self.api_device_secrets(client_id)
+                        if self.app.store.is_device_active(device_id)
                     )
                 },
             )
@@ -1922,6 +2424,41 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 or device["deviceId"] in allowed
             ]
             self.send_json(HTTPStatus.OK, {"devices": devices})
+            return
+        if path == "/v1/audit-log":
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
+                return
+            query = parse_qs(parsed.query)
+            try:
+                if (
+                    set(query) - {"limit", "beforeId"}
+                    or any(len(values) != 1 for values in query.values())
+                ):
+                    raise ValueError("invalid query")
+                limit = int(query.get("limit", ["50"])[0])
+                before_raw = query.get("beforeId", [None])[0]
+                before_id = int(before_raw) if before_raw is not None else None
+                if not 1 <= limit <= 100 or (
+                    before_id is not None and before_id < 1
+                ):
+                    raise ValueError("invalid query")
+            except (TypeError, ValueError):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "invalid query"},
+                )
+                return
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "entries": self.app.store.list_audit(
+                        limit,
+                        before_id=before_id,
+                        device_ids=self.api_allowed_device_ids(client_id),
+                    )
+                },
+            )
             return
         if not self.app.allow_viewer:
             self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -1952,6 +2489,85 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        lifecycle_match = re.fullmatch(
+            r"/v1/devices/([A-Za-z0-9._-]{1,64})/(restore|purge)",
+            path,
+        )
+        if lifecycle_match:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
+                return
+            device_id, action = lifecycle_match.groups()
+            if not self.require_api_device_access(client_id, device_id):
+                return
+            if action == "restore":
+                try:
+                    value = self.read_json_body(1_024)
+                    if value:
+                        raise ValueError("empty request required")
+                except (
+                    TypeError,
+                    ValueError,
+                    UnicodeDecodeError,
+                    json.JSONDecodeError,
+                ):
+                    self.send_json(
+                        HTTPStatus.BAD_REQUEST,
+                        {"error": "invalid request"},
+                    )
+                    return
+                restored = self.app.store.restore_device(device_id)
+                if not restored:
+                    self.send_json(
+                        HTTPStatus.NOT_FOUND,
+                        {"error": "device not found"},
+                    )
+                    return
+                self.app.store.record_audit(
+                    client_id,
+                    "DEVICE_RESTORE",
+                    device_id,
+                    "SUCCESS",
+                )
+                self.app.refresh_devices()
+                self.send_json(
+                    HTTPStatus.OK,
+                    {"device": self.app.store.get_device(device_id)},
+                )
+                return
+            try:
+                value = self.read_json_body(2_048)
+                if value != {
+                    "confirmation": f"PURGE {device_id}"
+                }:
+                    raise ValueError("confirmation mismatch")
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ):
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": "confirmation required"},
+                )
+                return
+            purged = self.app.store.purge_device(device_id)
+            if not purged:
+                self.send_json(
+                    HTTPStatus.NOT_FOUND,
+                    {"error": "device not found"},
+                )
+                return
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_PURGE",
+                device_id,
+                "SUCCESS",
+            )
+            self.app.refresh_devices()
+            self.send_json(HTTPStatus.OK, {"purged": True})
+            return
         if path == "/v1/device-commands/claim":
             if not self.app.accept_ingestion:
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -2027,6 +2643,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 if (
                     not isinstance(device_id, str)
                     or device_id not in self.app.devices
+                    or not self.app.store.is_device_active(device_id)
                     or not isinstance(slot_index, int)
                     or isinstance(slot_index, bool)
                     or slot_index not in (0, 1)
@@ -2080,6 +2697,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     {"error": "idempotency conflict"},
                 )
                 return
+            self.app.store.record_audit(
+                client_id,
+                "OUTBOUND_SMS_QUEUE",
+                device_id,
+                "SUCCESS",
+                {
+                    "slotIndex": slot_index,
+                    "expiresInSeconds": expires_in_seconds,
+                },
+            )
             self.send_json(
                 HTTPStatus.CREATED,
                 {"outboundMessage": command},
@@ -2130,6 +2757,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.CONFLICT, {"error": str(e)})
                 return
             self.app.refresh_devices()
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_CREATE",
+                device_id,
+                "SUCCESS",
+            )
             self.send_json(HTTPStatus.CREATED, {"device": device})
             return
         if path == "/v1/pairings":
@@ -2154,6 +2787,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 if (
                     not isinstance(device_id, str)
                     or device_id not in self.app.devices
+                    or not self.app.store.is_device_active(device_id)
                 ):
                     raise ValueError("invalid deviceId")
                 if (
@@ -2221,6 +2855,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     }
                 },
             )
+            self.app.store.record_audit(
+                client_id,
+                "PAIRING_CREATE",
+                device_id,
+                "SUCCESS",
+                {"expiresInSeconds": expires_in_seconds},
+            )
             return
         if path == "/v1/pairings/claim":
             if not self.app.accept_ingestion:
@@ -2257,7 +2898,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 int(time.time() * 1000),
             )
             secret = self.app.devices.get(device_id or "")
-            if device_id is None or secret is None:
+            if (
+                device_id is None
+                or secret is None
+                or not self.app.store.is_device_active(device_id)
+            ):
                 self.send_json(
                     HTTPStatus.GONE,
                     {"error": "pairing expired or already used"},
@@ -2415,6 +3060,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         now_ms = int(time.time() * 1000)
         if (
             secret is None
+            or not self.app.store.is_device_active(device_id)
             or not 1 <= len(nonce) <= 128
             or not 1 <= len(idempotency_key) <= 128
             or not 1 <= len(signature) <= 128
@@ -2450,6 +3096,18 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     now_ms,
                 ):
                     raise ValueError("unknown outbound command")
+            elif envelope["eventType"] == "DEVICE_STATE":
+                self.app.store.upsert_device_state(
+                    device_id,
+                    decrypted["payload"],
+                    now_ms,
+                )
+            elif envelope["eventType"] == "INCOMING_SMS":
+                self.app.store.observe_incoming_sms(
+                    device_id,
+                    decrypted["payload"],
+                    now_ms,
+                )
             self.app.store.touch_device(device_id, now_ms)
             self.app.store.prune(self.app.retention_days, now_ms)
         except (ValueError, json.JSONDecodeError) as error:
@@ -2507,6 +3165,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "device not found"})
                 return
             self.app.refresh_devices()
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_UPDATE",
+                device_id,
+                "SUCCESS",
+                {
+                    "descriptionChanged": description is not None,
+                    "secretRotated": secret_base64 is not None,
+                },
+            )
             self.send_json(HTTPStatus.OK, {"device": device})
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -2524,12 +3192,24 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 return
             if not self.require_api_device_access(client_id, device_id):
                 return
-            deleted = self.app.store.delete_device(device_id)
-            if not deleted:
+            retired = self.app.store.retire_device(
+                device_id,
+                int(time.time() * 1000),
+            )
+            if not retired:
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "device not found"})
                 return
             self.app.refresh_devices()
-            self.send_json(HTTPStatus.OK, {"deleted": True})
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_RETIRE",
+                device_id,
+                "SUCCESS",
+            )
+            self.send_json(
+                HTTPStatus.OK,
+                {"retired": True, "device": self.app.store.get_device(device_id)},
+            )
             return
         self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 

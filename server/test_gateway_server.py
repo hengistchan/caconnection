@@ -501,7 +501,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         status, version = self.api_request("GET", "/version")
         self.assertEqual(200, status)
         self.assertEqual("caconnection-gateway", version["service"])
-        self.assertEqual("0.2.0", version["version"])
+        self.assertEqual("0.3.0", version["version"])
         self.assertEqual(1, version["apiVersion"])
         self.assertEqual(2, version["protocolSchemaVersion"])
 
@@ -1104,13 +1104,16 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         self.assertEqual(200, status)
         self.assertEqual("", updated["device"]["description"])
 
+        status, retired = self.api_request(
+            "DELETE",
+            "/v1/devices/managed-device",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertTrue(retired["retired"])
         self.assertEqual(
-            (200, {"deleted": True}),
-            self.api_request(
-                "DELETE",
-                "/v1/devices/managed-device",
-                token=self.api_token,
-            ),
+            "RETIRED",
+            retired["device"]["health"],
         )
         self.assertEqual(
             (200, {"devices": []}),
@@ -1120,6 +1123,177 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                 token=self.api_token,
             ),
         )
+        status, restored = self.api_request(
+            "POST",
+            "/v1/devices/managed-device/restore",
+            token=self.api_token,
+            value={},
+        )
+        self.assertEqual(200, status)
+        self.assertIsNone(restored["device"]["retiredAt"])
+        self.assertEqual(
+            (200, {"devices": ["managed-device"]}),
+            self.api_request(
+                "GET",
+                "/v1/devices",
+                token=self.api_token,
+            ),
+        )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "POST",
+                "/v1/devices/managed-device/purge",
+                token=self.api_token,
+                value={"confirmation": "wrong"},
+            )[0],
+        )
+        self.assertEqual(
+            (200, {"purged": True}),
+            self.api_request(
+                "POST",
+                "/v1/devices/managed-device/purge",
+                token=self.api_token,
+                value={"confirmation": "PURGE managed-device"},
+            ),
+        )
+        self.assertIsNone(self.store.get_device("managed-device"))
+
+    def test_device_state_health_receive_observations_and_retirement(self) -> None:
+        secret = b"s" * 32
+        secret_base64 = base64.b64encode(secret).decode()
+        self.assertEqual(
+            201,
+            self.api_request(
+                "POST",
+                "/v1/devices",
+                token=self.api_token,
+                value={
+                    "deviceId": "state-device",
+                    "secretBase64": secret_base64,
+                    "description": "State gateway",
+                },
+            )[0],
+        )
+        state_payload = {
+            "observedAt": int(time.time() * 1000),
+            "appVersion": "1.2.3",
+            "versionCode": 123,
+            "targetSdk": 37,
+            "androidVersion": "16",
+            "manufacturer": "Example",
+            "model": "Gateway Phone",
+            "receiveMode": "OBSERVER",
+            "defaultSmsRole": False,
+            "receiveSmsGranted": True,
+            "sendSmsGranted": True,
+            "readPhoneStateGranted": True,
+            "lines": [
+                {
+                    "slotIndex": 0,
+                    "subscriptionId": 42,
+                    "carrierName": "Carrier A",
+                    "displayName": "SIM 1",
+                    "active": True,
+                }
+            ],
+        }
+        state_body = self.encrypted_body(
+            event_type="DEVICE_STATE",
+            device_id="state-device",
+            secret=secret,
+            source_event_id="state-snapshot",
+            payload=state_payload,
+        )
+        self.assertEqual(
+            201,
+            self.request(
+                body=state_body,
+                device_id="state-device",
+                secret=secret,
+                nonce="state-device-nonce",
+                idempotency_key="state-device-key",
+            )[0],
+        )
+        ordinary_body = self.encrypted_body(
+            event_type="INCOMING_SMS",
+            slot_index=0,
+            device_id="state-device",
+            secret=secret,
+            source_event_id="ordinary-message",
+            payload={
+                "originatingAddress": "contact",
+                "body": "Dinner is ready",
+                "partCount": 1,
+                "action": "SMS_RECEIVED",
+            },
+        )
+        self.assertEqual(
+            201,
+            self.request(
+                body=ordinary_body,
+                device_id="state-device",
+                secret=secret,
+                nonce="ordinary-message-nonce",
+                idempotency_key="ordinary-message-key",
+            )[0],
+        )
+        status, response = self.api_request(
+            "GET",
+            "/v1/devices/detail",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        device = next(
+            item
+            for item in response["devices"]
+            if item["deviceId"] == "state-device"
+        )
+        self.assertEqual("ONLINE", device["health"])
+        self.assertEqual("1.2.3", device["status"]["appVersion"])
+        self.assertEqual("OBSERVER", device["status"]["receiveMode"])
+        self.assertEqual(
+            "SMS_RECEIVED",
+            device["status"]["lastReceiverAction"],
+        )
+        self.assertIsNotNone(device["status"]["lastOrdinarySmsAt"])
+        self.assertIsNone(device["status"]["lastOtpAt"])
+        self.assertEqual(1, len(device["status"]["lines"]))
+        self.assertNotIn("phoneNumber", device["status"]["lines"][0])
+
+        status, retired = self.api_request(
+            "DELETE",
+            "/v1/devices/state-device",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("RETIRED", retired["device"]["health"])
+        self.assertEqual(
+            401,
+            self.request(
+                body=ordinary_body,
+                device_id="state-device",
+                secret=secret,
+                nonce="retired-device-nonce",
+                idempotency_key="retired-device-key",
+            )[0],
+        )
+        status, messages = self.api_request(
+            "GET",
+            "/v1/messages?deviceId=state-device",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("Dinner is ready", messages["messages"][0]["body"])
+        status, audit = self.api_request(
+            "GET",
+            "/v1/audit-log?limit=20",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        actions = {entry["action"] for entry in audit["entries"]}
+        self.assertIn("DEVICE_CREATE", actions)
+        self.assertIn("DEVICE_RETIRE", actions)
 
     def test_pairing_invalid_expired_and_rate_limited_claims_are_generic(self) -> None:
         self.assertEqual(

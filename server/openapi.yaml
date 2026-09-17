@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: CA Connection Gateway API
-  version: 0.2.0
+  version: 0.3.0
   description: >
     Production API for Android gateway ingestion, authenticated SMS and
     notification retrieval, remote outbound SMS commands, device management,
@@ -283,21 +283,87 @@ paths:
         "404":
           description: Device not found
     delete:
-      summary: Delete a gateway device
+      summary: Retire a gateway device
       description: >
-        Deleting a device removes its decryption secret. Historical encrypted
-        content captured from that device will no longer be readable.
+        Retirement disables device authentication, pairing, and new commands
+        while retaining its secret so historical encrypted content remains
+        readable. Use the separate purge operation for irreversible deletion.
       security:
         - bearerAuth: []
       responses:
         "200":
-          description: Device deleted
+          description: Device retired
         "400":
           description: Invalid device ID
         "401":
           description: API authentication failed
         "403":
           description: Token lacks pairing:create scope
+        "404":
+          description: Device not found
+  /v1/devices/{deviceId}/restore:
+    parameters:
+      - in: path
+        name: deviceId
+        required: true
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+    post:
+      summary: Restore a retired gateway device
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "200":
+          description: Device restored
+        "400":
+          description: Invalid request
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks access to this device
+        "404":
+          description: Device not found
+  /v1/devices/{deviceId}/purge:
+    parameters:
+      - in: path
+        name: deviceId
+        required: true
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+    post:
+      summary: Irreversibly purge a gateway and all associated data
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+                  description: Must exactly equal `PURGE {deviceId}`.
+      responses:
+        "200":
+          description: Device and associated data purged
+        "400":
+          description: Exact confirmation was not supplied
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks access to this device
         "404":
           description: Device not found
   /v1/pairings/claim:
@@ -568,6 +634,33 @@ paths:
           description: Token lacks otp:claim scope
         "429":
           description: Rate limit exceeded
+  /v1/audit-log:
+    get:
+      summary: List administrative actions without message or OTP content
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: beforeId
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Device-scoped audit entries
+        "400":
+          description: Invalid query
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
 components:
   securitySchemes:
     bearerAuth:
@@ -582,6 +675,9 @@ components:
         - description
         - createdAt
         - lastSeenAt
+        - retiredAt
+        - health
+        - status
       properties:
         deviceId:
           type: string
@@ -592,6 +688,103 @@ components:
           type: integer
         lastSeenAt:
           type: [integer, "null"]
+        retiredAt:
+          type: [integer, "null"]
+        health:
+          type: string
+          enum: [ONLINE, STALE, OFFLINE, NEVER, RETIRED]
+        status:
+          $ref: "#/components/schemas/GatewayDeviceStatus"
+    GatewayDeviceStatus:
+      type: object
+      additionalProperties: false
+      required:
+        - observedAt
+        - appVersion
+        - versionCode
+        - targetSdk
+        - androidVersion
+        - manufacturer
+        - model
+        - receiveMode
+        - defaultSmsRole
+        - permissions
+        - lastIncomingSmsAt
+        - lastOtpAt
+        - lastOrdinarySmsAt
+        - lastReceiverAction
+        - lastReceiverActionAt
+        - lines
+      properties:
+        observedAt:
+          type: [integer, "null"]
+        appVersion:
+          type: [string, "null"]
+        versionCode:
+          type: [integer, "null"]
+        targetSdk:
+          type: [integer, "null"]
+        androidVersion:
+          type: [string, "null"]
+        manufacturer:
+          type: [string, "null"]
+        model:
+          type: [string, "null"]
+        receiveMode:
+          type: [string, "null"]
+          enum: [OBSERVER, DEFAULT_SMS, null]
+        defaultSmsRole:
+          type: [boolean, "null"]
+        permissions:
+          type: object
+          required: [receiveSms, sendSms, readPhoneState]
+          properties:
+            receiveSms:
+              type: [boolean, "null"]
+            sendSms:
+              type: [boolean, "null"]
+            readPhoneState:
+              type: [boolean, "null"]
+        lastIncomingSmsAt:
+          type: [integer, "null"]
+        lastOtpAt:
+          type: [integer, "null"]
+        lastOrdinarySmsAt:
+          type: [integer, "null"]
+        lastReceiverAction:
+          type: [string, "null"]
+          enum: [SMS_RECEIVED, SMS_DELIVER, null]
+        lastReceiverActionAt:
+          type: [integer, "null"]
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/GatewayLine"
+    GatewayLine:
+      type: object
+      additionalProperties: false
+      required:
+        - slotIndex
+        - subscriptionId
+        - carrierName
+        - displayName
+        - active
+        - observedAt
+      properties:
+        slotIndex:
+          type: integer
+          minimum: 0
+          maximum: 3
+        subscriptionId:
+          type: [integer, "null"]
+        carrierName:
+          type: [string, "null"]
+        displayName:
+          type: [string, "null"]
+        active:
+          type: boolean
+        observedAt:
+          type: integer
     DeviceCreate:
       type: object
       additionalProperties: false
@@ -646,6 +839,7 @@ components:
             - CALL_STATE
             - CALL_IDENTITY
             - OUTBOUND_SMS_STATUS
+            - DEVICE_STATE
             - LOCAL_SELF_TEST
         createdAt:
           type: integer
