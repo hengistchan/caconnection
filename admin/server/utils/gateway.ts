@@ -271,6 +271,16 @@ export interface GatewayDeviceResponse {
   device: GatewayDeviceDetail
 }
 
+export interface GatewayAuditEntry {
+  id: number
+  occurredAt: number
+  clientId: string
+  action: string
+  deviceId: string | null
+  outcome: string
+  metadata: Record<string, unknown>
+}
+
 export interface GatewayPairingResponse {
   pairing: {
     deviceId: string
@@ -695,4 +705,45 @@ export async function deleteGatewayDevice(deviceId: string): Promise<void> {
   await gatewayFetch(`/v1/devices/${encodeURIComponent(deviceId)}`, {
     method: 'DELETE',
   })
+}
+
+export async function restoreGatewayDevice(
+  deviceId: string,
+): Promise<GatewayDeviceResponse> {
+  return parseSingleDeviceResponse(
+    await gatewayFetch(
+      `/v1/devices/${encodeURIComponent(deviceId)}/restore`,
+      { method: 'POST', body: {} },
+    ),
+  )
+}
+
+export async function purgeGatewayDevice(deviceId: string): Promise<void> {
+  await gatewayFetch(`/v1/devices/${encodeURIComponent(deviceId)}/purge`, {
+    method: 'POST',
+    body: { confirmation: `PURGE ${deviceId}` },
+  })
+}
+
+export async function getGatewayAuditLog(): Promise<{
+  entries: GatewayAuditEntry[]
+}> {
+  const value = await gatewayFetch('/v1/audit-log?limit=100')
+  if (!isRecord(value) || !Array.isArray(value.entries)) {
+    return invalidGatewayResponse()
+  }
+  const entries = value.entries.map((entry) => {
+    if (
+      !isRecord(entry)
+      || !Number.isSafeInteger(entry.id)
+      || !Number.isSafeInteger(entry.occurredAt)
+      || typeof entry.clientId !== 'string'
+      || typeof entry.action !== 'string'
+      || !(entry.deviceId === null || typeof entry.deviceId === 'string')
+      || typeof entry.outcome !== 'string'
+      || !isRecord(entry.metadata)
+    ) return invalidGatewayResponse()
+    return entry as unknown as GatewayAuditEntry
+  })
+  return { entries }
 }

@@ -227,7 +227,16 @@
     "updateError": "设备更新失败",
     "deleteSuccess": "设备已退役",
     "deleteDialogTitle": "退役网关设备",
-    "loadError": "无法读取网关设备。"
+    "loadError": "无法读取网关设备。",
+    "restore": "恢复",
+    "restoreSuccess": "设备已恢复",
+    "restoreError": "恢复设备失败",
+    "purge": "彻底清除",
+    "purgePrompt": "这是不可逆操作。请输入 {confirmation} 以继续。",
+    "purgeSuccess": "设备及其关联数据已彻底清除",
+    "purgeError": "彻底清除设备失败",
+    "auditTitle": "管理审计记录",
+    "auditDescription": "仅记录操作元数据，不包含短信正文或验证码。"
   },
   "outbound": {
     "title": "远程发短信",

@@ -227,7 +227,16 @@
     "updateError": "Failed to update device",
     "deleteSuccess": "Device retired",
     "deleteDialogTitle": "Retire gateway device",
-    "loadError": "Could not load gateway devices."
+    "loadError": "Could not load gateway devices.",
+    "restore": "Restore",
+    "restoreSuccess": "Device restored",
+    "restoreError": "Failed to restore device",
+    "purge": "Purge",
+    "purgePrompt": "This is irreversible. Enter {confirmation} to continue.",
+    "purgeSuccess": "Device and associated data purged",
+    "purgeError": "Failed to purge device",
+    "auditTitle": "Administrative audit log",
+    "auditDescription": "Contains action metadata only, never SMS bodies or OTP codes."
   },
   "outbound": {
     "title": "Remote SMS",

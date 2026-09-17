@@ -125,6 +125,16 @@ export interface GatewayOutboundMessage {
   errorDetail: string | null
 }
 
+export interface GatewayAuditEntry {
+  id: number
+  occurredAt: number
+  clientId: string
+  action: string
+  deviceId: string | null
+  outcome: string
+  metadata: Record<string, unknown>
+}
+
 export function useGateway() {
   const { csrfToken } = useAuth()
   const status = useState<GatewayStatus | null>('gateway-status', () => null)
@@ -499,6 +509,42 @@ export function useGateway() {
     )
   }
 
+  async function restoreDevice(deviceId: string): Promise<void> {
+    await $fetch(
+      `/admin/api/gateway/devices/${encodeURIComponent(deviceId)}/restore`,
+      {
+        method: 'POST',
+        body: {},
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+  }
+
+  async function purgeDevice(deviceId: string): Promise<void> {
+    await $fetch(
+      `/admin/api/gateway/devices/${encodeURIComponent(deviceId)}/purge`,
+      {
+        method: 'POST',
+        body: { confirmation: `PURGE ${deviceId}` },
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+  }
+
+  async function fetchAuditLog(): Promise<GatewayAuditEntry[]> {
+    const data = await $fetch<{ entries: GatewayAuditEntry[] }>(
+      '/admin/api/gateway/audit-log',
+      { credentials: 'include' },
+    )
+    return data.entries
+  }
+
   /**
    * Calculate message counts by SIM slot
    */
@@ -556,5 +602,8 @@ export function useGateway() {
     addDevice,
     updateDevice,
     removeDevice,
+    restoreDevice,
+    purgeDevice,
+    fetchAuditLog,
   }
 }

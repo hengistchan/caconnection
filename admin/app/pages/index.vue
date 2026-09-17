@@ -619,11 +619,29 @@
                   <button class="btn btn-primary btn-sm" :disabled="pairingLoading" @click="generatePairingForDevice(device.deviceId)">
                     {{ t('pairing.generate') }}
                   </button>
+                  <button
+                    v-if="device.retiredAt !== null"
+                    class="btn btn-secondary btn-sm"
+                    @click="handleRestoreDevice(device)"
+                  >
+                    {{ t('devices.restore') }}
+                  </button>
                   <button class="btn btn-secondary btn-sm" @click="startEditDevice(device)">
                     {{ t('devices.edit') }}
                   </button>
-                  <button class="btn btn-danger btn-sm" @click="requestDeleteDevice(device)">
+                  <button
+                    v-if="device.retiredAt === null"
+                    class="btn btn-danger btn-sm"
+                    @click="requestDeleteDevice(device)"
+                  >
                     {{ t('devices.delete') }}
+                  </button>
+                  <button
+                    v-else
+                    class="btn btn-danger btn-sm"
+                    @click="handlePurgeDevice(device)"
+                  >
+                    {{ t('devices.purge') }}
                   </button>
                 </div>
               </div>
@@ -685,6 +703,22 @@
               </div>
             </article>
           </div>
+
+          <div class="section-header outbound-history-heading">
+            <div>
+              <h3>{{ t('devices.auditTitle') }}</h3>
+              <p class="section-subtitle">{{ t('devices.auditDescription') }}</p>
+            </div>
+          </div>
+          <div v-if="auditEntries.length" class="device-list">
+            <article v-for="entry in auditEntries" :key="entry.id" class="card device-item">
+              <strong>{{ entry.action }}</strong>
+              <span class="device-meta">
+                {{ entry.deviceId || '—' }} · {{ entry.clientId }} ·
+                {{ formatTime(entry.occurredAt) }} · {{ entry.outcome }}
+              </span>
+            </article>
+          </div>
         </section>
       </div>
     </main>
@@ -728,6 +762,7 @@
 <script setup lang="ts">
 import QRCode from 'qrcode'
 import type {
+  GatewayAuditEntry,
   GatewayDeviceDetail,
   GatewayMessage,
   GatewayNotification,
@@ -778,6 +813,9 @@ const {
   addDevice,
   updateDevice,
   removeDevice,
+  restoreDevice,
+  purgeDevice,
+  fetchAuditLog,
   createPairing,
 } = useGateway()
 
@@ -816,6 +854,7 @@ const selectedDeviceId = ref(
 )
 
 const deviceDetails = ref<GatewayDeviceDetail[]>([])
+const auditEntries = ref<GatewayAuditEntry[]>([])
 const deviceLoading = ref(false)
 const deviceError = ref('')
 const dashboardRefreshing = ref(false)
@@ -1281,7 +1320,12 @@ function hideAllSensitive(): void {
 async function loadDevices(): Promise<boolean> {
   deviceLoading.value = true
   try {
-    deviceDetails.value = await fetchDeviceDetails()
+    const [devices, audit] = await Promise.all([
+      fetchDeviceDetails(),
+      fetchAuditLog(),
+    ])
+    deviceDetails.value = devices
+    auditEntries.value = audit
     deviceError.value = ''
     return true
   } catch {
@@ -1289,6 +1333,29 @@ async function loadDevices(): Promise<boolean> {
     return false
   } finally {
     deviceLoading.value = false
+  }
+}
+
+async function handleRestoreDevice(device: GatewayDeviceDetail): Promise<void> {
+  try {
+    await restoreDevice(device.deviceId)
+    showToast(t('devices.restoreSuccess'), 'success')
+    await loadDevices()
+  } catch (error) {
+    showToast(gatewayErrorText(error, t('devices.restoreError')), 'error')
+  }
+}
+
+async function handlePurgeDevice(device: GatewayDeviceDetail): Promise<void> {
+  const expected = `PURGE ${device.deviceId}`
+  const supplied = window.prompt(t('devices.purgePrompt', { confirmation: expected }))
+  if (supplied !== expected) return
+  try {
+    await purgeDevice(device.deviceId)
+    showToast(t('devices.purgeSuccess'), 'success')
+    await loadDevices()
+  } catch (error) {
+    showToast(gatewayErrorText(error, t('devices.purgeError')), 'error')
   }
 }
 
