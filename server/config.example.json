@@ -18,6 +18,9 @@
         "messages:send",
         "otp:claim",
         "pairing:create"
+      ],
+      "allowedDeviceIds": [
+        "xiaomi-gateway"
       ]
     }
   },

@@ -327,11 +327,14 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         event_type: str = "LOCAL_SELF_TEST",
         payload: Optional[dict] = None,
         slot_index: Optional[int] = None,
+        device_id: str = "device",
+        secret: Optional[bytes] = None,
+        source_event_id: str = "source",
     ) -> bytes:
         envelope = {
             "schemaVersion": 1,
             "deliveryId": "delivery",
-            "sourceEventId": "source",
+            "sourceEventId": source_event_id,
             "eventType": event_type,
             "createdAt": 1000,
             "subscriptionId": 1 if slot_index is not None else None,
@@ -342,7 +345,11 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             },
         }
         return json.dumps(
-            encrypt_payload(envelope, "device", self.secret),
+            encrypt_payload(
+                envelope,
+                device_id,
+                secret if secret is not None else self.secret,
+            ),
             separators=(",", ":"),
         ).encode()
 
@@ -354,14 +361,20 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         idempotency_key: str = "key",
         timestamp_ms: Optional[int] = None,
         signature: Optional[str] = None,
+        device_id: str = "device",
+        secret: Optional[bytes] = None,
     ) -> tuple[int, dict]:
-        body = body or self.encrypted_body()
+        request_secret = secret if secret is not None else self.secret
+        body = body or self.encrypted_body(
+            device_id=device_id,
+            secret=request_secret,
+        )
         timestamp_ms = timestamp_ms or int(time.time() * 1000)
         signature = signature or expected_signature(
-            self.secret,
+            request_secret,
             timestamp_ms,
             nonce,
-            "device",
+            device_id,
             idempotency_key,
             body,
         )
@@ -379,7 +392,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
                 body=body,
                 headers={
                     "Content-Type": "application/json",
-                    "X-Gateway-Device": "device",
+                    "X-Gateway-Device": device_id,
                     "X-Gateway-Timestamp": str(timestamp_ms),
                     "X-Gateway-Nonce": nonce,
                     "X-Gateway-Signature": signature,
@@ -1207,11 +1220,270 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             "POST",
             "/v1/otp/claim",
             token=self.api_token,
-            value={"slotIndex": 0, "maxAgeSeconds": 3600},
+            value={
+                "deviceId": "device",
+                "slotIndex": 0,
+                "maxAgeSeconds": 3600,
+            },
         )
         self.assertEqual(200, status)
         self.assertEqual(newer["id"], next_claim["otp"]["eventId"])
         self.assertEqual("778899", next_claim["otp"]["code"])
+
+    def test_multi_device_filters_otp_routes_and_api_client_isolation(self) -> None:
+        device_a_secret = b"a" * 32
+        device_b_secret = b"b" * 32
+        for device_id, secret in (
+            ("device-a", device_a_secret),
+            ("device-b", device_b_secret),
+        ):
+            self.store.add_device(
+                device_id,
+                base64.b64encode(secret).decode(),
+                device_id,
+                int(time.time() * 1000),
+            )
+        self.server.refresh_devices()
+        scoped_token = "device-a-only-token"
+        self.server.api_clients["device-a-only"] = {
+            "token_sha256": __import__("hashlib").sha256(
+                scoped_token.encode()
+            ).hexdigest(),
+            "scopes": [
+                "messages:read",
+                "messages:send",
+                "otp:claim",
+                "pairing:create",
+            ],
+            "allowed_device_ids": ["device-a"],
+        }
+
+        message_ids = {}
+        for device_id, secret, code in (
+            ("device-a", device_a_secret, "111222"),
+            ("device-b", device_b_secret, "999888"),
+        ):
+            body = self.encrypted_body(
+                event_type="INCOMING_SMS",
+                slot_index=0,
+                device_id=device_id,
+                secret=secret,
+                source_event_id=f"{device_id}-sms",
+                payload={
+                    "originatingAddress": device_id,
+                    "body": f"Verification code: {code}",
+                    "partCount": 1,
+                    "resolutionMethod": "TEST",
+                    "resolutionConfidence": "HIGH",
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=body,
+                    nonce=f"{device_id}-sms-nonce",
+                    idempotency_key=f"{device_id}-sms-key",
+                    device_id=device_id,
+                    secret=secret,
+                )[0],
+            )
+            notification = self.encrypted_body(
+                event_type="NOTIFICATION",
+                device_id=device_id,
+                secret=secret,
+                source_event_id=f"{device_id}-notification",
+                payload={
+                    "eventType": "POSTED",
+                    "sourcePackage": "com.example.app",
+                    "notificationId": 1,
+                    "postedAt": 1_000,
+                    "observedAt": 1_100,
+                    "title": device_id,
+                    "body": f"{device_id} notification",
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=notification,
+                    nonce=f"{device_id}-notification-nonce",
+                    idempotency_key=f"{device_id}-notification-key",
+                    device_id=device_id,
+                    secret=secret,
+                )[0],
+            )
+
+        for device_id, expected_code in (
+            ("device-a", "111222"),
+            ("device-b", "999888"),
+        ):
+            status, response = self.api_request(
+                "GET",
+                f"/v1/messages?deviceId={device_id}&slotIndex=0&limit=10",
+                token=self.api_token,
+            )
+            self.assertEqual(200, status)
+            self.assertEqual(1, len(response["messages"]))
+            self.assertEqual(device_id, response["messages"][0]["deviceId"])
+            self.assertEqual(
+                [expected_code],
+                response["messages"][0]["otpCandidates"],
+            )
+            message_ids[device_id] = response["messages"][0]["id"]
+
+            status, response = self.api_request(
+                "GET",
+                f"/v1/notifications?deviceId={device_id}&limit=10",
+                token=self.api_token,
+            )
+            self.assertEqual(200, status)
+            self.assertEqual(1, len(response["notifications"]))
+            self.assertEqual(
+                device_id,
+                response["notifications"][0]["deviceId"],
+            )
+
+        self.assertEqual(
+            400,
+            self.api_request(
+                "POST",
+                "/v1/otp/claim",
+                token=self.api_token,
+                value={"slotIndex": 0, "maxAgeSeconds": 3600},
+            )[0],
+        )
+        status, claimed_a = self.api_request(
+            "POST",
+            "/v1/otp/claim",
+            token=self.api_token,
+            value={
+                "deviceId": "device-a",
+                "slotIndex": 0,
+                "maxAgeSeconds": 3600,
+            },
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("device-a", claimed_a["otp"]["deviceId"])
+        self.assertEqual("111222", claimed_a["otp"]["code"])
+        status, claimed_b = self.api_request(
+            "POST",
+            "/v1/otp/claim",
+            token=self.api_token,
+            value={
+                "eventId": message_ids["device-b"],
+                "maxAgeSeconds": 3600,
+            },
+        )
+        self.assertEqual(200, status)
+        self.assertEqual("device-b", claimed_b["otp"]["deviceId"])
+        self.assertEqual("999888", claimed_b["otp"]["code"])
+
+        status, scoped_messages = self.api_request(
+            "GET",
+            "/v1/messages?limit=10",
+            token=scoped_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            {"device-a"},
+            {
+                message["deviceId"]
+                for message in scoped_messages["messages"]
+            },
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "GET",
+                "/v1/messages?deviceId=device-b",
+                token=scoped_token,
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "GET",
+                "/v1/notifications?deviceId=device-b",
+                token=scoped_token,
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "POST",
+                "/v1/outbound-messages",
+                token=scoped_token,
+                value={
+                    "deviceId": "device-b",
+                    "slotIndex": 0,
+                    "recipient": "10086",
+                    "body": "must be denied",
+                    "idempotencyKey": "scoped-denied-command",
+                },
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "POST",
+                "/v1/pairings",
+                token=scoped_token,
+                value={"deviceId": "device-b"},
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "PUT",
+                "/v1/devices/device-b",
+                token=scoped_token,
+                value={"description": "denied"},
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "DELETE",
+                "/v1/devices/device-b",
+                token=scoped_token,
+            )[0],
+        )
+        self.assertIsNotNone(self.store.get_device("device-b"))
+        status, devices = self.api_request(
+            "GET",
+            "/v1/devices/detail",
+            token=scoped_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["device-a"],
+            [device["deviceId"] for device in devices["devices"]],
+        )
+
+        status, created = self.api_request(
+            "POST",
+            "/v1/outbound-messages",
+            token=self.api_token,
+            value={
+                "deviceId": "device-b",
+                "slotIndex": 0,
+                "recipient": "10086",
+                "body": "device-b command",
+                "idempotencyKey": "device-b-command",
+            },
+        )
+        self.assertEqual(201, status)
+        self.assertEqual(
+            "device-b",
+            created["outboundMessage"]["deviceId"],
+        )
+        status, scoped_outbound = self.api_request(
+            "GET",
+            "/v1/outbound-messages?limit=10",
+            token=scoped_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual([], scoped_outbound["outboundMessages"])
 
     def test_api_rate_limit_returns_retry_after(self) -> None:
         self.server.api_requests_per_minute = 1

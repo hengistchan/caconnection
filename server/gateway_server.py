@@ -1106,6 +1106,7 @@ class GatewayStore:
         after_id: Optional[int] = None,
         before_id: Optional[int] = None,
         slot_index: Optional[int] = None,
+        device_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         clauses = ["event_type = 'INCOMING_SMS'"]
         parameters: list[Any] = []
@@ -1118,6 +1119,9 @@ class GatewayStore:
         if slot_index is not None:
             clauses.append("slot_index = ?")
             parameters.append(slot_index)
+        if device_id is not None:
+            clauses.append("device_id = ?")
+            parameters.append(device_id)
         parameters.append(min(max(limit, 1), 100))
         with self._connect() as db:
             rows = db.execute(
@@ -1169,6 +1173,7 @@ class GatewayStore:
         limit: int,
         after_id: Optional[int] = None,
         before_id: Optional[int] = None,
+        device_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         clauses = ["event_type = 'NOTIFICATION'"]
         parameters: list[Any] = []
@@ -1178,6 +1183,9 @@ class GatewayStore:
         if before_id is not None:
             clauses.append("id < ?")
             parameters.append(before_id)
+        if device_id is not None:
+            clauses.append("device_id = ?")
+            parameters.append(device_id)
         parameters.append(min(max(limit, 1), 100))
         with self._connect() as db:
             rows = db.execute(
@@ -1249,6 +1257,7 @@ class GatewayStore:
         max_age_seconds: int,
         slot_index: Optional[int] = None,
         event_id: Optional[int] = None,
+        device_id: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         cutoff = now_ms - max_age_seconds * 1000
         clauses = [
@@ -1263,6 +1272,9 @@ class GatewayStore:
         if event_id is not None:
             clauses.append("e.id = ?")
             parameters.append(event_id)
+        if device_id is not None:
+            clauses.append("e.device_id = ?")
+            parameters.append(device_id)
         with self._lock, self._connect() as db:
             rows = db.execute(
                 """
@@ -1550,6 +1562,46 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return None
         return matched_client
 
+    def api_allowed_device_ids(
+        self,
+        client_id: str,
+    ) -> Optional[set[str]]:
+        configured = self.app.api_clients[client_id].get(
+            "allowed_device_ids"
+        )
+        return set(configured) if configured is not None else None
+
+    def api_can_access_device(
+        self,
+        client_id: str,
+        device_id: str,
+    ) -> bool:
+        allowed = self.api_allowed_device_ids(client_id)
+        return allowed is None or device_id in allowed
+
+    def require_api_device_access(
+        self,
+        client_id: str,
+        device_id: str,
+    ) -> bool:
+        if self.api_can_access_device(client_id, device_id):
+            return True
+        self.send_json(
+            HTTPStatus.FORBIDDEN,
+            {"error": "device access denied"},
+        )
+        return False
+
+    def api_device_secrets(self, client_id: str) -> dict[str, bytes]:
+        allowed = self.api_allowed_device_ids(client_id)
+        if allowed is None:
+            return dict(self.app.devices)
+        return {
+            device_id: secret
+            for device_id, secret in self.app.devices.items()
+            if device_id in allowed
+        }
+
     def authorize_device_request(
         self,
         body: bytes,
@@ -1665,12 +1717,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/v1/messages":
-            if self.authorize_api("messages:read") is None:
+            client_id = self.authorize_api("messages:read")
+            if client_id is None:
                 return
             query = parse_qs(parsed.query)
             try:
                 if (
-                    set(query) - {"limit", "afterId", "beforeId", "slotIndex"}
+                    set(query) - {
+                        "limit",
+                        "afterId",
+                        "beforeId",
+                        "slotIndex",
+                        "deviceId",
+                    }
                     or any(len(values) != 1 for values in query.values())
                 ):
                     raise ValueError("invalid query")
@@ -1695,27 +1754,48 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 slot_index = int(slot_raw) if slot_raw is not None else None
                 if slot_index is not None and slot_index not in (0, 1):
                     raise ValueError("invalid slotIndex")
+                device_id = query.get("deviceId", [None])[0]
+                if device_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9._-]{1,64}",
+                    device_id,
+                ):
+                    raise ValueError("invalid deviceId")
             except (TypeError, ValueError):
                 self.send_json(
                     HTTPStatus.BAD_REQUEST, {"error": "invalid query"}
                 )
                 return
+            if (
+                device_id is not None
+                and not self.require_api_device_access(
+                    client_id,
+                    device_id,
+                )
+            ):
+                return
             messages = self.app.store.incoming_messages(
-                self.app.devices,
+                self.api_device_secrets(client_id),
                 limit,
                 after_id=after_id,
                 before_id=before_id,
                 slot_index=slot_index,
+                device_id=device_id,
             )
             self.send_json(HTTPStatus.OK, {"messages": messages})
             return
         if path == "/v1/notifications":
-            if self.authorize_api("messages:read") is None:
+            client_id = self.authorize_api("messages:read")
+            if client_id is None:
                 return
             query = parse_qs(parsed.query)
             try:
                 if (
-                    set(query) - {"limit", "afterId", "beforeId"}
+                    set(query) - {
+                        "limit",
+                        "afterId",
+                        "beforeId",
+                        "deviceId",
+                    }
                     or any(len(values) != 1 for values in query.values())
                 ):
                     raise ValueError("invalid query")
@@ -1736,23 +1816,39 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     raise ValueError("invalid beforeId")
                 if after_id is not None and before_id is not None:
                     raise ValueError("conflicting cursors")
+                device_id = query.get("deviceId", [None])[0]
+                if device_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9._-]{1,64}",
+                    device_id,
+                ):
+                    raise ValueError("invalid deviceId")
             except (TypeError, ValueError):
                 self.send_json(
                     HTTPStatus.BAD_REQUEST, {"error": "invalid query"}
                 )
                 return
+            if (
+                device_id is not None
+                and not self.require_api_device_access(
+                    client_id,
+                    device_id,
+                )
+            ):
+                return
             notifications = self.app.store.notifications(
-                self.app.devices,
+                self.api_device_secrets(client_id),
                 limit,
                 after_id=after_id,
                 before_id=before_id,
+                device_id=device_id,
             )
             self.send_json(
                 HTTPStatus.OK, {"notifications": notifications}
             )
             return
         if path == "/v1/outbound-messages":
-            if self.authorize_api("messages:send") is None:
+            client_id = self.authorize_api("messages:send")
+            if client_id is None:
                 return
             query = parse_qs(parsed.query)
             try:
@@ -1782,8 +1878,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     {"error": "invalid query"},
                 )
                 return
+            if (
+                device_id is not None
+                and not self.require_api_device_access(
+                    client_id,
+                    device_id,
+                )
+            ):
+                return
             commands = self.app.store.list_outbound_commands(
-                self.app.devices,
+                self.api_device_secrets(client_id),
                 limit,
                 before_id=before_id,
                 device_id=device_id,
@@ -1794,17 +1898,29 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/v1/devices":
-            if self.authorize_api("pairing:create") is None:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
                 return
             self.send_json(
                 HTTPStatus.OK,
-                {"devices": sorted(self.app.devices)},
+                {
+                    "devices": sorted(
+                        self.api_device_secrets(client_id)
+                    )
+                },
             )
             return
         if path == "/v1/devices/detail":
-            if self.authorize_api("pairing:create") is None:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
                 return
-            devices = self.app.store.get_devices()
+            allowed = self.api_allowed_device_ids(client_id)
+            devices = [
+                device
+                for device in self.app.store.get_devices()
+                if allowed is None
+                or device["deviceId"] in allowed
+            ]
             self.send_json(HTTPStatus.OK, {"devices": devices})
             return
         if not self.app.allow_viewer:
@@ -1885,7 +2001,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/v1/outbound-messages":
-            if self.authorize_api("messages:send") is None:
+            client_id = self.authorize_api("messages:send")
+            if client_id is None:
                 return
             try:
                 value = self.read_json_body(16_384)
@@ -1941,6 +2058,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     {"error": "invalid request"},
                 )
                 return
+            if not self.require_api_device_access(
+                client_id,
+                device_id,
+            ):
+                return
             try:
                 command = self.app.store.create_outbound_command(
                     device_id=device_id,
@@ -1964,7 +2086,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/v1/devices":
-            if self.authorize_api("pairing:create") is None:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
                 return
             try:
                 value = self.read_json_body(4_096)
@@ -1993,6 +2116,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid request"})
                 return
+            if not self.require_api_device_access(
+                client_id,
+                device_id,
+            ):
+                return
             try:
                 now_ms = int(time.time() * 1000)
                 device = self.app.store.add_device(
@@ -2008,7 +2136,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if not self.app.accept_ingestion:
                 self.send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
-            if self.authorize_api("pairing:create") is None:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
                 return
             if not self.rate_limit(
                 "pairing-create",
@@ -2037,6 +2166,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     raise ValueError("invalid expiresInSeconds")
                 if not self.app.pairing_public_endpoint:
                     raise RuntimeError("pairing endpoint is not configured")
+                if not self.require_api_device_access(
+                    client_id,
+                    device_id,
+                ):
+                    return
                 token = self.app.pairing_token_factory()
                 if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token):
                     raise RuntimeError("pairing token generator failed")
@@ -2153,8 +2287,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 return
             try:
                 value = self.read_json_body()
-                if set(value) - {"slotIndex", "maxAgeSeconds", "eventId"}:
+                if set(value) - {
+                    "deviceId",
+                    "slotIndex",
+                    "maxAgeSeconds",
+                    "eventId",
+                }:
                     raise ValueError("unsupported request field")
+                device_id = value.get("deviceId")
+                if device_id is not None and (
+                    not isinstance(device_id, str)
+                    or not re.fullmatch(
+                        r"[A-Za-z0-9._-]{1,64}",
+                        device_id,
+                    )
+                ):
+                    raise ValueError("invalid deviceId")
                 slot_index = value.get("slotIndex")
                 if slot_index is not None and (
                     not isinstance(slot_index, int)
@@ -2179,6 +2327,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     or event_id < 1
                 ):
                     raise ValueError("invalid eventId")
+                if event_id is None and device_id is None:
+                    raise ValueError(
+                        "deviceId is required for latest OTP claims"
+                    )
             except (
                 TypeError,
                 ValueError,
@@ -2189,13 +2341,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     HTTPStatus.BAD_REQUEST, {"error": "invalid request"}
                 )
                 return
+            if (
+                device_id is not None
+                and not self.require_api_device_access(
+                    client_id,
+                    device_id,
+                )
+            ):
+                return
             claimed = self.app.store.claim_latest_otp(
-                self.app.devices,
+                self.api_device_secrets(client_id),
                 client_id,
                 int(time.time() * 1000),
                 max_age_seconds,
                 slot_index=slot_index,
                 event_id=event_id,
+                device_id=device_id,
             )
             if claimed is None:
                 self.send_json(
@@ -2308,11 +2469,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         # PUT /v1/devices/{device_id}
         if path.startswith("/v1/devices/"):
-            if self.authorize_api("pairing:create") is None:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
                 return
             device_id = path[len("/v1/devices/"):]
             if not device_id or not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", device_id):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid device_id"})
+                return
+            if not self.require_api_device_access(client_id, device_id):
                 return
             try:
                 value = self.read_json_body(4_096)
@@ -2351,11 +2515,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         # DELETE /v1/devices/{device_id}
         if path.startswith("/v1/devices/"):
-            if self.authorize_api("pairing:create") is None:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
                 return
             device_id = path[len("/v1/devices/"):]
             if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", device_id):
                 self.send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid device_id"})
+                return
+            if not self.require_api_device_access(client_id, device_id):
                 return
             deleted = self.app.store.delete_device(device_id)
             if not deleted:
@@ -2548,6 +2715,7 @@ def load_api_clients(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
             raise ValueError(f"Invalid API client ID: {client_id}")
         token_sha256 = str(value.get("token_sha256", "")).lower()
         scopes = value.get("scopes", [])
+        allowed_device_ids = value.get("allowedDeviceIds")
         if not re.fullmatch(r"[0-9a-f]{64}", token_sha256):
             raise ValueError(f"Invalid API token hash for {client_id}")
         if not isinstance(scopes, list) or not all(
@@ -2562,9 +2730,33 @@ def load_api_clients(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
             for scope in scopes
         ):
             raise ValueError(f"Invalid API scopes for {client_id}")
+        if (
+            allowed_device_ids is not None
+            and (
+                not isinstance(allowed_device_ids, list)
+                or not allowed_device_ids
+                or not all(
+                    isinstance(device_id, str)
+                    and re.fullmatch(
+                        r"[A-Za-z0-9._-]{1,64}",
+                        device_id,
+                    )
+                    for device_id in allowed_device_ids
+                )
+                or len(set(allowed_device_ids)) != len(allowed_device_ids)
+            )
+        ):
+            raise ValueError(
+                f"Invalid allowedDeviceIds for {client_id}"
+            )
         clients[client_id] = {
             "token_sha256": token_sha256,
             "scopes": scopes,
+            "allowed_device_ids": (
+                list(allowed_device_ids)
+                if allowed_device_ids is not None
+                else None
+            ),
         }
     return clients
 
