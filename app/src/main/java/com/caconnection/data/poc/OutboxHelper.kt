@@ -53,6 +53,27 @@ object OutboxHelper {
         )
     }
 
+    fun createDeviceState(payload: DeviceStatePayload): OutboxEventEntity {
+        val eventId = UUID.randomUUID().toString()
+        val payloadJson = gson.toJson(payload)
+        return OutboxEventEntity(
+            eventId,
+            "device_state_${sha256(payloadJson)}",
+            "DEVICE_STATE",
+            OutboxStatus.PENDING.name,
+            0,
+            payload.observedAt,
+            payload.observedAt,
+            payload.observedAt,
+            null,
+            null,
+            "DEVICE_STATE",
+            payloadJson,
+            null,
+            null
+        )
+    }
+
     fun createOutboxForNotification(
         event: NotificationEventEntity
     ): OutboxEventEntity {
@@ -175,6 +196,7 @@ object OutboxHelper {
 
     data class IncomingSmsPayload(
         val eventId: String,
+        val action: String?,
         val originatingAddress: String?,
         val body: String?,
         val receivedAt: Long,
@@ -188,6 +210,13 @@ object OutboxHelper {
             fun fromEntity(entity: IncomingSmsEventEntity): IncomingSmsPayload =
                 IncomingSmsPayload(
                     eventId = entity.eventId,
+                    action = when (entity.action) {
+                        android.provider.Telephony.Sms.Intents.SMS_RECEIVED_ACTION ->
+                            "SMS_RECEIVED"
+                        android.provider.Telephony.Sms.Intents.SMS_DELIVER_ACTION ->
+                            "SMS_DELIVER"
+                        else -> null
+                    },
                     originatingAddress = entity.originatingAddress,
                     body = entity.body,
                     receivedAt = entity.receivedAt,
@@ -199,6 +228,30 @@ object OutboxHelper {
                 )
         }
     }
+
+    data class DeviceStateLine(
+        val slotIndex: Int,
+        val subscriptionId: Int?,
+        val carrierName: String?,
+        val displayName: String?,
+        val active: Boolean
+    )
+
+    data class DeviceStatePayload(
+        val observedAt: Long,
+        val appVersion: String,
+        val versionCode: Int,
+        val targetSdk: Int,
+        val androidVersion: String,
+        val manufacturer: String,
+        val model: String,
+        val receiveMode: String,
+        val defaultSmsRole: Boolean,
+        val receiveSmsGranted: Boolean,
+        val sendSmsGranted: Boolean,
+        val readPhoneStateGranted: Boolean,
+        val lines: List<DeviceStateLine>
+    )
 
     data class NotificationPayload(
         val eventId: String,

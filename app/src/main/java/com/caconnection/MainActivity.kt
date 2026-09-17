@@ -52,6 +52,7 @@ import com.caconnection.telephony.smsrole.SmsRoleController
 import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.telephony.subscription.SubscriptionSnapshot
 import com.caconnection.transport.GatewayTransportConfig
+import com.caconnection.transport.DeviceStateReporter
 import com.caconnection.transport.ConnectionDiagnosticReport
 import com.caconnection.transport.ConnectionDiagnostics
 import com.caconnection.transport.DiagnosticStage
@@ -746,6 +747,7 @@ class MainActivity : AppCompatActivity() {
         }.getOrDefault(emptyList())
         lastRefreshAt = System.currentTimeMillis()
         eventStore.replaceSubscriptions(subscriptionRepository.captureEntities()) {
+            DeviceStateReporter.enqueue(this)
             refreshStoredEvents()
         }
     }
@@ -1694,6 +1696,7 @@ class MainActivity : AppCompatActivity() {
             transportSecretInput.text.clear()
             OutboxScheduler.enqueueNow(this)
             RemoteCommandScheduler.enqueueNow(this)
+            DeviceStateReporter.enqueue(this)
             toast(R.string.transport_saved)
             refreshStoredEvents()
         }.onFailure {
@@ -1781,6 +1784,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 loadTransportInputs()
                 OutboxScheduler.enqueueNow(this@MainActivity)
+                DeviceStateReporter.enqueue(this@MainActivity)
                 toast(R.string.pairing_success)
                 refreshStoredEvents()
                 runConnectionDiagnostics()

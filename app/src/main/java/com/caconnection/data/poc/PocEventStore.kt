@@ -55,6 +55,18 @@ class PocEventStore private constructor(private val context: Context) {
         }
     }
 
+    fun enqueueDeviceState(
+        payload: OutboxHelper.DeviceStatePayload,
+        onComplete: (() -> Unit)? = null
+    ) {
+        executor.execute {
+            dao.insertOutbox(OutboxHelper.createDeviceState(payload))
+            OutboxScheduler.enqueueNow(context)
+            notifyChanged()
+            onComplete?.invoke()
+        }
+    }
+
     fun insertNotificationWithOutbox(
         event: NotificationEventEntity,
         onComplete: (() -> Unit)? = null

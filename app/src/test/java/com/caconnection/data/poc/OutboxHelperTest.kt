@@ -70,6 +70,45 @@ class OutboxHelperTest {
         assertTrue(payload.contains(incoming.receivedAt.toString()))
         assertTrue(payload.contains("\"subscriptionId\":1"))
         assertTrue(payload.contains("\"slotIndex\":0"))
+        assertTrue(payload.contains("\"action\":\"SMS_RECEIVED\""))
+    }
+
+    @Test
+    fun deviceStateContainsCapabilitiesAndNoSubscriberIdentifiers() {
+        val outbox = OutboxHelper.createDeviceState(
+            OutboxHelper.DeviceStatePayload(
+                observedAt = 5_000L,
+                appVersion = "1.0.0",
+                versionCode = 10,
+                targetSdk = 37,
+                androidVersion = "16",
+                manufacturer = "Example",
+                model = "Gateway",
+                receiveMode = "OBSERVER",
+                defaultSmsRole = false,
+                receiveSmsGranted = true,
+                sendSmsGranted = true,
+                readPhoneStateGranted = true,
+                lines = listOf(
+                    OutboxHelper.DeviceStateLine(
+                        slotIndex = 0,
+                        subscriptionId = 42,
+                        carrierName = "Carrier",
+                        displayName = "SIM 1",
+                        active = true
+                    )
+                )
+            )
+        )
+
+        assertEquals("DEVICE_STATE", outbox.payloadType)
+        assertTrue(outbox.idempotencyKey.matches(Regex("device_state_[0-9a-f]{64}")))
+        assertTrue(outbox.payloadData.contains("\"targetSdk\":37"))
+        assertTrue(outbox.payloadData.contains("\"receiveMode\":\"OBSERVER\""))
+        assertTrue(outbox.payloadData.contains("\"slotIndex\":0"))
+        assertTrue(!outbox.payloadData.contains("phoneNumber"))
+        assertTrue(!outbox.payloadData.contains("iccid", ignoreCase = true))
+        assertTrue(!outbox.payloadData.contains("imsi", ignoreCase = true))
     }
 
     @Test

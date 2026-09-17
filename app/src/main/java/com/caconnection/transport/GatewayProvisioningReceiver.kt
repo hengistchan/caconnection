@@ -30,6 +30,7 @@ class GatewayProvisioningReceiver : BroadcastReceiver() {
                     document.certificatePinSha256Base64.orEmpty()
             )
             OutboxScheduler.enqueueNow(context)
+            DeviceStateReporter.enqueue(context)
             RemoteCommandScheduler.enqueueNow(context)
         }
         provisioning?.delete()
