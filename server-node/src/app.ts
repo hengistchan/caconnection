@@ -27,6 +27,7 @@ import { groupCommandRoutes } from './routes/group-command-routes.js';
 import { otpRoutes } from './routes/otp-routes.js';
 import { outboundCommandRoutes } from './routes/outbound-command-routes.js';
 import { pairingRoutes } from './routes/pairing-routes.js';
+import { ingestRoutes } from './routes/ingest-routes.js';
 
 // Extend Fastify instance type
 declare module 'fastify' {
@@ -195,6 +196,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   await app.register(otpRoutes);
   await app.register(outboundCommandRoutes);
   await app.register(pairingRoutes);
+  await app.register(ingestRoutes);
 
   // Cleanup on shutdown
   app.addHook('onClose', async () => {
