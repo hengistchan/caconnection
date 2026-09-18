@@ -22,6 +22,11 @@ import { outboundRoutes } from './routes/outbound-routes.js';
 import { deviceRoutes } from './routes/device-routes.js';
 import { groupRoutes } from './routes/group-routes.js';
 import { auditRoutes } from './routes/audit-routes.js';
+import { deviceCommandRoutes } from './routes/device-command-routes.js';
+import { groupCommandRoutes } from './routes/group-command-routes.js';
+import { otpRoutes } from './routes/otp-routes.js';
+import { outboundCommandRoutes } from './routes/outbound-command-routes.js';
+import { pairingRoutes } from './routes/pairing-routes.js';
 
 // Extend Fastify instance type
 declare module 'fastify' {
@@ -185,6 +190,11 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   await app.register(deviceRoutes);
   await app.register(groupRoutes);
   await app.register(auditRoutes);
+  await app.register(deviceCommandRoutes);
+  await app.register(groupCommandRoutes);
+  await app.register(otpRoutes);
+  await app.register(outboundCommandRoutes);
+  await app.register(pairingRoutes);
 
   // Cleanup on shutdown
   app.addHook('onClose', async () => {
