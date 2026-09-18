@@ -6,12 +6,38 @@ cd "$(dirname "$0")"
 test -f runtime/automation-api-token.txt
 
 docker compose ps
+
+wait_for_url() {
+  URL="$1"
+  LABEL="$2"
+  ATTEMPT=0
+  while [ "$ATTEMPT" -lt 60 ]; do
+    if curl --fail --silent --show-error "$URL" >/dev/null 2>&1; then
+      return 0
+    fi
+    ATTEMPT=$((ATTEMPT + 1))
+    sleep 2
+  done
+  echo "Timed out waiting for ${LABEL}: ${URL}" >&2
+  return 1
+}
+
+wait_for_url "https://${GATEWAY_DOMAIN}/health" "Gateway health"
+wait_for_url "https://${GATEWAY_DOMAIN}/ready" "Gateway readiness"
+
 curl --fail --silent --show-error "https://${GATEWAY_DOMAIN}/health"
 echo
 curl --fail --silent --show-error "https://${GATEWAY_DOMAIN}/ready"
 echo
 curl --fail --silent --show-error "https://${GATEWAY_DOMAIN}/version"
 echo
+
+if [ "${GATEWAY_DEPLOYMENT_MODE:-direct}" = "cloudflare-tunnel" ]; then
+  wait_for_url "https://${GATEWAY_DOMAIN}/admin/api/health" "Admin health"
+  curl --fail --silent --show-error \
+    "https://${GATEWAY_DOMAIN}/admin/api/health"
+  echo
+fi
 
 case "${GATEWAY_DEPLOYMENT_MODE:-direct}" in
   direct)
