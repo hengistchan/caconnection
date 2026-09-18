@@ -7,7 +7,18 @@
  * Decode a standard Base64 string, throwing on invalid input.
  */
 export function base64Decode(input: string): Buffer {
-  return Buffer.from(input, 'base64');
+  if (
+    input.length === 0
+    || input.length % 4 !== 0
+    || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input)
+  ) {
+    throw new Error('invalid base64');
+  }
+  const decoded = Buffer.from(input, 'base64');
+  if (decoded.toString('base64') !== input) {
+    throw new Error('invalid base64');
+  }
+  return decoded;
 }
 
 /**

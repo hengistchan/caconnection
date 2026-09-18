@@ -5,6 +5,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { jsonObject } from '../http/body-validation.js';
 
 export async function otpRoutes(app: FastifyInstance) {
   /**
@@ -15,7 +16,8 @@ export async function otpRoutes(app: FastifyInstance) {
    */
   app.post('/v1/otp/claim', async (request, reply) => {
     const clientId = app.verifyApi(request, 'otp:claim');
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
 
     const allowedKeys = new Set(['deviceId', 'slotIndex', 'maxAgeSeconds', 'eventId']);
     for (const key of Object.keys(body)) {
@@ -26,7 +28,7 @@ export async function otpRoutes(app: FastifyInstance) {
 
     const deviceId = body.deviceId;
     const slotIndex = body.slotIndex;
-    const maxAgeSeconds = body.maxAgeSeconds ?? 600;
+    const maxAgeSeconds = body.maxAgeSeconds ?? app.runtimeConfig.server.otpMaxAgeSeconds;
     const eventId = body.eventId;
 
     // Validate deviceId
@@ -38,19 +40,19 @@ export async function otpRoutes(app: FastifyInstance) {
 
     // Validate slotIndex
     if (slotIndex !== undefined) {
-      if (typeof slotIndex !== 'number' || (slotIndex !== 0 && slotIndex !== 1)) {
+      if (typeof slotIndex !== 'number' || !Number.isInteger(slotIndex) || (slotIndex !== 0 && slotIndex !== 1)) {
         return reply.status(400).send({ error: 'invalid slotIndex' });
       }
     }
 
     // Validate maxAgeSeconds
-    if (typeof maxAgeSeconds !== 'number' || maxAgeSeconds < 30 || maxAgeSeconds > 3600) {
+    if (typeof maxAgeSeconds !== 'number' || !Number.isInteger(maxAgeSeconds) || maxAgeSeconds < 30 || maxAgeSeconds > 3600) {
       return reply.status(400).send({ error: 'invalid maxAgeSeconds' });
     }
 
     // Validate eventId
     if (eventId !== undefined) {
-      if (typeof eventId !== 'number' || eventId < 1) {
+      if (typeof eventId !== 'number' || !Number.isInteger(eventId) || eventId < 1) {
         return reply.status(400).send({ error: 'invalid eventId' });
       }
     }

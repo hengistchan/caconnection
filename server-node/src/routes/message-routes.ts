@@ -5,6 +5,15 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import {
+  assertAllowedQuery,
+  InvalidQueryError,
+  parseAfterId,
+  parseBeforeId,
+  parseIdentifier,
+  parseLimit,
+  parseSlotIndex,
+} from '../http/query-validation.js';
 
 export async function messageRoutes(app: FastifyInstance) {
   /**
@@ -15,31 +24,25 @@ export async function messageRoutes(app: FastifyInstance) {
    */
   app.get('/v1/messages', async (request, reply) => {
     const clientId = app.verifyApi(request, 'messages:read');
-    const query = request.query as Record<string, string | undefined>;
-
-    // Validate query parameters
-    const allowedKeys = new Set(['limit', 'afterId', 'beforeId', 'slotIndex', 'deviceId', 'groupId']);
-    for (const key of Object.keys(query)) {
-      if (!allowedKeys.has(key)) {
-        return reply.status(400).send({ error: 'invalid query' });
-      }
-    }
-
-    const limit = parseLimit(query.limit);
-    const afterId = parseOptionalId(query.afterId, 'afterId');
-    const beforeId = parseOptionalId(query.beforeId, 'beforeId');
-    const slotIndex = parseOptionalSlotIndex(query.slotIndex);
-    const deviceId = parseOptionalDeviceId(query.deviceId);
-    const groupId = query.groupId;
-
-    if (afterId !== undefined && beforeId !== undefined) {
-      return reply.status(400).send({ error: 'conflicting cursors' });
-    }
-    if (groupId !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(groupId)) {
-      return reply.status(400).send({ error: 'invalid groupId' });
-    }
-    if (deviceId !== undefined && groupId !== undefined) {
-      return reply.status(400).send({ error: 'conflicting device filters' });
+    const query = request.query as Record<string, unknown>;
+    let limit: number;
+    let afterId: number | undefined;
+    let beforeId: number | undefined;
+    let slotIndex: number | undefined;
+    let deviceId: string | undefined;
+    let groupId: string | undefined;
+    try {
+      assertAllowedQuery(query, new Set(['limit', 'afterId', 'beforeId', 'slotIndex', 'deviceId', 'groupId']));
+      limit = parseLimit(query.limit);
+      afterId = parseAfterId(query.afterId);
+      beforeId = parseBeforeId(query.beforeId);
+      slotIndex = parseSlotIndex(query.slotIndex);
+      deviceId = parseIdentifier(query.deviceId);
+      groupId = parseIdentifier(query.groupId);
+      if (afterId !== undefined && beforeId !== undefined) throw new InvalidQueryError();
+      if (deviceId !== undefined && groupId !== undefined) throw new InvalidQueryError();
+    } catch {
+      return reply.status(400).send({ error: 'invalid query' });
     }
 
     // Check device access
@@ -92,29 +95,23 @@ export async function messageRoutes(app: FastifyInstance) {
    */
   app.get('/v1/notifications', async (request, reply) => {
     const clientId = app.verifyApi(request, 'messages:read');
-    const query = request.query as Record<string, string | undefined>;
-
-    const allowedKeys = new Set(['limit', 'afterId', 'beforeId', 'deviceId', 'groupId']);
-    for (const key of Object.keys(query)) {
-      if (!allowedKeys.has(key)) {
-        return reply.status(400).send({ error: 'invalid query' });
-      }
-    }
-
-    const limit = parseLimit(query.limit);
-    const afterId = parseOptionalId(query.afterId, 'afterId');
-    const beforeId = parseOptionalId(query.beforeId, 'beforeId');
-    const deviceId = parseOptionalDeviceId(query.deviceId);
-    const groupId = query.groupId;
-
-    if (afterId !== undefined && beforeId !== undefined) {
-      return reply.status(400).send({ error: 'conflicting cursors' });
-    }
-    if (groupId !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(groupId)) {
-      return reply.status(400).send({ error: 'invalid groupId' });
-    }
-    if (deviceId !== undefined && groupId !== undefined) {
-      return reply.status(400).send({ error: 'conflicting device filters' });
+    const query = request.query as Record<string, unknown>;
+    let limit: number;
+    let afterId: number | undefined;
+    let beforeId: number | undefined;
+    let deviceId: string | undefined;
+    let groupId: string | undefined;
+    try {
+      assertAllowedQuery(query, new Set(['limit', 'afterId', 'beforeId', 'deviceId', 'groupId']));
+      limit = parseLimit(query.limit);
+      afterId = parseAfterId(query.afterId);
+      beforeId = parseBeforeId(query.beforeId);
+      deviceId = parseIdentifier(query.deviceId);
+      groupId = parseIdentifier(query.groupId);
+      if (afterId !== undefined && beforeId !== undefined) throw new InvalidQueryError();
+      if (deviceId !== undefined && groupId !== undefined) throw new InvalidQueryError();
+    } catch {
+      return reply.status(400).send({ error: 'invalid query' });
     }
 
     if (deviceId !== undefined && !app.verifyDeviceAccess(clientId, deviceId)) {
@@ -156,31 +153,4 @@ export async function messageRoutes(app: FastifyInstance) {
 
     return reply.send({ notifications });
   });
-}
-
-function parseLimit(value: string | undefined): number {
-  const n = parseInt(value || '50', 10);
-  return isNaN(n) ? 50 : Math.min(Math.max(n, 1), 100);
-}
-
-function parseOptionalId(value: string | undefined, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  const n = parseInt(value, 10);
-  if (isNaN(n) || n < (name === 'afterId' ? 0 : 1)) {
-    throw new Error(`invalid ${name}`);
-  }
-  return n;
-}
-
-function parseOptionalSlotIndex(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const n = parseInt(value, 10);
-  if (n !== 0 && n !== 1) throw new Error('invalid slotIndex');
-  return n;
-}
-
-function parseOptionalDeviceId(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) throw new Error('invalid deviceId');
-  return value;
 }

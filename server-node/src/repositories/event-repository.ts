@@ -69,37 +69,51 @@ export class EventRepository {
     nowMs: number,
   ): boolean {
     return transaction(this.db, () => {
-      this.db.prepare('DELETE FROM request_nonces WHERE seen_at < ?').run(nowMs - 600_000);
-
-      try {
-        this.db.prepare('INSERT INTO request_nonces(device_id, nonce, seen_at) VALUES (?, ?, ?)').run(deviceId, nonce, nowMs);
-      } catch (error: any) {
-        if (error?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error?.errcode === 1555) {
-          throw new Error('replayed nonce');
-        }
-        throw error;
-      }
-
-      const result = this.db.prepare(`
-        INSERT OR IGNORE INTO events(
-          device_id, idempotency_key, delivery_id, source_event_id,
-          event_type, created_at, received_at, subscription_id, slot_index, envelope_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        deviceId,
-        idempotencyKey,
-        envelope.deliveryId as string,
-        envelope.sourceEventId as string,
-        envelope.eventType as string,
-        envelope.createdAt as number,
-        nowMs,
-        (envelope.subscriptionId as number) ?? null,
-        (envelope.slotIndex as number) ?? null,
-        JSON.stringify(envelope),
-      );
-
-      return result.changes > 0;
+      this.recordNonce(deviceId, nonce, nowMs);
+      return this.insert(deviceId, idempotencyKey, envelope, nowMs);
     });
+  }
+
+  recordNonce(deviceId: string, nonce: string, nowMs: number): void {
+    this.db.prepare('DELETE FROM request_nonces WHERE seen_at < ?').run(nowMs - 600_000);
+    try {
+      this.db.prepare('INSERT INTO request_nonces(device_id, nonce, seen_at) VALUES (?, ?, ?)').run(deviceId, nonce, nowMs);
+    } catch (error: any) {
+      if (error?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error?.errcode === 1555) {
+        throw new Error('replayed nonce');
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Insert one event without opening a transaction. Ingestion uses this to
+   * atomically compose nonce, event and side-effect writes.
+   */
+  insert(
+    deviceId: string,
+    idempotencyKey: string,
+    envelope: Record<string, unknown>,
+    nowMs: number,
+  ): boolean {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO events(
+        device_id, idempotency_key, delivery_id, source_event_id,
+        event_type, created_at, received_at, subscription_id, slot_index, envelope_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      deviceId,
+      idempotencyKey,
+      envelope.deliveryId as string,
+      envelope.sourceEventId as string,
+      envelope.eventType as string,
+      envelope.createdAt as number,
+      nowMs,
+      (envelope.subscriptionId as number) ?? null,
+      (envelope.slotIndex as number) ?? null,
+      JSON.stringify(envelope),
+    );
+    return result.changes > 0;
   }
 
   /**
@@ -235,12 +249,14 @@ export class EventRepository {
    * Prune old events.
    */
   prune(retentionDays: number, nowMs: number): number {
+    return transaction(this.db, () => this.pruneInTransaction(retentionDays, nowMs));
+  }
+
+  pruneInTransaction(retentionDays: number, nowMs: number): number {
     if (retentionDays <= 0) return 0;
     const cutoff = nowMs - retentionDays * 86_400_000;
-    return transaction(this.db, () => {
-      this.db.prepare('DELETE FROM otp_claims WHERE event_id IN (SELECT id FROM events WHERE received_at < ?)').run(cutoff);
-      return this.db.prepare('DELETE FROM events WHERE received_at < ?').run(cutoff).changes as number;
-    });
+    this.db.prepare('DELETE FROM otp_claims WHERE event_id IN (SELECT id FROM events WHERE received_at < ?)').run(cutoff);
+    return this.db.prepare('DELETE FROM events WHERE received_at < ?').run(cutoff).changes as number;
   }
 
   /**

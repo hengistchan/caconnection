@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import {
   OUTBOUND_STATUS_ORDER,
   OUTBOUND_COMMAND_LEASE_MS,
+  OUTBOUND_COMMAND_STATUSES,
 } from '../config/constants.js';
 
 export interface OutboundCommandRow {
@@ -165,12 +166,22 @@ export class OutboundRepository {
    * Update outbound command status from device.
    */
   updateStatus(deviceId: string, payload: Record<string, unknown>, nowMs: number): boolean {
-    const commandId = payload.commandId as string;
-    const status = payload.status as string;
-    const resultCode = payload.resultCode as number | null;
-    const errorDetail = payload.errorDetail as string | null;
+    const commandId = payload.commandId;
+    const status = payload.status;
+    const resultCode = payload.resultCode;
+    const errorDetail = payload.errorDetail;
 
-    if (!commandId || !/^[A-Za-z0-9_-]{16,128}$/.test(commandId)) {
+    if (
+      typeof commandId !== 'string'
+      || !/^[A-Za-z0-9_-]{16,128}$/.test(commandId)
+      || typeof status !== 'string'
+      || !OUTBOUND_COMMAND_STATUSES.has(status)
+      || status === 'QUEUED'
+      || status === 'CLAIMED'
+      || status === 'EXPIRED'
+      || (resultCode != null && (typeof resultCode !== 'number' || !Number.isInteger(resultCode)))
+      || (errorDetail != null && typeof errorDetail !== 'string')
+    ) {
       throw new Error('invalid outbound status');
     }
 
@@ -180,7 +191,7 @@ export class OutboundRepository {
     if (['DELIVERED', 'FAILED', 'EXPIRED'].includes(row.status)) return true;
     if ((OUTBOUND_STATUS_ORDER[status] ?? 0) < (OUTBOUND_STATUS_ORDER[row.status] ?? 0)) return true;
 
-    const normalizedError = typeof errorDetail === 'string' ? errorDetail.trim().slice(0, 256) : null;
+    const normalizedError = errorDetail == null ? null : errorDetail.trim().slice(0, 256);
     this.db.prepare('UPDATE outbound_commands SET status = ?, updated_at = ?, last_result_code = ?, error_detail = ? WHERE command_id = ? AND device_id = ?').run(status, nowMs, resultCode ?? null, normalizedError, commandId, deviceId);
     return true;
   }

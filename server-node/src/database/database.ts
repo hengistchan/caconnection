@@ -12,20 +12,19 @@ export interface DatabaseConfig {
   path: string;
 }
 
-let db: DatabaseSync | null = null;
-
 /**
- * Get or create the database connection.
+ * Open an independent database connection.
+ *
+ * Each Fastify application owns its connection. Avoiding a process-global
+ * singleton keeps tests isolated and makes graceful shutdown deterministic.
  */
-export function getDatabase(config: DatabaseConfig): DatabaseSync {
-  if (db) return db;
-
+export function openDatabase(config: DatabaseConfig): DatabaseSync {
   const dir = join(config.path, '..');
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 
-  db = new DatabaseSync(config.path, {
+  const db = new DatabaseSync(config.path, {
     open: true,
     enableForeignKeyConstraints: true,
     readOnly: false,
@@ -36,16 +35,6 @@ export function getDatabase(config: DatabaseConfig): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 10000');
 
   return db;
-}
-
-/**
- * Close the database connection.
- */
-export function closeDatabase(): void {
-  if (db) {
-    db.close();
-    db = null;
-  }
 }
 
 /**

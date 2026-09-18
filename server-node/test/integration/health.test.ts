@@ -10,6 +10,8 @@ import type { FastifyInstance } from 'fastify';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { parseRuntimeConfig } from '../../src/config/runtime-config.js';
 
 describe('Health Endpoints', () => {
   let app: FastifyInstance;
@@ -19,6 +21,19 @@ describe('Health Endpoints', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'gateway-test-'));
     app = await buildApp({
       database: { path: join(tempDir, 'test.db') },
+      runtimeConfig: parseRuntimeConfig({
+        devices: {
+          'test-device': {
+            secret_base64: Buffer.alloc(32, 7).toString('base64'),
+          },
+        },
+        api_clients: {
+          'test-client': {
+            token_sha256: createHash('sha256').update('test-token').digest('hex'),
+            scopes: ['*'],
+          },
+        },
+      }),
     });
     await app.ready();
   });
@@ -59,7 +74,7 @@ describe('Health Endpoints', () => {
   });
 
   describe('GET /ready', () => {
-    it('should return 200 when database is accessible', async () => {
+    it('should return 200 when database, devices and API clients are ready', async () => {
       const response = await app.inject({
         method: 'GET',
         url: '/ready',

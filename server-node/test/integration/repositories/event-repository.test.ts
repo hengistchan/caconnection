@@ -175,7 +175,6 @@ describe('EventRepository', () => {
     });
 
     it('should filter by deviceIds set', () => {
-      const secret = deviceRepo.loadSecrets().get('test-device')!;
       const secret2 = generateSecret();
       deviceRepo.add('device-2', secret2.toString('base64'), 'Device 2', 1000000);
       const secret3 = generateSecret();

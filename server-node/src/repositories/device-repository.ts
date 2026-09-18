@@ -9,6 +9,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { transaction } from '../database/transaction.js';
 import { queryAll, queryOne } from '../database/helpers.js';
 import { encryptPayload, decryptPayload } from '../crypto/payload-crypto.js';
+import { base64Decode, base64Encode } from '../crypto/encoding.js';
 import {
   DEVICE_ONLINE_WINDOW_MS,
   DEVICE_STALE_WINDOW_MS,
@@ -143,7 +144,7 @@ export class DeviceRepository {
     const result = new Map<string, Buffer>();
     for (const row of rows) {
       try {
-        const secret = Buffer.from(row.secret_base64, 'base64');
+        const secret = base64Decode(row.secret_base64);
         if (secret.length >= 32) {
           result.set(row.device_id, secret);
         }
@@ -205,7 +206,7 @@ export class DeviceRepository {
       throw new Error('Invalid device ID format');
     }
 
-    const secret = Buffer.from(secretBase64, 'base64');
+    const secret = decodeDeviceSecret(secretBase64);
     if (secret.length < 32) {
       throw new Error('Secret must be at least 32 bytes');
     }
@@ -239,12 +240,9 @@ export class DeviceRepository {
       }
 
       if (secretBase64 !== undefined) {
-        const newSecret = Buffer.from(secretBase64, 'base64');
-        if (newSecret.length < 32) {
-          throw new Error('Secret must be at least 32 bytes');
-        }
+        const newSecret = decodeDeviceSecret(secretBase64);
 
-        const oldSecret = Buffer.from(existing.secret_base64, 'base64');
+        const oldSecret = base64Decode(existing.secret_base64);
 
         if (!oldSecret.equals(newSecret)) {
           // Re-encrypt events
@@ -285,6 +283,40 @@ export class DeviceRepository {
       }
 
       return this.getById(deviceId);
+    });
+  }
+
+  /**
+   * Import config-file devices once, preserving the database as the
+   * authoritative source after the migration marker is written.
+   */
+  migrateFromConfig(configuredDevices: Map<string, Buffer>, nowMs: number): number {
+    const markerKey = 'config_devices_migrated_v1';
+    return transaction(this.db, () => {
+      const marker = queryOne<{ value: string }>(
+        this.db,
+        'SELECT value FROM gateway_metadata WHERE key = ?',
+        markerKey,
+      );
+      if (marker) return 0;
+
+      let migrated = 0;
+      for (const [deviceId, secret] of configuredDevices) {
+        const existing = queryOne<{ device_id: string }>(
+          this.db,
+          'SELECT device_id FROM devices WHERE device_id = ?',
+          deviceId,
+        );
+        if (!existing) {
+          this.db.prepare(`
+            INSERT INTO devices(device_id, secret_base64, description, created_at)
+            VALUES (?, ?, ?, ?)
+          `).run(deviceId, base64Encode(secret), 'Migrated from config', nowMs);
+          migrated += 1;
+        }
+      }
+      this.db.prepare('INSERT INTO gateway_metadata(key, value) VALUES (?, ?)').run(markerKey, String(nowMs));
+      return migrated;
     });
   }
 
@@ -392,4 +424,17 @@ export class DeviceRepository {
       },
     };
   }
+}
+
+function decodeDeviceSecret(value: string): Buffer {
+  let secret: Buffer;
+  try {
+    secret = base64Decode(value);
+  } catch {
+    throw new Error('Secret must be valid Base64');
+  }
+  if (secret.length < 32) {
+    throw new Error('Secret must be at least 32 bytes');
+  }
+  return secret;
 }

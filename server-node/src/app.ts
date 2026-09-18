@@ -1,24 +1,41 @@
 /**
- * Fastify application factory.
+ * Fastify composition root.
  *
- * Creates and configures the Fastify instance with all plugins and routes.
+ * Configuration parsing, protocol authentication and transactional ingestion
+ * live in dedicated modules; this file only wires dependencies and HTTP-wide
+ * behavior.
  */
 
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
-import { readFileSync } from 'node:fs';
-import { createHash, timingSafeEqual } from 'node:crypto';
-import { getDatabase, initializeDatabase, closeDatabase } from './database/database.js';
-import type { DatabaseConfig } from './database/database.js';
 import type { DatabaseSync } from 'node:sqlite';
+import { openDatabase, initializeDatabase } from './database/database.js';
+import type { DatabaseConfig } from './database/database.js';
 import { DeviceRepository } from './repositories/device-repository.js';
+import { DeviceStateRepository } from './repositories/device-state-repository.js';
 import { EventRepository } from './repositories/event-repository.js';
 import { OutboundRepository } from './repositories/outbound-repository.js';
 import { OtpRepository } from './repositories/otp-repository.js';
 import { PairingRepository } from './repositories/pairing-repository.js';
 import { GroupRepository } from './repositories/group-repository.js';
 import { AuditRepository } from './repositories/audit-repository.js';
-import { loadApiClients, type ApiClient, canAccessDevice, getClientAllowedDeviceIds, getClientDeviceSecrets } from './auth/api-client-auth.js';
+import {
+  verifyApiClient,
+  type ApiClient,
+  canAccessDevice,
+  getClientAllowedDeviceIds,
+  getClientDeviceSecrets,
+} from './auth/api-client-auth.js';
 import { SlidingWindowRateLimiter } from './auth/rate-limiter.js';
+import { RateLimitError } from './auth/auth-errors.js';
+import {
+  emptyRuntimeConfig,
+  loadRuntimeConfig,
+  type RuntimeConfig,
+} from './config/runtime-config.js';
+import { API_VERSION, MAX_BODY_BYTES, PROTOCOL_SCHEMA_VERSION, SERVICE_VERSION } from './config/constants.js';
+import { registerRawJsonParser } from './http/raw-json.js';
+import { DeviceRequestAuthenticator } from './services/device-request-authenticator.js';
+import { EventIngestionService } from './services/event-ingestion-service.js';
 import { messageRoutes } from './routes/message-routes.js';
 import { outboundRoutes } from './routes/outbound-routes.js';
 import { deviceRoutes } from './routes/device-routes.js';
@@ -31,11 +48,12 @@ import { outboundCommandRoutes } from './routes/outbound-command-routes.js';
 import { pairingRoutes } from './routes/pairing-routes.js';
 import { ingestRoutes } from './routes/ingest-routes.js';
 
-// Extend Fastify instance type
 declare module 'fastify' {
   interface FastifyInstance {
     db: DatabaseSync;
+    runtimeConfig: RuntimeConfig;
     deviceRepo: DeviceRepository;
+    deviceStateRepo: DeviceStateRepository;
     eventRepo: EventRepository;
     outboundRepo: OutboundRepository;
     otpRepo: OtpRepository;
@@ -45,138 +63,137 @@ declare module 'fastify' {
     apiClients: Map<string, ApiClient>;
     deviceSecrets: Map<string, Buffer>;
     rateLimiter: SlidingWindowRateLimiter;
+    deviceAuthenticator: DeviceRequestAuthenticator;
+    eventIngestionService: EventIngestionService;
     verifyApi: (request: FastifyRequest, requiredScope: string) => string;
     verifyDeviceAccess: (clientId: string, deviceId: string) => boolean;
     getAllowedDeviceIds: (clientId: string) => Set<string> | null;
     getClientSecrets: (clientId: string) => Map<string, Buffer>;
+    refreshDeviceSecrets: () => void;
   }
 }
 
 export interface AppConfig {
   database: DatabaseConfig;
-  trustProxy?: boolean;
   configPath?: string;
+  runtimeConfig?: RuntimeConfig;
+  trustProxy?: boolean;
 }
 
-/**
- * Build and configure the Fastify application.
- */
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
+  const runtimeConfig = config.runtimeConfig
+    ?? (config.configPath ? loadRuntimeConfig(config.configPath) : emptyRuntimeConfig());
+
   const app = Fastify({
     logger: {
       level: 'info',
       redact: ['req.headers.authorization', 'req.body.payload', '*.body', '*.sender', '*.otp', '*.code'],
     },
-    trustProxy: config.trustProxy ?? false,
-    bodyLimit: 1_048_576, // 1MB
+    trustProxy: config.trustProxy ?? runtimeConfig.server.trustProxyHeaders,
+    bodyLimit: MAX_BODY_BYTES,
   });
+  registerRawJsonParser(app);
+  const db = openDatabase(config.database);
+  try {
+    initializeDatabase(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
 
-  // Initialize database
-  const db = getDatabase(config.database);
-  initializeDatabase(db);
-
-  // Create repositories
   const deviceRepo = new DeviceRepository(db);
+  if (runtimeConfig.configuredDevices.size > 0) {
+    deviceRepo.migrateFromConfig(runtimeConfig.configuredDevices, Date.now());
+  }
   const eventRepo = new EventRepository(db);
+  const deviceStateRepo = new DeviceStateRepository(db);
   const outboundRepo = new OutboundRepository(db);
   const otpRepo = new OtpRepository(db);
   const pairingRepo = new PairingRepository(db);
   const groupRepo = new GroupRepository(db);
   const auditRepo = new AuditRepository(db);
-
-  // Load API clients from config
-  let apiClients = new Map<string, ApiClient>();
-  if (config.configPath) {
-    try {
-      const configData = JSON.parse(readFileSync(config.configPath, 'utf-8'));
-      apiClients = loadApiClients(configData);
-    } catch (err) {
-      console.error('Failed to load config:', err);
-    }
-  }
-
-  // Load device secrets
   const deviceSecrets = deviceRepo.loadSecrets();
-
-  // Rate limiter
   const rateLimiter = new SlidingWindowRateLimiter();
+  const deviceAuthenticator = new DeviceRequestAuthenticator(
+    deviceRepo,
+    deviceSecrets,
+    rateLimiter,
+    runtimeConfig.server,
+  );
+  const eventIngestionService = new EventIngestionService(
+    db,
+    deviceRepo,
+    deviceStateRepo,
+    eventRepo,
+    outboundRepo,
+    runtimeConfig.server.retentionDays,
+  );
 
-  // Decorate app with instances
   app.decorate('db', db);
+  app.decorate('runtimeConfig', runtimeConfig);
   app.decorate('deviceRepo', deviceRepo);
+  app.decorate('deviceStateRepo', deviceStateRepo);
   app.decorate('eventRepo', eventRepo);
   app.decorate('outboundRepo', outboundRepo);
   app.decorate('otpRepo', otpRepo);
   app.decorate('pairingRepo', pairingRepo);
   app.decorate('groupRepo', groupRepo);
   app.decorate('auditRepo', auditRepo);
-  app.decorate('apiClients', apiClients);
+  app.decorate('apiClients', runtimeConfig.apiClients);
   app.decorate('deviceSecrets', deviceSecrets);
   app.decorate('rateLimiter', rateLimiter);
+  app.decorate('deviceAuthenticator', deviceAuthenticator);
+  app.decorate('eventIngestionService', eventIngestionService);
 
-  // Helper methods for auth
-  app.decorate('verifyApi', function(request: any, requiredScope: string): string {
-    const auth = request.headers.authorization;
-    if (!auth || !auth.startsWith('Bearer ')) {
-      throw { statusCode: 401, message: 'authentication required' };
+  app.decorate('verifyApi', function verifyApi(request: FastifyRequest, requiredScope: string): string {
+    return verifyApiClient(
+      request.headers.authorization,
+      requiredScope,
+      app.apiClients,
+      app.rateLimiter,
+      request.ip,
+      app.runtimeConfig.server.apiAuthRequestsPerMinute,
+      app.runtimeConfig.server.apiRequestsPerMinute,
+    );
+  });
+  app.decorate('verifyDeviceAccess', (clientId: string, deviceId: string) => (
+    canAccessDevice(clientId, deviceId, app.apiClients)
+  ));
+  app.decorate('getAllowedDeviceIds', (clientId: string) => (
+    getClientAllowedDeviceIds(clientId, app.apiClients)
+  ));
+  app.decorate('getClientSecrets', (clientId: string) => (
+    getClientDeviceSecrets(clientId, app.apiClients, app.deviceSecrets)
+  ));
+  app.decorate('refreshDeviceSecrets', () => {
+    const current = app.deviceRepo.loadSecrets();
+    app.deviceSecrets.clear();
+    for (const [deviceId, secret] of current) {
+      app.deviceSecrets.set(deviceId, secret);
     }
-    const token = auth.slice(7).trim();
-    const tokenHash = createHash('sha256').update(token, 'utf-8').digest('hex');
-
-    for (const [clientId, client] of apiClients) {
-      if (timingSafeEqual(Buffer.from(client.tokenSha256, 'utf-8'), Buffer.from(tokenHash, 'utf-8'))) {
-        if (!client.scopes.has(requiredScope) && !client.scopes.has('*')) {
-          throw { statusCode: 403, message: 'insufficient scope' };
-        }
-        return clientId;
-      }
-    }
-    throw { statusCode: 401, message: 'authentication failed' };
   });
 
-  app.decorate('verifyDeviceAccess', function(clientId: string, deviceId: string): boolean {
-    return canAccessDevice(clientId, deviceId, apiClients);
-  });
+  registerConcurrencyLimit(app, runtimeConfig.server.maxConcurrentRequests);
+  registerSecurityHeaders(app);
 
-  app.decorate('getAllowedDeviceIds', function(clientId: string): Set<string> | null {
-    return getClientAllowedDeviceIds(clientId, apiClients);
-  });
-
-  app.decorate('getClientSecrets', function(clientId: string): Map<string, Buffer> {
-    // Always use the current deviceSecrets (which may have been updated)
-    return getClientDeviceSecrets(clientId, apiClients, app.deviceSecrets);
-  });
-
-  // Health check
-  app.get('/health', async () => {
-    return { status: 'ok' };
-  });
-
-  // Version endpoint
-  app.get('/version', async () => {
-    return {
-      service: 'caconnection-gateway',
-      version: '0.5.0',
-      apiVersion: 1,
-      protocolSchemaVersion: 2,
-    };
-  });
-
-  // Readiness check
+  app.get('/health', async () => ({ status: 'ok' }));
+  app.get('/version', async () => ({
+    service: 'caconnection-gateway',
+    version: SERVICE_VERSION,
+    apiVersion: API_VERSION,
+    protocolSchemaVersion: PROTOCOL_SCHEMA_VERSION,
+  }));
   app.get('/ready', async (_, reply) => {
     try {
-      const result = db.prepare('SELECT 1').get();
-      const ready = result !== undefined;
-      return reply.status(ready ? 200 : 503).send({
-        status: ready ? 'ready' : 'not_ready',
-      });
+      const databaseReady = db.prepare('SELECT 1').get() !== undefined;
+      const ready = databaseReady && app.deviceSecrets.size > 0 && app.apiClients.size > 0;
+      return reply.status(ready ? 200 : 503).send({ status: ready ? 'ready' : 'not_ready' });
     } catch {
       return reply.status(503).send({ status: 'not_ready' });
     }
   });
 
-  // Error handler
-  app.setErrorHandler((error: any, _request, reply) => {
+  app.setErrorHandler((error: Error & { statusCode?: number; retryAfterMs?: number }, _request, reply) => {
     if (error.statusCode) {
       const headers: Record<string, string> = {};
       if (error.retryAfterMs) {
@@ -188,7 +205,6 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     return reply.status(500).send({ error: 'internal server error' });
   });
 
-  // Register routes
   await app.register(messageRoutes);
   await app.register(outboundRoutes);
   await app.register(deviceRoutes);
@@ -201,10 +217,37 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   await app.register(pairingRoutes);
   await app.register(ingestRoutes);
 
-  // Cleanup on shutdown
   app.addHook('onClose', async () => {
-    closeDatabase();
+    db.close();
   });
 
   return app;
+}
+
+function registerSecurityHeaders(app: FastifyInstance): void {
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header('Cache-Control', 'no-store');
+    reply.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'no-referrer');
+    return payload;
+  });
+}
+
+function registerConcurrencyLimit(app: FastifyInstance, maximum: number): void {
+  let active = 0;
+  const admitted = new Set<string>();
+  app.addHook('onRequest', async (request, reply) => {
+    if (active >= maximum) {
+      throw new RateLimitError(1_000);
+    }
+    active += 1;
+    admitted.add(request.id);
+    void reply;
+  });
+  const release = (request: FastifyRequest) => {
+    if (admitted.delete(request.id)) active -= 1;
+  };
+  app.addHook('onResponse', async request => release(request));
+  app.addHook('onError', async request => release(request));
 }

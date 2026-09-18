@@ -5,11 +5,13 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { jsonObject } from '../http/body-validation.js';
 import { randomBytes } from 'node:crypto';
 import {
   MIN_PAIRING_EXPIRES_SECONDS,
   MAX_PAIRING_EXPIRES_SECONDS,
 } from '../config/constants.js';
+import { RateLimitError } from '../auth/auth-errors.js';
 
 export async function pairingRoutes(app: FastifyInstance) {
   /**
@@ -20,7 +22,15 @@ export async function pairingRoutes(app: FastifyInstance) {
    */
   app.post('/v1/pairings', async (request, reply) => {
     const clientId = app.verifyApi(request, 'pairing:create');
-    const body = request.body as Record<string, unknown>;
+    const rateLimit = app.rateLimiter.allow(
+      'pairing-create',
+      request.ip,
+      app.runtimeConfig.server.pairingCreateRequestsPerMinute,
+      Date.now(),
+    );
+    if (!rateLimit.allowed) throw new RateLimitError(rateLimit.retryAfterMs);
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
 
     const allowedKeys = new Set(['deviceId', 'expiresInSeconds']);
     for (const key of Object.keys(body)) {
@@ -35,7 +45,7 @@ export async function pairingRoutes(app: FastifyInstance) {
     if (typeof deviceId !== 'string' || !app.deviceSecrets.has(deviceId) || !app.deviceRepo.isActive(deviceId)) {
       return reply.status(400).send({ error: 'invalid deviceId' });
     }
-    if (typeof expiresInSeconds !== 'number' || expiresInSeconds < MIN_PAIRING_EXPIRES_SECONDS || expiresInSeconds > MAX_PAIRING_EXPIRES_SECONDS) {
+    if (typeof expiresInSeconds !== 'number' || !Number.isInteger(expiresInSeconds) || expiresInSeconds < MIN_PAIRING_EXPIRES_SECONDS || expiresInSeconds > MAX_PAIRING_EXPIRES_SECONDS) {
       return reply.status(400).send({ error: 'invalid expiresInSeconds' });
     }
 
@@ -44,7 +54,7 @@ export async function pairingRoutes(app: FastifyInstance) {
     }
 
     // Check pairing is configured
-    const pairingEndpoint = process.env.PAIRING_PUBLIC_ENDPOINT || '';
+    const pairingEndpoint = app.runtimeConfig.server.pairingPublicEndpoint;
     if (!pairingEndpoint) {
       return reply.status(503).send({ error: 'pairing unavailable' });
     }
@@ -61,7 +71,7 @@ export async function pairingRoutes(app: FastifyInstance) {
         pairingToken: token,
       };
 
-      const certPin = process.env.PAIRING_CERTIFICATE_PIN || '';
+      const certPin = app.runtimeConfig.server.pairingCertificatePinSha256Base64;
       if (certPin) {
         document.certificatePinSha256Base64 = certPin;
       }
@@ -86,7 +96,16 @@ export async function pairingRoutes(app: FastifyInstance) {
    * Atomically exchange a one-time pairing token for provisioning.
    */
   app.post('/v1/pairings/claim', async (request, reply) => {
-    const body = request.body as Record<string, unknown>;
+    const rateLimit = app.rateLimiter.allow(
+      'pairing-claim',
+      request.ip,
+      app.runtimeConfig.server.pairingClaimRequestsPerMinute,
+      Date.now(),
+    );
+    if (!rateLimit.allowed) throw new RateLimitError(rateLimit.retryAfterMs);
+
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
 
     if (Object.keys(body).length !== 1 || !body.pairingToken) {
       return reply.status(400).send({ error: 'invalid request fields' });
@@ -105,8 +124,8 @@ export async function pairingRoutes(app: FastifyInstance) {
       return reply.status(410).send({ error: 'pairing expired or already used' });
     }
 
-    const pairingEndpoint = process.env.PAIRING_PUBLIC_ENDPOINT || '';
-    const certPin = process.env.PAIRING_CERTIFICATE_PIN || null;
+    const pairingEndpoint = app.runtimeConfig.server.pairingPublicEndpoint;
+    const certPin = app.runtimeConfig.server.pairingCertificatePinSha256Base64 ?? '';
 
     return reply.send({
       provisioning: {

@@ -9,6 +9,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { jsonObject } from '../http/body-validation.js';
 
 export async function deviceCommandRoutes(app: FastifyInstance) {
   /**
@@ -19,7 +20,8 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
    */
   app.post('/v1/devices', async (request, reply) => {
     const clientId = app.verifyApi(request, 'pairing:create');
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
 
     const allowedKeys = new Set(['deviceId', 'secretBase64', 'description']);
     for (const key of Object.keys(body)) {
@@ -51,11 +53,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       const device = app.deviceRepo.add(deviceId, secretBase64, description, nowMs);
 
       // Reload device secrets
-      const newSecrets = app.deviceRepo.loadSecrets();
-      app.deviceSecrets.clear();
-      for (const [k, v] of newSecrets) {
-        app.deviceSecrets.set(k, v);
-      }
+      app.refreshDeviceSecrets();
 
       app.auditRepo.record(clientId, 'DEVICE_CREATE', deviceId, 'SUCCESS');
       return reply.status(201).send({ device });
@@ -84,7 +82,8 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'device access denied' });
     }
 
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
     const allowedKeys = new Set(['description', 'secretBase64']);
     for (const key of Object.keys(body)) {
       if (!allowedKeys.has(key)) {
@@ -112,7 +111,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       }
 
       if (secretBase64) {
-        const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
+        app.refreshDeviceSecrets();
       }
 
       app.auditRepo.record(clientId, 'DEVICE_UPDATE', deviceId, 'SUCCESS', {
@@ -149,7 +148,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'device not found' });
     }
 
-    const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
+    app.refreshDeviceSecrets();
     app.auditRepo.record(clientId, 'DEVICE_RETIRE', deviceId, 'SUCCESS');
 
     return reply.send({ retired: true, device: app.deviceRepo.getById(deviceId) });
@@ -169,7 +168,8 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'device access denied' });
     }
 
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
     if (Object.keys(body).length > 0) {
       return reply.status(400).send({ error: 'empty request required' });
     }
@@ -179,7 +179,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'device not found' });
     }
 
-    const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
+    app.refreshDeviceSecrets();
     app.auditRepo.record(clientId, 'DEVICE_RESTORE', deviceId, 'SUCCESS');
 
     return reply.send({ device: app.deviceRepo.getById(deviceId) });
@@ -199,7 +199,8 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'device access denied' });
     }
 
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
     if (body.confirmation !== `PURGE ${deviceId}`) {
       return reply.status(400).send({ error: 'confirmation required' });
     }
@@ -209,7 +210,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'device not found' });
     }
 
-    const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
+    app.refreshDeviceSecrets();
     app.auditRepo.record(clientId, 'DEVICE_PURGE', deviceId, 'SUCCESS');
 
     return reply.send({ purged: true });

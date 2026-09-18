@@ -18,7 +18,7 @@ import { OtpRepository } from '../../src/repositories/otp-repository.js';
 import { DeviceRepository } from '../../src/repositories/device-repository.js';
 import { OutboundRepository } from '../../src/repositories/outbound-repository.js';
 import { initializeDatabase } from '../../src/database/database.js';
-import { encryptPayload, decryptPayload } from '../../src/crypto/payload-crypto.js';
+import { encryptPayload } from '../../src/crypto/payload-crypto.js';
 import { expectedSignature, verifySignature } from '../../src/crypto/request-signature.js';
 import { extractOtpCandidates } from '../../src/crypto/otp-extraction.js';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -388,8 +388,12 @@ describe('Python/Node Compatibility', () => {
       // Update to DELIVERED
       outboundRepo.updateStatus('test-device', { commandId, status: 'DELIVERED' }, 1000002);
 
-      // Try to downgrade to QUEUED
-      outboundRepo.updateStatus('test-device', { commandId, status: 'QUEUED' }, 1000003);
+      // Device reports may not move commands back into server-owned states.
+      expect(() => outboundRepo.updateStatus(
+        'test-device',
+        { commandId, status: 'QUEUED' },
+        1000003,
+      )).toThrow('invalid outbound status');
 
       const secrets = new Map([['test-device', secret]]);
       const commands = outboundRepo.list(secrets, 100);

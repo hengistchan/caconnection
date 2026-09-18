@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { payloadKey, encryptPayload, decryptPayload, type Envelope } from '../../src/crypto/payload-crypto.js';
 import { expectedSignature, verifySignature, canonicalRequest } from '../../src/crypto/request-signature.js';
 import { extractOtpCandidates } from '../../src/crypto/otp-extraction.js';
-import { base64Decode, base64Encode } from '../../src/crypto/encoding.js';
+import { base64Decode } from '../../src/crypto/encoding.js';
 import { randomBytes, createHash } from 'node:crypto';
 
 describe('HKDF Key Derivation', () => {

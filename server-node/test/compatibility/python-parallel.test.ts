@@ -15,14 +15,20 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { execSync, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout } from 'node:timers/promises';
+import { createHash } from 'node:crypto';
+import { encryptPayload, type Envelope } from '../../src/crypto/payload-crypto.js';
+import { expectedSignature } from '../../src/crypto/request-signature.js';
 
 const PYTHON_SERVER = join(__dirname, '..', '..', '..', 'server', 'gateway_server.py');
 const NODE_SERVER = join(__dirname, '..', '..', 'src', 'main.ts');
+const DEVICE_ID = 'test-device';
+const API_TOKEN = 'test-api-token';
+const DEVICE_SECRET = Buffer.from('test-secret-key-at-least-32-bytes-long!');
 
 // Helper to make HTTP requests
 async function fetch(url: string, options: RequestInit = {}): Promise<Response> {
@@ -59,20 +65,20 @@ describe('P7: Parallel Acceptance Tests', () => {
     const config = {
       devices: {
         'test-device': {
-          secret_base64: Buffer.from('test-secret-key-at-least-32-bytes-long!').toString('base64'),
+          secret_base64: DEVICE_SECRET.toString('base64'),
         },
       },
       api_clients: {
         'test-client': {
-          token_sha256: require('node:crypto')
-            .createHash('sha256')
-            .update('test-api-token')
+          token_sha256: createHash('sha256')
+            .update(API_TOKEN)
             .digest('hex'),
           scopes: ['*'],
         },
       },
       server: {
         retention_days: 30,
+        pairing_public_endpoint: 'https://gateway.example.test',
       },
     };
 
@@ -116,24 +122,6 @@ describe('P7: Parallel Acceptance Tests', () => {
       throw new Error('Node server failed to start');
     }
 
-    // Create test device via Python API
-    const createRes = await fetch(`http://127.0.0.1:${pythonPort}/v1/devices`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer test-api-token',
-      },
-      body: JSON.stringify({
-        deviceId: 'test-device',
-        secretBase64: Buffer.from('test-secret-key-at-least-32-bytes-long!').toString('base64'),
-        description: 'Test device for P7',
-      }),
-    });
-
-    if (!createRes.ok) {
-      const text = await createRes.text();
-      console.error('Failed to create device:', text);
-    }
   }, 30_000);
 
   afterAll(() => {
@@ -294,6 +282,89 @@ describe('P7: Parallel Acceptance Tests', () => {
     });
   });
 
+  describe('Signed ingestion and write workflows', () => {
+    it('accepts a signed pretty-printed SMS event and matches Python reads', async () => {
+      const response = await signedNodePost('/v1/events', encryptedEvent('INCOMING_SMS', {
+        originatingAddress: '+10086',
+        body: 'ordinary compatibility message',
+        partCount: 1,
+        action: 'SMS_RECEIVED',
+      }), 'parallel-sms');
+      expect(response.status).toBe(201);
+
+      const headers = { Authorization: `Bearer ${API_TOKEN}` };
+      const [pyRes, nodeRes] = await Promise.all([
+        fetch(`http://127.0.0.1:${pythonPort}/v1/messages?deviceId=${DEVICE_ID}`, { headers }),
+        fetch(`http://127.0.0.1:${nodePort}/v1/messages?deviceId=${DEVICE_ID}`, { headers }),
+      ]);
+      expect(pyRes.status).toBe(nodeRes.status);
+      expect(await pyRes.json()).toEqual(await nodeRes.json());
+    });
+
+    it('queues, claims and completes an outbound command through real routes', async () => {
+      const createRes = await fetch(`http://127.0.0.1:${nodePort}/v1/outbound-messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${API_TOKEN}`,
+        },
+        body: JSON.stringify({
+          deviceId: DEVICE_ID,
+          slotIndex: 0,
+          recipient: '+15551234567',
+          body: 'compatibility outbound message',
+          idempotencyKey: `parallel-outbound-${Date.now()}`,
+        }),
+      });
+      expect(createRes.status).toBe(201);
+      const commandId = (await createRes.json()).outboundMessage.commandId as string;
+
+      const claimRes = await signedNodePost('/v1/device-commands/claim', { limit: 5 }, 'parallel-claim');
+      expect(claimRes.status).toBe(200);
+      const claimBody = await claimRes.json();
+      expect(claimBody.commands.some((command: { commandId: string }) => command.commandId === commandId)).toBe(true);
+
+      const statusRes = await signedNodePost('/v1/events', encryptedEvent('OUTBOUND_SMS_STATUS', {
+        commandId,
+        status: 'DELIVERED',
+        resultCode: 0,
+        errorDetail: null,
+      }), 'parallel-status');
+      expect(statusRes.status).toBe(201);
+
+      const headers = { Authorization: `Bearer ${API_TOKEN}` };
+      const [pyRes, nodeRes] = await Promise.all([
+        fetch(`http://127.0.0.1:${pythonPort}/v1/outbound-messages?deviceId=${DEVICE_ID}`, { headers }),
+        fetch(`http://127.0.0.1:${nodePort}/v1/outbound-messages?deviceId=${DEVICE_ID}`, { headers }),
+      ]);
+      expect(pyRes.status).toBe(nodeRes.status);
+      expect(await pyRes.json()).toEqual(await nodeRes.json());
+    });
+
+    it('creates and claims a pairing document using config.json settings', async () => {
+      const createRes = await fetch(`http://127.0.0.1:${nodePort}/v1/pairings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${API_TOKEN}`,
+        },
+        body: JSON.stringify({ deviceId: DEVICE_ID }),
+      });
+      expect(createRes.status).toBe(201);
+      const pairing = (await createRes.json()).pairing;
+      const document = JSON.parse(pairing.payload);
+      expect(document.endpoint).toBe('https://gateway.example.test');
+
+      const claimRes = await fetch(`http://127.0.0.1:${nodePort}/v1/pairings/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pairingToken: document.pairingToken }),
+      });
+      expect(claimRes.status).toBe(200);
+      expect((await claimRes.json()).provisioning.deviceId).toBe(DEVICE_ID);
+    });
+  });
+
   describe('Audit Endpoints', () => {
     it('should return identical audit log structure', async () => {
       const headers = { 'Authorization': 'Bearer test-api-token' };
@@ -357,3 +428,49 @@ describe('P7: Parallel Acceptance Tests', () => {
     });
   });
 });
+
+function encryptedEvent(eventType: string, payload: Record<string, unknown>) {
+  const unique = `${eventType.toLowerCase()}-${Date.now()}-${Math.random()}`;
+  const envelope: Envelope = {
+    schemaVersion: 1,
+    deliveryId: `delivery-${unique}`,
+    sourceEventId: `source-${unique}`,
+    eventType,
+    createdAt: Date.now(),
+    subscriptionId: 1,
+    slotIndex: 0,
+    payload,
+  };
+  return encryptPayload(envelope, DEVICE_ID, DEVICE_SECRET);
+}
+
+async function signedNodePost(
+  path: string,
+  value: Record<string, unknown>,
+  noncePrefix: string,
+): Promise<Response> {
+  const rawBody = JSON.stringify(value, null, 2);
+  const timestamp = Date.now();
+  const nonce = `${noncePrefix}-${timestamp}-${Math.random()}`;
+  const idempotencyKey = `idem-${nonce}`;
+  const signature = expectedSignature(
+    DEVICE_SECRET,
+    timestamp,
+    nonce,
+    DEVICE_ID,
+    idempotencyKey,
+    Buffer.from(rawBody),
+  );
+  return fetch(`http://127.0.0.1:${18788}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Gateway-Device': DEVICE_ID,
+      'X-Gateway-Timestamp': String(timestamp),
+      'X-Gateway-Nonce': nonce,
+      'X-Gateway-Signature': signature,
+      'Idempotency-Key': idempotencyKey,
+    },
+    body: rawBody,
+  });
+}

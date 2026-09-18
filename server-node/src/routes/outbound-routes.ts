@@ -5,6 +5,13 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import {
+  assertAllowedQuery,
+  InvalidQueryError,
+  parseBeforeId,
+  parseIdentifier,
+  parseLimit,
+} from '../http/query-validation.js';
 
 export async function outboundRoutes(app: FastifyInstance) {
   /**
@@ -15,25 +22,20 @@ export async function outboundRoutes(app: FastifyInstance) {
    */
   app.get('/v1/outbound-messages', async (request, reply) => {
     const clientId = app.verifyApi(request, 'messages:send');
-    const query = request.query as Record<string, string | undefined>;
-
-    const allowedKeys = new Set(['limit', 'beforeId', 'deviceId', 'groupId']);
-    for (const key of Object.keys(query)) {
-      if (!allowedKeys.has(key)) {
-        return reply.status(400).send({ error: 'invalid query' });
-      }
-    }
-
-    const limit = parseLimit(query.limit);
-    const beforeId = parseOptionalId(query.beforeId);
-    const deviceId = parseOptionalDeviceId(query.deviceId);
-    const groupId = query.groupId;
-
-    if (groupId !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(groupId)) {
-      return reply.status(400).send({ error: 'invalid groupId' });
-    }
-    if (deviceId !== undefined && groupId !== undefined) {
-      return reply.status(400).send({ error: 'conflicting device filters' });
+    const query = request.query as Record<string, unknown>;
+    let limit: number;
+    let beforeId: number | undefined;
+    let deviceId: string | undefined;
+    let groupId: string | undefined;
+    try {
+      assertAllowedQuery(query, new Set(['limit', 'beforeId', 'deviceId', 'groupId']));
+      limit = parseLimit(query.limit);
+      beforeId = parseBeforeId(query.beforeId);
+      deviceId = parseIdentifier(query.deviceId);
+      groupId = parseIdentifier(query.groupId);
+      if (deviceId !== undefined && groupId !== undefined) throw new InvalidQueryError();
+    } catch {
+      return reply.status(400).send({ error: 'invalid query' });
     }
 
     if (deviceId !== undefined && !app.verifyDeviceAccess(clientId, deviceId)) {
@@ -74,22 +76,4 @@ export async function outboundRoutes(app: FastifyInstance) {
 
     return reply.send({ outboundMessages });
   });
-}
-
-function parseLimit(value: string | undefined): number {
-  const n = parseInt(value || '50', 10);
-  return isNaN(n) ? 50 : Math.min(Math.max(n, 1), 100);
-}
-
-function parseOptionalId(value: string | undefined): number | undefined {
-  if (value === undefined) return undefined;
-  const n = parseInt(value, 10);
-  if (isNaN(n) || n < 1) throw new Error('invalid beforeId');
-  return n;
-}
-
-function parseOptionalDeviceId(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined;
-  if (!/^[A-Za-z0-9._-]{1,64}$/.test(value)) throw new Error('invalid deviceId');
-  return value;
 }

@@ -5,6 +5,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { jsonObject } from '../http/body-validation.js';
 import {
   MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS,
   MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS,
@@ -20,7 +21,8 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
    */
   app.post('/v1/outbound-messages', async (request, reply) => {
     const clientId = app.verifyApi(request, 'messages:send');
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
 
     const allowedKeys = new Set(['deviceId', 'slotIndex', 'recipient', 'body', 'expiresInSeconds', 'idempotencyKey']);
     for (const key of Object.keys(body)) {
@@ -42,7 +44,7 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
     }
 
     // Validate slotIndex
-    if (typeof slotIndex !== 'number' || (slotIndex !== 0 && slotIndex !== 1)) {
+    if (typeof slotIndex !== 'number' || !Number.isInteger(slotIndex) || (slotIndex !== 0 && slotIndex !== 1)) {
       return reply.status(400).send({ error: 'invalid slotIndex' });
     }
 
@@ -57,7 +59,7 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
     }
 
     // Validate expiresInSeconds
-    if (typeof expiresInSeconds !== 'number' || expiresInSeconds < MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS || expiresInSeconds > MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS) {
+    if (typeof expiresInSeconds !== 'number' || !Number.isInteger(expiresInSeconds) || expiresInSeconds < MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS || expiresInSeconds > MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS) {
       return reply.status(400).send({ error: 'invalid expiresInSeconds' });
     }
 

@@ -7,6 +7,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import { jsonObject } from '../http/body-validation.js';
 
 export async function groupCommandRoutes(app: FastifyInstance) {
   /**
@@ -22,7 +23,8 @@ export async function groupCommandRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'global device access required' });
     }
 
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
     const allowedKeys = new Set(['groupId', 'name', 'deviceIds']);
     if (new Set(Object.keys(body)).size !== allowedKeys.size || !Object.keys(body).every(k => allowedKeys.has(k))) {
       return reply.status(400).send({ error: 'invalid request fields' });
@@ -75,7 +77,8 @@ export async function groupCommandRoutes(app: FastifyInstance) {
       return reply.status(403).send({ error: 'global device access required' });
     }
 
-    const body = request.body as Record<string, unknown>;
+    const body = jsonObject(request.body);
+    if (!body) return reply.status(400).send({ error: 'invalid request' });
     const allowedKeys = new Set(['name', 'deviceIds']);
     for (const key of Object.keys(body)) {
       if (!allowedKeys.has(key)) {

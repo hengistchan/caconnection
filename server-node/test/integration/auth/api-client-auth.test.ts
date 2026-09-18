@@ -13,7 +13,7 @@ import {
   getClientDeviceSecrets,
   type ApiClient,
 } from '../../../src/auth/api-client-auth.js';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 function createTokenHash(token: string): string {
   return createHash('sha256').update(token, 'utf-8').digest('hex');

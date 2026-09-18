@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { base64Decode, base64Encode } from '../../src/crypto/encoding.js';
+import { base64Decode } from '../../src/crypto/encoding.js';
 import { payloadKey, encryptPayload, decryptPayload } from '../../src/crypto/payload-crypto.js';
 import { expectedSignature, canonicalRequest } from '../../src/crypto/request-signature.js';
 import { extractOtpCandidates } from '../../src/crypto/otp-extraction.js';
