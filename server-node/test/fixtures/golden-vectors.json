@@ -1,0 +1,239 @@
+{
+  "secrets": {
+    "device-a": "HUC+Dj0Cec6Rg2PuJ1UjioCC2MfsFrDglS3IpPBoN3Y=",
+    "device-b": "EF/II7q2wAsBqGtqQWGKiEeaV+Ft8B6MEr1AHayOg3A="
+  },
+  "hkdf": [
+    {
+      "secretBase64": "HUC+Dj0Cec6Rg2PuJ1UjioCC2MfsFrDglS3IpPBoN3Y=",
+      "deviceId": "device-a",
+      "derivedKeyBase64": "3GtRsG4k3j7ehwJ6KftYBWD5k3j3V02oMDAcYNwobcY="
+    },
+    {
+      "secretBase64": "EF/II7q2wAsBqGtqQWGKiEeaV+Ft8B6MEr1AHayOg3A=",
+      "deviceId": "device-b",
+      "derivedKeyBase64": "Pq3NhE9Pa97n/gwlnZJjhTWPnytwogbqdyf1klQErF4="
+    }
+  ],
+  "encryption": [
+    {
+      "deviceId": "device-a",
+      "secretBase64": "HUC+Dj0Cec6Rg2PuJ1UjioCC2MfsFrDglS3IpPBoN3Y=",
+      "plaintextEnvelope": {
+        "schemaVersion": 1,
+        "deliveryId": "delivery-0",
+        "sourceEventId": "source-0",
+        "eventType": "INCOMING_SMS",
+        "createdAt": 1700000000000,
+        "subscriptionId": 0,
+        "slotIndex": 0,
+        "payload": {
+          "originatingAddress": "+1234567890",
+          "body": "Your OTP is 123456",
+          "partCount": 1
+        }
+      },
+      "encryptedEnvelope": {
+        "schemaVersion": 2,
+        "deliveryId": "delivery-0",
+        "sourceEventId": "source-0",
+        "eventType": "INCOMING_SMS",
+        "createdAt": 1700000000000,
+        "subscriptionId": 0,
+        "slotIndex": 0,
+        "payload": {
+          "algorithm": "AES-256-GCM",
+          "nonceBase64": "SsXRUKKtzd6CE7iy",
+          "ciphertextBase64": "0wVqbdDSAsdUhegiLKlxOYDRkxhmQl81f7I1af1GjmI7V1H28gHIyLsG4cPv7Hed5QqRCnLn4dLUABC/qCqeh/pvsYSJZezK5EhKf/YRUp6Ycykk7Q3sTDI/VUU7YQ=="
+        }
+      },
+      "decryptedPayload": {
+        "originatingAddress": "+1234567890",
+        "body": "Your OTP is 123456",
+        "partCount": 1
+      }
+    },
+    {
+      "deviceId": "device-a",
+      "secretBase64": "HUC+Dj0Cec6Rg2PuJ1UjioCC2MfsFrDglS3IpPBoN3Y=",
+      "plaintextEnvelope": {
+        "schemaVersion": 1,
+        "deliveryId": "delivery-1",
+        "sourceEventId": "source-1",
+        "eventType": "NOTIFICATION",
+        "createdAt": 1700000001000,
+        "subscriptionId": 1,
+        "slotIndex": 1,
+        "payload": {
+          "eventType": "POSTED",
+          "sourcePackage": "com.example.app",
+          "title": "Test Notification",
+          "body": "Hello World"
+        }
+      },
+      "encryptedEnvelope": {
+        "schemaVersion": 2,
+        "deliveryId": "delivery-1",
+        "sourceEventId": "source-1",
+        "eventType": "NOTIFICATION",
+        "createdAt": 1700000001000,
+        "subscriptionId": 1,
+        "slotIndex": 1,
+        "payload": {
+          "algorithm": "AES-256-GCM",
+          "nonceBase64": "Vhg6yjYwwss4UeNI",
+          "ciphertextBase64": "jChDihFbbke9raUsCU0ZSjrqt5n7TX7453WQYfLeEaa+BNOIv7OXnZV6mKVmxFrWQuUadn540ti42wPHM1tnmPK35EcI2FHsyTGbL2cGydio8povqpy8Gt1ruOJJok6HWxT9jE6tJsqpf3rDYwtoDGLPvm4y6HwnQw=="
+        }
+      },
+      "decryptedPayload": {
+        "eventType": "POSTED",
+        "sourcePackage": "com.example.app",
+        "title": "Test Notification",
+        "body": "Hello World"
+      }
+    },
+    {
+      "deviceId": "device-b",
+      "secretBase64": "EF/II7q2wAsBqGtqQWGKiEeaV+Ft8B6MEr1AHayOg3A=",
+      "plaintextEnvelope": {
+        "schemaVersion": 1,
+        "deliveryId": "delivery-0",
+        "sourceEventId": "source-0",
+        "eventType": "INCOMING_SMS",
+        "createdAt": 1700000000000,
+        "subscriptionId": 0,
+        "slotIndex": 0,
+        "payload": {
+          "originatingAddress": "+1234567890",
+          "body": "Your OTP is 123456",
+          "partCount": 1
+        }
+      },
+      "encryptedEnvelope": {
+        "schemaVersion": 2,
+        "deliveryId": "delivery-0",
+        "sourceEventId": "source-0",
+        "eventType": "INCOMING_SMS",
+        "createdAt": 1700000000000,
+        "subscriptionId": 0,
+        "slotIndex": 0,
+        "payload": {
+          "algorithm": "AES-256-GCM",
+          "nonceBase64": "4D/3dMYzq37DoF+G",
+          "ciphertextBase64": "fB+m0gpnwg9HO0mVkHZp2nJbEbnFUOWltO9oaH6tDJoSH+pdlMuGq8HyqgEvKWF6bu3cu1WqSJLuZfSQTnJpBEaJveUsRpzGzRrCE/vCW8iNx1YfFT2TJXL9UvTF9g=="
+        }
+      },
+      "decryptedPayload": {
+        "originatingAddress": "+1234567890",
+        "body": "Your OTP is 123456",
+        "partCount": 1
+      }
+    },
+    {
+      "deviceId": "device-b",
+      "secretBase64": "EF/II7q2wAsBqGtqQWGKiEeaV+Ft8B6MEr1AHayOg3A=",
+      "plaintextEnvelope": {
+        "schemaVersion": 1,
+        "deliveryId": "delivery-1",
+        "sourceEventId": "source-1",
+        "eventType": "NOTIFICATION",
+        "createdAt": 1700000001000,
+        "subscriptionId": 1,
+        "slotIndex": 1,
+        "payload": {
+          "eventType": "POSTED",
+          "sourcePackage": "com.example.app",
+          "title": "Test Notification",
+          "body": "Hello World"
+        }
+      },
+      "encryptedEnvelope": {
+        "schemaVersion": 2,
+        "deliveryId": "delivery-1",
+        "sourceEventId": "source-1",
+        "eventType": "NOTIFICATION",
+        "createdAt": 1700000001000,
+        "subscriptionId": 1,
+        "slotIndex": 1,
+        "payload": {
+          "algorithm": "AES-256-GCM",
+          "nonceBase64": "lFCpu1EYqsSQAG18",
+          "ciphertextBase64": "v4sllqZqKeMwuBaOoqMHrTIc89GEuOShjLGvz3Y/tkVqesOjo03EngUt+hO7vXEMhPQLY8bpYK2es3E6IUqgH3KZFhxoET+mn6fe3yyytI9BFvppKYxgDPJx0GVZUuT+q7NgNpVQNAMdxVjI2tNBi2w0/reXPy7vyQ=="
+        }
+      },
+      "decryptedPayload": {
+        "eventType": "POSTED",
+        "sourcePackage": "com.example.app",
+        "title": "Test Notification",
+        "body": "Hello World"
+      }
+    }
+  ],
+  "signatures": [
+    {
+      "secretBase64": "HUC+Dj0Cec6Rg2PuJ1UjioCC2MfsFrDglS3IpPBoN3Y=",
+      "timestampMs": 1700000000000,
+      "nonce": "test-nonce-abc123",
+      "deviceId": "device-a",
+      "idempotencyKey": "test-key-xyz789",
+      "bodyBase64": "eyJ0ZXN0IjoiZGF0YSJ9",
+      "canonicalRequest": "1700000000000\ntest-nonce-abc123\ndevice-a\ntest-key-xyz789\ne1d7c49f3a04e1ec1a5b150ec68041c903cd75fda52aa1239fd586439ef1154b",
+      "signature": "nUvYqnzux+eyLz60ycwewjds7HbKr78jpbaGbph38KU="
+    },
+    {
+      "secretBase64": "EF/II7q2wAsBqGtqQWGKiEeaV+Ft8B6MEr1AHayOg3A=",
+      "timestampMs": 1700000000000,
+      "nonce": "test-nonce-abc123",
+      "deviceId": "device-b",
+      "idempotencyKey": "test-key-xyz789",
+      "bodyBase64": "eyJ0ZXN0IjoiZGF0YSJ9",
+      "canonicalRequest": "1700000000000\ntest-nonce-abc123\ndevice-b\ntest-key-xyz789\ne1d7c49f3a04e1ec1a5b150ec68041c903cd75fda52aa1239fd586439ef1154b",
+      "signature": "wY/yBszStiTPGa8ADa3C07rQju1jEjRDgg7TD+3PWKg="
+    }
+  ],
+  "otp": [
+    {
+      "body": "Your verification code is 123456",
+      "expected": [
+        "123456"
+      ]
+    },
+    {
+      "body": "OTP: 1234",
+      "expected": [
+        "1234"
+      ]
+    },
+    {
+      "body": "验证码是888888",
+      "expected": [
+        "888888"
+      ]
+    },
+    {
+      "body": "111111.\nverification code 222222",
+      "expected": [
+        "222222",
+        "111111"
+      ]
+    },
+    {
+      "body": "No OTP here",
+      "expected": []
+    },
+    {
+      "body": "123",
+      "expected": []
+    },
+    {
+      "body": "123456789",
+      "expected": []
+    },
+    {
+      "body": "Code 123456 and 123456",
+      "expected": [
+        "123456"
+      ]
+    }
+  ]
+}

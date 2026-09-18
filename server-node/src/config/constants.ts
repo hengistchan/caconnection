@@ -1,0 +1,94 @@
+// Service version — must match Python gateway during migration
+export const SERVICE_VERSION = '0.5.0';
+
+// API and protocol versions — must remain identical to Python
+export const API_VERSION = 1;
+export const PROTOCOL_SCHEMA_VERSION = 2;
+
+// Body and header limits
+export const MAX_BODY_BYTES = 1_048_576;
+export const MAX_CLOCK_SKEW_MS = 300_000;
+export const NONCE_RETENTION_MS = 600_000;
+
+// Defaults
+export const DEFAULT_RETENTION_DAYS = 30;
+export const DEFAULT_OTP_MAX_AGE_SECONDS = 600;
+export const DEFAULT_INGEST_REQUESTS_PER_MINUTE = 120;
+export const DEFAULT_DEVICE_REQUESTS_PER_MINUTE = 120;
+export const DEFAULT_API_AUTH_REQUESTS_PER_MINUTE = 120;
+export const DEFAULT_API_REQUESTS_PER_MINUTE = 60;
+export const DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE = 20;
+export const DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE = 20;
+export const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
+export const DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300;
+
+// Device health windows
+export const DEVICE_ONLINE_WINDOW_MS = 3 * 60 * 1000;
+export const DEVICE_STALE_WINDOW_MS = 15 * 60 * 1000;
+
+// Outbound
+export const MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS = 60;
+export const MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS = 3600;
+export const OUTBOUND_COMMAND_LEASE_MS = 5 * 60 * 1000;
+
+// Pairing
+export const MIN_PAIRING_EXPIRES_SECONDS = 60;
+export const MAX_PAIRING_EXPIRES_SECONDS = 600;
+
+// Rate limiting
+export const MAX_RATE_LIMIT_IDENTITIES = 10_000;
+
+// Allowed event types — must match Python exactly
+export const ALLOWED_EVENT_TYPES = new Set([
+  'INCOMING_SMS',
+  'NOTIFICATION',
+  'CALL_STATE',
+  'CALL_IDENTITY',
+  'OUTBOUND_SMS_STATUS',
+  'DEVICE_STATE',
+  'LOCAL_SELF_TEST',
+]);
+
+// Outbound command statuses
+export const OUTBOUND_COMMAND_STATUSES = new Set([
+  'QUEUED',
+  'CLAIMED',
+  'CREATED',
+  'DISPATCHING',
+  'SENT_TO_MODEM',
+  'DELIVERED',
+  'FAILED',
+  'EXPIRED',
+]);
+
+// Status ordering for monotonic updates
+export const OUTBOUND_STATUS_ORDER: Record<string, number> = {
+  QUEUED: 0,
+  CLAIMED: 1,
+  CREATED: 2,
+  DISPATCHING: 3,
+  SENT_TO_MODEM: 4,
+  DELIVERED: 5,
+  FAILED: 5,
+  EXPIRED: 5,
+};
+
+// Valid API scopes
+export const VALID_SCOPES = new Set([
+  'messages:read',
+  'messages:send',
+  'otp:claim',
+  'pairing:create',
+  '*',
+]);
+
+// Receiver diagnostic values
+export const RECEIVER_INVOKED_ACTIONS = new Set(['SMS_RECEIVED', 'SMS_DELIVER']);
+export const RECEIVER_PARSE_FAILURE_REASONS = new Set([
+  'NO_MESSAGES',
+  'PARSER_EXCEPTION',
+  'PROCESSING_EXCEPTION',
+]);
+
+// Receive modes
+export const RECEIVE_MODES = new Set(['OBSERVER', 'DEFAULT_SMS']);
