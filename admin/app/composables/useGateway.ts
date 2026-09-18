@@ -135,6 +135,14 @@ export interface GatewayAuditEntry {
   metadata: Record<string, unknown>
 }
 
+export interface GatewayDeviceGroup {
+  groupId: string
+  name: string
+  deviceIds: string[]
+  createdAt: number
+  updatedAt: number
+}
+
 export function useGateway() {
   const { csrfToken } = useAuth()
   const status = useState<GatewayStatus | null>('gateway-status', () => null)
@@ -223,6 +231,7 @@ export function useGateway() {
     beforeId?: number | null
     append?: boolean
     deviceId?: string
+    groupId?: string
   } = {}): Promise<boolean> {
     messageLoading.value = true
 
@@ -238,6 +247,7 @@ export function useGateway() {
         params.set('beforeId', options.beforeId.toString())
       }
       if (options.deviceId) params.set('deviceId', options.deviceId)
+      if (options.groupId) params.set('groupId', options.groupId)
 
       const query = params.toString()
       const url = `/admin/api/gateway/messages${query ? `?${query}` : ''}`
@@ -274,6 +284,7 @@ export function useGateway() {
     beforeId?: number | null
     append?: boolean
     deviceId?: string
+    groupId?: string
   } = {}): Promise<boolean> {
     notificationLoading.value = true
 
@@ -286,6 +297,7 @@ export function useGateway() {
         params.set('beforeId', options.beforeId.toString())
       }
       if (options.deviceId) params.set('deviceId', options.deviceId)
+      if (options.groupId) params.set('groupId', options.groupId)
       const query = params.toString()
       const url = `/admin/api/gateway/notifications${query ? `?${query}` : ''}`
       const data = await $fetch<{ notifications: GatewayNotification[] }>(url, {
@@ -325,6 +337,7 @@ export function useGateway() {
     limit?: number
     beforeId?: number | null
     deviceId?: string
+    groupId?: string
     append?: boolean
   } = {}): Promise<boolean> {
     outboundLoading.value = true
@@ -335,6 +348,7 @@ export function useGateway() {
         params.set('beforeId', options.beforeId.toString())
       }
       if (options.deviceId) params.set('deviceId', options.deviceId)
+      if (options.groupId) params.set('groupId', options.groupId)
       const query = params.toString()
       const data = await $fetch<{ outboundMessages: GatewayOutboundMessage[] }>(
         `/admin/api/gateway/outbound-messages${query ? `?${query}` : ''}`,
@@ -545,6 +559,59 @@ export function useGateway() {
     return data.entries
   }
 
+  async function fetchDeviceGroups(): Promise<GatewayDeviceGroup[]> {
+    const data = await $fetch<{ groups: GatewayDeviceGroup[] }>(
+      '/admin/api/gateway/device-groups',
+      { credentials: 'include' },
+    )
+    return data.groups
+  }
+
+  async function createDeviceGroup(options: {
+    groupId: string
+    name: string
+    deviceIds: string[]
+  }): Promise<void> {
+    await $fetch('/admin/api/gateway/device-groups', {
+      method: 'POST',
+      body: options,
+      headers: csrfToken.value
+        ? { 'X-CSRF-Token': csrfToken.value }
+        : undefined,
+      credentials: 'include',
+    })
+  }
+
+  async function updateDeviceGroup(
+    groupId: string,
+    options: { name?: string; deviceIds?: string[] },
+  ): Promise<void> {
+    await $fetch(
+      `/admin/api/gateway/device-groups/${encodeURIComponent(groupId)}`,
+      {
+        method: 'PUT',
+        body: options,
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+  }
+
+  async function removeDeviceGroup(groupId: string): Promise<void> {
+    await $fetch(
+      `/admin/api/gateway/device-groups/${encodeURIComponent(groupId)}`,
+      {
+        method: 'DELETE',
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+  }
+
   /**
    * Calculate message counts by SIM slot
    */
@@ -605,5 +672,9 @@ export function useGateway() {
     restoreDevice,
     purgeDevice,
     fetchAuditLog,
+    fetchDeviceGroups,
+    createDeviceGroup,
+    updateDeviceGroup,
+    removeDeviceGroup,
   }
 }

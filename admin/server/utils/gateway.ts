@@ -281,6 +281,14 @@ export interface GatewayAuditEntry {
   metadata: Record<string, unknown>
 }
 
+export interface GatewayDeviceGroup {
+  groupId: string
+  name: string
+  deviceIds: string[]
+  createdAt: number
+  updatedAt: number
+}
+
 export interface GatewayPairingResponse {
   pairing: {
     deviceId: string
@@ -533,6 +541,7 @@ export async function getGatewayMessages(options: {
   afterId?: number | null
   beforeId?: number | null
   deviceId?: string
+  groupId?: string
 } = {}): Promise<GatewayMessagesResponse> {
   const params = new URLSearchParams()
   if (options.limit) params.set('limit', options.limit.toString())
@@ -546,6 +555,7 @@ export async function getGatewayMessages(options: {
     params.set('beforeId', options.beforeId.toString())
   }
   if (options.deviceId) params.set('deviceId', options.deviceId)
+  if (options.groupId) params.set('groupId', options.groupId)
   const query = params.toString()
   return parseMessagesResponse(
     await gatewayFetch(`/v1/messages${query ? `?${query}` : ''}`),
@@ -557,6 +567,7 @@ export async function getGatewayNotifications(options: {
   afterId?: number | null
   beforeId?: number | null
   deviceId?: string
+  groupId?: string
 } = {}): Promise<GatewayNotificationsResponse> {
   const params = new URLSearchParams()
   if (options.limit) params.set('limit', options.limit.toString())
@@ -567,6 +578,7 @@ export async function getGatewayNotifications(options: {
     params.set('beforeId', options.beforeId.toString())
   }
   if (options.deviceId) params.set('deviceId', options.deviceId)
+  if (options.groupId) params.set('groupId', options.groupId)
   const query = params.toString()
   return parseNotificationsResponse(
     await gatewayFetch(`/v1/notifications${query ? `?${query}` : ''}`),
@@ -577,6 +589,7 @@ export async function getGatewayOutboundMessages(options: {
   limit?: number
   beforeId?: number | null
   deviceId?: string
+  groupId?: string
 } = {}): Promise<GatewayOutboundMessagesResponse> {
   const params = new URLSearchParams()
   if (options.limit) params.set('limit', options.limit.toString())
@@ -584,6 +597,7 @@ export async function getGatewayOutboundMessages(options: {
     params.set('beforeId', options.beforeId.toString())
   }
   if (options.deviceId) params.set('deviceId', options.deviceId)
+  if (options.groupId) params.set('groupId', options.groupId)
   const query = params.toString()
   return parseOutboundMessagesResponse(
     await gatewayFetch(`/v1/outbound-messages${query ? `?${query}` : ''}`),
@@ -746,4 +760,70 @@ export async function getGatewayAuditLog(): Promise<{
     return entry as unknown as GatewayAuditEntry
   })
   return { entries }
+}
+
+function parseDeviceGroup(value: unknown): GatewayDeviceGroup {
+  if (
+    !isRecord(value)
+    || typeof value.groupId !== 'string'
+    || !/^[A-Za-z0-9._-]{1,64}$/.test(value.groupId)
+    || typeof value.name !== 'string'
+    || value.name.length < 1
+    || value.name.length > 128
+    || !Array.isArray(value.deviceIds)
+    || !value.deviceIds.every(deviceId =>
+      typeof deviceId === 'string'
+      && /^[A-Za-z0-9._-]{1,64}$/.test(deviceId))
+    || new Set(value.deviceIds).size !== value.deviceIds.length
+    || !Number.isSafeInteger(value.createdAt)
+    || (value.createdAt as number) < 0
+    || !Number.isSafeInteger(value.updatedAt)
+    || (value.updatedAt as number) < 0
+  ) return invalidGatewayResponse()
+  return value as unknown as GatewayDeviceGroup
+}
+
+export async function getGatewayDeviceGroups(): Promise<{
+  groups: GatewayDeviceGroup[]
+}> {
+  const value = await gatewayFetch('/v1/device-groups')
+  if (!isRecord(value) || !Array.isArray(value.groups)) {
+    return invalidGatewayResponse()
+  }
+  return { groups: value.groups.map(parseDeviceGroup) }
+}
+
+export async function createGatewayDeviceGroup(options: {
+  groupId: string
+  name: string
+  deviceIds: string[]
+}): Promise<{ group: GatewayDeviceGroup }> {
+  const value = await gatewayFetch('/v1/device-groups', {
+    method: 'POST',
+    body: options,
+  })
+  if (!isRecord(value) || !isRecord(value.group)) {
+    return invalidGatewayResponse()
+  }
+  return { group: parseDeviceGroup(value.group) }
+}
+
+export async function updateGatewayDeviceGroup(
+  groupId: string,
+  options: { name?: string; deviceIds?: string[] },
+): Promise<{ group: GatewayDeviceGroup }> {
+  const value = await gatewayFetch(
+    `/v1/device-groups/${encodeURIComponent(groupId)}`,
+    { method: 'PUT', body: options },
+  )
+  if (!isRecord(value) || !isRecord(value.group)) {
+    return invalidGatewayResponse()
+  }
+  return { group: parseDeviceGroup(value.group) }
+}
+
+export async function deleteGatewayDeviceGroup(groupId: string): Promise<void> {
+  await gatewayFetch(`/v1/device-groups/${encodeURIComponent(groupId)}`, {
+    method: 'DELETE',
+  })
 }

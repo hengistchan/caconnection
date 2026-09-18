@@ -87,6 +87,66 @@ describe('useGateway content loading', () => {
     expect(fetchMock.mock.calls[1][0]).toContain('beforeId=2')
   })
 
+  it('forwards group filters without inventing a device filter', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/notifications')) return { notifications: [] }
+      if (url.includes('/outbound-messages')) return { outboundMessages: [] }
+      return { messages: [] }
+    })
+    vi.stubGlobal('$fetch', fetchMock)
+
+    const gateway = useGateway()
+    await gateway.fetchMessages({ limit: 50, groupId: 'primary' })
+    await gateway.fetchNotifications({ limit: 50, groupId: 'primary' })
+    await gateway.fetchOutboundMessages({ limit: 50, groupId: 'primary' })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/admin/api/gateway/messages?limit=50&groupId=primary',
+    )
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      '/admin/api/gateway/notifications?limit=50&groupId=primary',
+    )
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      '/admin/api/gateway/outbound-messages?limit=50&groupId=primary',
+    )
+  })
+
+  it('protects Gateway group mutations with CSRF', async () => {
+    const group = {
+      groupId: 'primary',
+      name: 'Primary',
+      deviceIds: ['phone-1'],
+      createdAt: 100,
+      updatedAt: 100,
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ groups: [group] })
+      .mockResolvedValueOnce({ group })
+      .mockResolvedValueOnce({ group: { ...group, name: 'Updated' } })
+      .mockResolvedValueOnce({ deleted: true })
+    vi.stubGlobal('$fetch', fetchMock)
+
+    const gateway = useGateway()
+    await expect(gateway.fetchDeviceGroups()).resolves.toEqual([group])
+    await gateway.createDeviceGroup({
+      groupId: 'primary',
+      name: 'Primary',
+      deviceIds: ['phone-1'],
+    })
+    await gateway.updateDeviceGroup('primary', { name: 'Updated' })
+    await gateway.removeDeviceGroup('primary')
+
+    expect(fetchMock.mock.calls[0][1]).toEqual({ credentials: 'include' })
+    for (const callIndex of [1, 2, 3]) {
+      expect(fetchMock.mock.calls[callIndex][1]).toEqual(
+        expect.objectContaining({
+          credentials: 'include',
+          headers: { 'X-CSRF-Token': 'csrf-token' },
+        }),
+      )
+    }
+  })
+
   it('sends outbound messages with CSRF protection and default expiry', async () => {
     const outboundMessage = {
       id: 1,

@@ -289,5 +289,27 @@
       "NEVER": "Never connected",
       "RETIRED": "Retired"
     }
+  },
+  "groups": {
+    "prefix": "Group",
+    "title": "Gateway groups",
+    "description": "Groups are for organization and filtering only; they never reroute SMS commands.",
+    "groupId": "Group ID",
+    "name": "Name",
+    "members": "Member devices",
+    "create": "Create group",
+    "creating": "Creating...",
+    "saving": "Saving...",
+    "edit": "Edit",
+    "delete": "Delete",
+    "empty": "No Gateway groups yet.",
+    "noMembers": "No members",
+    "noDevices": "No Gateway devices are available.",
+    "createSuccess": "Group created",
+    "updateSuccess": "Group updated",
+    "deleteSuccess": "Group deleted",
+    "saveError": "Unable to save group",
+    "deleteError": "Unable to delete group",
+    "deleteConfirm": "Delete group {name}? Its devices will not be deleted."
   }
 }

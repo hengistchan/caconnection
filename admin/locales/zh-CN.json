@@ -289,5 +289,27 @@
       "NEVER": "从未连接",
       "RETIRED": "已退役"
     }
+  },
+  "groups": {
+    "prefix": "分组",
+    "title": "Gateway 分组",
+    "description": "分组仅用于查看和筛选，不会自动改投短信发送任务。",
+    "groupId": "分组 ID",
+    "name": "名称",
+    "members": "成员设备",
+    "create": "创建分组",
+    "creating": "正在创建...",
+    "saving": "正在保存...",
+    "edit": "编辑",
+    "delete": "删除",
+    "empty": "暂未创建 Gateway 分组。",
+    "noMembers": "暂无成员",
+    "noDevices": "暂无可选 Gateway 设备。",
+    "createSuccess": "分组已创建",
+    "updateSuccess": "分组已更新",
+    "deleteSuccess": "分组已删除",
+    "saveError": "无法保存分组",
+    "deleteError": "无法删除分组",
+    "deleteConfirm": "确定删除分组 {name} 吗？设备本身不会被删除。"
   }
 }

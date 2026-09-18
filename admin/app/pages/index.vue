@@ -50,6 +50,13 @@
               >
                 {{ device.deviceId }} · {{ t(`fleet.health.${device.health}`) }}
               </option>
+              <option
+                v-for="group in deviceGroups"
+                :key="`group-${group.groupId}`"
+                :value="`group:${group.groupId}`"
+              >
+                {{ t('groups.prefix') }}: {{ group.name }}
+              </option>
             </select>
           </label>
           <span class="section-subtitle">{{ t('fleet.contextHelp') }}</span>
@@ -229,7 +236,11 @@
               </div>
 
               <label
-                v-if="contentFilter !== 'notifications' && selectedDeviceId !== 'all'"
+                v-if="
+                  contentFilter !== 'notifications'
+                  && selectedDeviceId !== 'all'
+                  && !selectedDeviceId.startsWith('group:')
+                "
                 class="filter-field"
               >
                 <span>{{ t('messages.filter.sim') }}</span>
@@ -706,6 +717,170 @@
 
           <div class="section-header outbound-history-heading">
             <div>
+              <h3>{{ t('groups.title') }}</h3>
+              <p class="section-subtitle">{{ t('groups.description') }}</p>
+            </div>
+          </div>
+          <form class="card device-form" @submit.prevent="handleCreateGroup">
+            <div class="form-grid">
+              <label class="form-field">
+                <span>{{ t('groups.groupId') }}</span>
+                <input
+                  v-model.trim="newGroupId"
+                  class="form-input"
+                  maxlength="64"
+                  pattern="[A-Za-z0-9._-]{1,64}"
+                  autocomplete="off"
+                  :disabled="groupMutationLoading !== null"
+                  required
+                >
+              </label>
+              <label class="form-field">
+                <span>{{ t('groups.name') }}</span>
+                <input
+                  v-model.trim="newGroupName"
+                  class="form-input"
+                  maxlength="128"
+                  autocomplete="off"
+                  :disabled="groupMutationLoading !== null"
+                  required
+                >
+              </label>
+              <fieldset class="form-field form-field-wide group-members-field">
+                <legend>{{ t('groups.members') }}</legend>
+                <div v-if="deviceDetails.length" class="group-member-grid">
+                  <label
+                    v-for="device in deviceDetails"
+                    :key="device.deviceId"
+                    class="group-member-option"
+                  >
+                    <input
+                      v-model="newGroupDeviceIds"
+                      type="checkbox"
+                      :value="device.deviceId"
+                      :disabled="groupMutationLoading !== null"
+                    >
+                    <span>
+                      <strong>{{ device.deviceId }}</strong>
+                      <small>{{ t(`fleet.health.${device.health}`) }}</small>
+                    </span>
+                  </label>
+                </div>
+                <span v-else class="device-meta">{{ t('groups.noDevices') }}</span>
+              </fieldset>
+            </div>
+            <button
+              class="btn btn-primary"
+              type="submit"
+              :disabled="!canCreateGroup || groupMutationLoading !== null"
+            >
+              <span
+                v-if="groupMutationLoading === 'create'"
+                class="spinner"
+                aria-hidden="true"
+              />
+              {{ groupMutationLoading === 'create'
+                ? t('groups.creating')
+                : t('groups.create') }}
+            </button>
+          </form>
+          <div v-if="deviceGroups.length" class="device-list">
+            <article v-for="group in deviceGroups" :key="group.groupId" class="card device-item">
+              <div class="device-row">
+                <div class="device-info">
+                  <strong>{{ group.name }}</strong>
+                  <span class="device-meta">{{ group.groupId }}</span>
+                  <span class="device-meta">
+                    {{ group.deviceIds.join(', ') || t('groups.noMembers') }}
+                  </span>
+                </div>
+                <div class="device-actions">
+                  <button
+                    class="btn btn-secondary btn-sm"
+                    :disabled="groupMutationLoading !== null"
+                    @click="startEditGroup(group)"
+                  >
+                    {{ t('groups.edit') }}
+                  </button>
+                  <button
+                    class="btn btn-danger btn-sm"
+                    :disabled="groupMutationLoading !== null"
+                    @click="handleDeleteGroup(group)"
+                  >
+                    {{ t('groups.delete') }}
+                  </button>
+                </div>
+              </div>
+              <form
+                v-if="editingGroupId === group.groupId"
+                class="device-edit-form"
+                @submit.prevent="handleUpdateGroup(group)"
+              >
+                <label class="form-field">
+                  <span>{{ t('groups.name') }}</span>
+                  <input
+                    v-model.trim="editGroupName"
+                    class="form-input"
+                    maxlength="128"
+                    :disabled="groupMutationLoading !== null"
+                    required
+                  >
+                </label>
+                <fieldset class="form-field form-field-wide group-members-field">
+                  <legend>{{ t('groups.members') }}</legend>
+                  <div v-if="deviceDetails.length" class="group-member-grid">
+                    <label
+                      v-for="device in deviceDetails"
+                      :key="device.deviceId"
+                      class="group-member-option"
+                    >
+                      <input
+                        v-model="editGroupDeviceIds"
+                        type="checkbox"
+                        :value="device.deviceId"
+                        :disabled="groupMutationLoading !== null"
+                      >
+                      <span>
+                        <strong>{{ device.deviceId }}</strong>
+                        <small>{{ t(`fleet.health.${device.health}`) }}</small>
+                      </span>
+                    </label>
+                  </div>
+                  <span v-else class="device-meta">{{ t('groups.noDevices') }}</span>
+                </fieldset>
+                <div class="form-actions">
+                  <button
+                    class="btn btn-primary btn-sm"
+                    :disabled="!editGroupName || groupMutationLoading !== null"
+                  >
+                    <span
+                      v-if="groupMutationLoading === group.groupId"
+                      class="spinner"
+                      aria-hidden="true"
+                    />
+                    {{ groupMutationLoading === group.groupId
+                      ? t('groups.saving')
+                      : t('common.save') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="groupMutationLoading !== null"
+                    @click="cancelEditGroup"
+                  >
+                    {{ t('common.cancel') }}
+                  </button>
+                </div>
+              </form>
+            </article>
+          </div>
+          <div v-else class="empty-state card">
+            <div class="empty-state-icon" aria-hidden="true">—</div>
+            <p>{{ t('groups.empty') }}</p>
+          </div>
+
+          <div class="section-header outbound-history-heading">
+            <div>
               <h3>{{ t('devices.auditTitle') }}</h3>
               <p class="section-subtitle">{{ t('devices.auditDescription') }}</p>
             </div>
@@ -763,6 +938,7 @@
 import QRCode from 'qrcode'
 import type {
   GatewayAuditEntry,
+  GatewayDeviceGroup,
   GatewayDeviceDetail,
   GatewayMessage,
   GatewayNotification,
@@ -776,6 +952,7 @@ import type { SecretValidation } from '~/utils/deviceSecret'
 type AdminTab = 'dashboard' | 'messages' | 'outbound' | 'devices'
 type ContentFilter = 'all' | 'sms' | 'notifications'
 type DateRange = 'all' | 'today' | '7d' | '30d'
+type GatewayFilter = { deviceId?: string; groupId?: string }
 type TimelineItem =
   | { kind: 'sms'; key: string; receivedAt: number; message: GatewayMessage }
   | { kind: 'notification'; key: string; receivedAt: number; notification: GatewayNotification }
@@ -816,6 +993,10 @@ const {
   restoreDevice,
   purgeDevice,
   fetchAuditLog,
+  fetchDeviceGroups,
+  createDeviceGroup,
+  updateDeviceGroup,
+  removeDeviceGroup,
   createPairing,
 } = useGateway()
 
@@ -849,12 +1030,30 @@ const dateRange = ref<DateRange>(
     ? route.query.range as DateRange
     : 'all',
 )
-const selectedDeviceId = ref(
-  typeof route.query.device === 'string' ? route.query.device : 'all',
-)
+
+function gatewayContextFromRoute(): string {
+  const groupId = typeof route.query.group === 'string'
+    ? route.query.group
+    : ''
+  if (/^[A-Za-z0-9._-]{1,64}$/.test(groupId)) return `group:${groupId}`
+  const deviceId = typeof route.query.device === 'string'
+    ? route.query.device
+    : ''
+  return /^[A-Za-z0-9._-]{1,64}$/.test(deviceId) ? deviceId : 'all'
+}
+
+const selectedDeviceId = ref(gatewayContextFromRoute())
 
 const deviceDetails = ref<GatewayDeviceDetail[]>([])
 const auditEntries = ref<GatewayAuditEntry[]>([])
+const deviceGroups = ref<GatewayDeviceGroup[]>([])
+const newGroupId = ref('')
+const newGroupName = ref('')
+const newGroupDeviceIds = ref<string[]>([])
+const editingGroupId = ref<string | null>(null)
+const editGroupName = ref('')
+const editGroupDeviceIds = ref<string[]>([])
+const groupMutationLoading = ref<string | null>(null)
 const deviceLoading = ref(false)
 const deviceError = ref('')
 const dashboardRefreshing = ref(false)
@@ -914,6 +1113,20 @@ const selectedOutboundDevice = computed(() =>
 )
 const outboundLines = computed(() =>
   selectedOutboundDevice.value?.status.lines.filter(line => line.active) ?? [],
+)
+const currentGatewayFilter = computed<GatewayFilter>(() => {
+  if (selectedDeviceId.value.startsWith('group:')) {
+    return { groupId: selectedDeviceId.value.slice('group:'.length) }
+  }
+  if (selectedDeviceId.value !== 'all') {
+    return { deviceId: selectedDeviceId.value }
+  }
+  return {}
+})
+const canCreateGroup = computed(() =>
+  /^[A-Za-z0-9._-]{1,64}$/.test(newGroupId.value)
+  && newGroupName.value.length > 0
+  && newGroupName.value.length <= 128,
 )
 const canRequestOutboundSend = computed(() =>
   Boolean(outboundDeviceId.value)
@@ -1049,20 +1262,37 @@ watch(deviceDetails, (devices) => {
   }
   if (
     selectedDeviceId.value !== 'all'
+    && !selectedDeviceId.value.startsWith('group:')
     && !devices.some(device => device.deviceId === selectedDeviceId.value)
   ) selectedDeviceId.value = 'all'
 })
+watch(deviceGroups, (groups) => {
+  if (
+    selectedDeviceId.value.startsWith('group:')
+    && !groups.some(
+      group => `group:${group.groupId}` === selectedDeviceId.value,
+    )
+  ) selectedDeviceId.value = 'all'
+})
+watch(
+  () => [route.query.device, route.query.group],
+  () => {
+    const routeContext = gatewayContextFromRoute()
+    if (routeContext !== selectedDeviceId.value) {
+      selectedDeviceId.value = routeContext
+    }
+  },
+)
 watch(outboundDeviceId, () => {
   outboundSlotIndex.value = outboundLines.value[0]?.slotIndex ?? -1
 })
 watch(selectedDeviceId, async () => {
+  hideAllSensitive()
   currentFilter.value = null
-  const deviceId = selectedDeviceId.value === 'all'
-    ? undefined
-    : selectedDeviceId.value
   await Promise.all([
-    fetchMessages({ limit: 50, deviceId }),
-    fetchNotifications({ limit: 50, deviceId }),
+    fetchMessages({ limit: 50, ...currentGatewayFilter.value }),
+    fetchNotifications({ limit: 50, ...currentGatewayFilter.value }),
+    fetchOutboundMessages({ limit: 50, ...currentGatewayFilter.value }),
   ])
 })
 watch(activeTab, (tab) => {
@@ -1081,7 +1311,11 @@ watch(
   () => {
     const query: Record<string, string> = {}
     if (activeTab.value !== 'dashboard') query.view = activeTab.value
-    if (selectedDeviceId.value !== 'all') query.device = selectedDeviceId.value
+    if (selectedDeviceId.value.startsWith('group:')) {
+      query.group = selectedDeviceId.value.slice('group:'.length)
+    } else if (selectedDeviceId.value !== 'all') {
+      query.device = selectedDeviceId.value
+    }
     if (activeTab.value === 'messages') {
       if (contentFilter.value !== 'all') query.type = contentFilter.value
       if (currentFilter.value !== null) query.sim = String(currentFilter.value)
@@ -1141,14 +1375,11 @@ function formatOptionalTime(timestamp: number | null | undefined): string {
 
 async function refreshDashboard(silent = false): Promise<void> {
   dashboardRefreshing.value = true
-  const deviceId = selectedDeviceId.value === 'all'
-    ? undefined
-    : selectedDeviceId.value
   const results = await Promise.all([
     fetchStatus(),
-    fetchMessages({ limit: 50, deviceId }),
-    fetchNotifications({ limit: 50, deviceId }),
-    fetchOutboundMessages({ limit: 20, deviceId }),
+    fetchMessages({ limit: 50, ...currentGatewayFilter.value }),
+    fetchNotifications({ limit: 50, ...currentGatewayFilter.value }),
+    fetchOutboundMessages({ limit: 20, ...currentGatewayFilter.value }),
     loadDevices(),
   ])
   dashboardRefreshing.value = false
@@ -1162,14 +1393,11 @@ async function refreshDashboard(silent = false): Promise<void> {
 
 async function refreshContent(): Promise<void> {
   const jobs: Array<Promise<boolean>> = []
-  const deviceId = selectedDeviceId.value === 'all'
-    ? undefined
-    : selectedDeviceId.value
   if (contentFilter.value !== 'notifications') {
-    jobs.push(fetchMessages({ limit: 50, deviceId }))
+    jobs.push(fetchMessages({ limit: 50, ...currentGatewayFilter.value }))
   }
   if (contentFilter.value !== 'sms') {
-    jobs.push(fetchNotifications({ limit: 50, deviceId }))
+    jobs.push(fetchNotifications({ limit: 50, ...currentGatewayFilter.value }))
   }
   const results = await Promise.all(jobs)
   const successes = results.filter(Boolean).length
@@ -1181,9 +1409,7 @@ async function refreshContent(): Promise<void> {
 async function refreshOutbound(): Promise<void> {
   const success = await fetchOutboundMessages({
     limit: 50,
-    deviceId: selectedDeviceId.value === 'all'
-      ? undefined
-      : selectedDeviceId.value,
+    ...currentGatewayFilter.value,
   })
   showToast(
     success ? t('common.refreshSuccess') : t('common.refreshFailed'),
@@ -1196,9 +1422,7 @@ async function loadOlderOutbound(): Promise<void> {
   await fetchOutboundMessages({
     limit: 50,
     beforeId: Math.min(...outboundMessages.value.map(message => message.id)),
-    deviceId: selectedDeviceId.value === 'all'
-      ? undefined
-      : selectedDeviceId.value,
+    ...currentGatewayFilter.value,
     append: true,
   })
 }
@@ -1232,7 +1456,10 @@ async function confirmOutboundSend(): Promise<void> {
     outboundRecipient.value = ''
     outboundBody.value = ''
     showToast(t('outbound.sendQueued'), 'success')
-    await fetchOutboundMessages({ limit: 50 })
+    await fetchOutboundMessages({
+      limit: 50,
+      ...currentGatewayFilter.value,
+    })
   } catch (error) {
     pendingOutbound.value = null
     outboundSendError.value = gatewayErrorText(
@@ -1248,18 +1475,14 @@ async function confirmOutboundSend(): Promise<void> {
 async function retryMessages(): Promise<void> {
   await fetchMessages({
     limit: 50,
-    deviceId: selectedDeviceId.value === 'all'
-      ? undefined
-      : selectedDeviceId.value,
+    ...currentGatewayFilter.value,
   })
 }
 
 async function retryNotifications(): Promise<void> {
   await fetchNotifications({
     limit: 50,
-    deviceId: selectedDeviceId.value === 'all'
-      ? undefined
-      : selectedDeviceId.value,
+    ...currentGatewayFilter.value,
   })
 }
 
@@ -1269,9 +1492,7 @@ async function loadMore(): Promise<void> {
     jobs.push(fetchMessages({
       limit: 50,
       beforeId: Math.min(...messages.value.map(message => message.id)),
-      deviceId: selectedDeviceId.value === 'all'
-        ? undefined
-        : selectedDeviceId.value,
+      ...currentGatewayFilter.value,
       append: true,
     }))
   }
@@ -1279,9 +1500,7 @@ async function loadMore(): Promise<void> {
     jobs.push(fetchNotifications({
       limit: 50,
       beforeId: Math.min(...notifications.value.map(notification => notification.id)),
-      deviceId: selectedDeviceId.value === 'all'
-        ? undefined
-        : selectedDeviceId.value,
+      ...currentGatewayFilter.value,
       append: true,
     }))
   }
@@ -1320,12 +1539,14 @@ function hideAllSensitive(): void {
 async function loadDevices(): Promise<boolean> {
   deviceLoading.value = true
   try {
-    const [devices, audit] = await Promise.all([
+    const [devices, audit, groups] = await Promise.all([
       fetchDeviceDetails(),
       fetchAuditLog(),
+      fetchDeviceGroups(),
     ])
     deviceDetails.value = devices
     auditEntries.value = audit
+    deviceGroups.value = groups
     deviceError.value = ''
     return true
   } catch {
@@ -1333,6 +1554,80 @@ async function loadDevices(): Promise<boolean> {
     return false
   } finally {
     deviceLoading.value = false
+  }
+}
+
+async function handleCreateGroup(): Promise<void> {
+  if (!canCreateGroup.value || groupMutationLoading.value !== null) return
+  groupMutationLoading.value = 'create'
+  try {
+    await createDeviceGroup({
+      groupId: newGroupId.value,
+      name: newGroupName.value,
+      deviceIds: newGroupDeviceIds.value,
+    })
+    newGroupId.value = ''
+    newGroupName.value = ''
+    newGroupDeviceIds.value = []
+    showToast(t('groups.createSuccess'), 'success')
+    await loadDevices()
+  } catch (error) {
+    showToast(gatewayErrorText(error, t('groups.saveError')), 'error')
+  } finally {
+    groupMutationLoading.value = null
+  }
+}
+
+function startEditGroup(group: GatewayDeviceGroup): void {
+  editingGroupId.value = group.groupId
+  editGroupName.value = group.name
+  editGroupDeviceIds.value = [...group.deviceIds]
+}
+
+function cancelEditGroup(): void {
+  editingGroupId.value = null
+  editGroupName.value = ''
+  editGroupDeviceIds.value = []
+}
+
+async function handleUpdateGroup(group: GatewayDeviceGroup): Promise<void> {
+  if (
+    !editGroupName.value
+    || editGroupName.value.length > 128
+    || groupMutationLoading.value !== null
+  ) return
+  groupMutationLoading.value = group.groupId
+  try {
+    await updateDeviceGroup(group.groupId, {
+      name: editGroupName.value,
+      deviceIds: editGroupDeviceIds.value,
+    })
+    cancelEditGroup()
+    showToast(t('groups.updateSuccess'), 'success')
+    await loadDevices()
+  } catch (error) {
+    showToast(gatewayErrorText(error, t('groups.saveError')), 'error')
+  } finally {
+    groupMutationLoading.value = null
+  }
+}
+
+async function handleDeleteGroup(group: GatewayDeviceGroup): Promise<void> {
+  if (groupMutationLoading.value !== null) return
+  if (!window.confirm(t('groups.deleteConfirm', { name: group.name }))) return
+  groupMutationLoading.value = group.groupId
+  try {
+    await removeDeviceGroup(group.groupId)
+    if (selectedDeviceId.value === `group:${group.groupId}`) {
+      selectedDeviceId.value = 'all'
+    }
+    if (editingGroupId.value === group.groupId) cancelEditGroup()
+    showToast(t('groups.deleteSuccess'), 'success')
+    await loadDevices()
+  } catch (error) {
+    showToast(gatewayErrorText(error, t('groups.deleteError')), 'error')
+  } finally {
+    groupMutationLoading.value = null
   }
 }
 
@@ -1576,6 +1871,15 @@ async function handleLogout(): Promise<void> {
 .segment-count { margin-left: var(--space-xs); opacity: 0.8; font-variant-numeric: tabular-nums; }
 .filter-field, .form-field { display: grid; gap: var(--space-xs); color: var(--color-text-secondary); font-size: 0.75rem; font-weight: 600; }
 .filter-select { min-height: 2.5rem; padding: 0 var(--space-sm); color: var(--color-text); background: var(--color-bg-input); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.group-members-field { min-width: 0; margin: 0; padding: 0; border: 0; }
+.group-members-field legend { margin-bottom: var(--space-xs); padding: 0; }
+.group-member-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: var(--space-sm); }
+.group-member-option { display: flex; align-items: center; gap: var(--space-sm); min-width: 0; padding: var(--space-sm); color: var(--color-text); background: var(--color-bg-subtle); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; }
+.group-member-option:has(input:checked) { color: var(--color-primary-text); background: var(--color-primary-light); border-color: var(--color-primary); }
+.group-member-option input { flex: none; width: 1rem; height: 1rem; accent-color: var(--color-primary); }
+.group-member-option span { display: grid; min-width: 0; gap: 0.1rem; }
+.group-member-option strong { overflow-wrap: anywhere; }
+.group-member-option small { color: var(--color-text-secondary); font-weight: 500; }
 .search-field { flex: 1 1 18rem; }
 .reset-filter { align-self: flex-end; }
 .partial-alerts { margin-bottom: var(--space-md); }

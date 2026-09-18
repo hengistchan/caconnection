@@ -7,13 +7,18 @@ import { requireAuth } from '../../utils/session'
 export default defineEventHandler(async (event) => {
   requireAuth(event)
   const query = getQuery(event)
-  const allowed = new Set(['limit', 'beforeId', 'deviceId'])
-  if (Object.keys(query).some(key => !allowed.has(key))) {
+  const allowed = new Set(['limit', 'beforeId', 'deviceId', 'groupId'])
+  if (
+    Object.entries(query).some(
+      ([key, value]) => !allowed.has(key) || Array.isArray(value),
+    )
+  ) {
     throw createError({ statusCode: 400, message: 'Invalid query' })
   }
   const limit = query.limit === undefined ? 50 : Number(query.limit)
   const beforeId = query.beforeId === undefined ? null : Number(query.beforeId)
   const deviceId = query.deviceId === undefined ? undefined : String(query.deviceId)
+  const groupId = query.groupId === undefined ? undefined : String(query.groupId)
   if (
     !Number.isSafeInteger(limit)
     || limit < 1
@@ -26,6 +31,13 @@ export default defineEventHandler(async (event) => {
       deviceId !== undefined
       && !/^[A-Za-z0-9._-]{1,64}$/.test(deviceId)
     )
+    || (
+      groupId !== undefined
+      && (
+        !/^[A-Za-z0-9._-]{1,64}$/.test(groupId)
+        || deviceId !== undefined
+      )
+    )
   ) {
     throw createError({ statusCode: 400, message: 'Invalid query' })
   }
@@ -34,6 +46,7 @@ export default defineEventHandler(async (event) => {
       limit,
       beforeId,
       deviceId,
+      groupId,
     })
     setResponseHeaders(event, { 'Cache-Control': 'no-store' })
     return result

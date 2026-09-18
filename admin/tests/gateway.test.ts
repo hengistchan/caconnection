@@ -3,10 +3,14 @@ import {
   claimGatewayOtp,
   clearGatewayConfigForTests,
   createGatewayOutboundMessage,
+  createGatewayDeviceGroup,
+  deleteGatewayDeviceGroup,
   gatewayFetch,
   getGatewayMessages,
   getGatewayNotifications,
   getGatewayOutboundMessages,
+  getGatewayDeviceGroups,
+  updateGatewayDeviceGroup,
 } from '../server/utils/gateway'
 
 const messageFixture = {
@@ -108,6 +112,73 @@ describe('Gateway BFF client', () => {
     expect(fetchMock.mock.calls[1][0]).toBe(
       'http://gateway.test/v1/notifications?limit=50&beforeId=80',
     )
+  })
+
+  it('forwards group filters and validates group CRUD responses', async () => {
+    const group = {
+      groupId: 'primary',
+      name: 'Primary gateways',
+      deviceIds: ['phone-1'],
+      createdAt: 100,
+      updatedAt: 100,
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ messages: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ notifications: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ outboundMessages: [] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ groups: [group] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ group }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        group: { ...group, name: 'Updated' },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ deleted: true }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getGatewayMessages({ groupId: 'primary' })
+    await getGatewayNotifications({ groupId: 'primary' })
+    await getGatewayOutboundMessages({ groupId: 'primary' })
+    await expect(getGatewayDeviceGroups()).resolves.toEqual({ groups: [group] })
+    await createGatewayDeviceGroup({
+      groupId: 'primary',
+      name: 'Primary gateways',
+      deviceIds: ['phone-1'],
+    })
+    await updateGatewayDeviceGroup('primary', { name: 'Updated' })
+    await deleteGatewayDeviceGroup('primary')
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'http://gateway.test/v1/messages?groupId=primary',
+    )
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      'http://gateway.test/v1/notifications?groupId=primary',
+    )
+    expect(fetchMock.mock.calls[2][0]).toBe(
+      'http://gateway.test/v1/outbound-messages?groupId=primary',
+    )
+    expect(fetchMock.mock.calls[3][0]).toBe(
+      'http://gateway.test/v1/device-groups',
+    )
+    expect((fetchMock.mock.calls[4][1] as RequestInit).method).toBe('POST')
+    expect((fetchMock.mock.calls[5][1] as RequestInit).method).toBe('PUT')
+    expect((fetchMock.mock.calls[6][1] as RequestInit).method).toBe('DELETE')
+  })
+
+  it('rejects malformed Gateway group responses', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        groups: [{
+          groupId: 'invalid group id',
+          name: '',
+          deviceIds: ['phone-1', 'phone-1'],
+          createdAt: -1,
+          updatedAt: 100,
+        }],
+      }), { status: 200 }),
+    ))
+
+    await expect(getGatewayDeviceGroups()).rejects.toMatchObject({
+      statusCode: 502,
+    })
   })
 
   it('validates and forwards remote outbound messages', async () => {
