@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 MAX_BODY_BYTES = 1_048_576
 MAX_CLOCK_SKEW_MS = 300_000
 NONCE_RETENTION_MS = 600_000
-SERVICE_VERSION = "0.4.0"
+SERVICE_VERSION = "0.4.1"
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_OTP_MAX_AGE_SECONDS = 600
 DEFAULT_INGEST_REQUESTS_PER_MINUTE = 120
@@ -381,6 +381,10 @@ class GatewayStore:
                     last_ordinary_sms_at INTEGER,
                     last_receiver_action TEXT,
                     last_receiver_action_at INTEGER,
+                    last_receiver_invoked_at INTEGER,
+                    last_receiver_invoked_action TEXT,
+                    last_receiver_parse_failure_at INTEGER,
+                    last_receiver_parse_failure_reason TEXT,
                     updated_at INTEGER NOT NULL,
                     FOREIGN KEY(device_id) REFERENCES devices(device_id)
                         ON DELETE CASCADE
@@ -435,6 +439,23 @@ class GatewayStore:
             }
             if "retired_at" not in device_columns:
                 db.execute("ALTER TABLE devices ADD COLUMN retired_at INTEGER")
+            status_columns = {
+                row["name"]
+                for row in db.execute(
+                    "PRAGMA table_info(device_status)"
+                ).fetchall()
+            }
+            for column_name, column_type in (
+                ("last_receiver_invoked_at", "INTEGER"),
+                ("last_receiver_invoked_action", "TEXT"),
+                ("last_receiver_parse_failure_at", "INTEGER"),
+                ("last_receiver_parse_failure_reason", "TEXT"),
+            ):
+                if column_name not in status_columns:
+                    db.execute(
+                        f"ALTER TABLE device_status "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
 
     def create_pairing(
         self,
@@ -863,6 +884,18 @@ class GatewayStore:
                 "lastOrdinarySmsAt": row["last_ordinary_sms_at"],
                 "lastReceiverAction": row["last_receiver_action"],
                 "lastReceiverActionAt": row["last_receiver_action_at"],
+                "lastReceiverInvokedAt": row[
+                    "last_receiver_invoked_at"
+                ],
+                "lastReceiverInvokedAction": row[
+                    "last_receiver_invoked_action"
+                ],
+                "lastReceiverParseFailureAt": row[
+                    "last_receiver_parse_failure_at"
+                ],
+                "lastReceiverParseFailureReason": row[
+                    "last_receiver_parse_failure_reason"
+                ],
                 "lines": lines,
             },
         }
@@ -882,7 +915,11 @@ class GatewayStore:
                        s.read_phone_state_granted,
                        s.last_incoming_sms_at, s.last_otp_at,
                        s.last_ordinary_sms_at, s.last_receiver_action,
-                       s.last_receiver_action_at
+                       s.last_receiver_action_at,
+                       s.last_receiver_invoked_at,
+                       s.last_receiver_invoked_action,
+                       s.last_receiver_parse_failure_at,
+                       s.last_receiver_parse_failure_reason
                 FROM devices d
                 LEFT JOIN device_status s ON s.device_id = d.device_id
                 ORDER BY d.device_id
@@ -988,6 +1025,49 @@ class GatewayStore:
         receive_mode = str(payload["receiveMode"])
         if receive_mode not in {"OBSERVER", "DEFAULT_SMS"}:
             raise ValueError("invalid receiveMode")
+        receiver_invoked_at = payload.get("receiverInvokedAt")
+        receiver_parse_failure_at = payload.get(
+            "receiverParseFailureAt"
+        )
+        for value in (receiver_invoked_at, receiver_parse_failure_at):
+            if value is not None and (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+            ):
+                raise ValueError("invalid receiver diagnostic")
+        receiver_invoked_action = payload.get("receiverInvokedAction")
+        if (
+            receiver_invoked_action is not None
+            and receiver_invoked_action not in {
+                "SMS_RECEIVED",
+                "SMS_DELIVER",
+            }
+        ):
+            raise ValueError("invalid receiver diagnostic")
+        receiver_parse_failure_reason = payload.get(
+            "receiverParseFailureReason"
+        )
+        if (
+            receiver_parse_failure_reason is not None
+            and receiver_parse_failure_reason not in {
+                "NO_MESSAGES",
+                "PARSER_EXCEPTION",
+                "PROCESSING_EXCEPTION",
+            }
+        ):
+            raise ValueError("invalid receiver diagnostic")
+        if (
+            (receiver_invoked_at is None)
+            != (receiver_invoked_action is None)
+            or (receiver_parse_failure_at is None)
+            != (receiver_parse_failure_reason is None)
+            or (
+                receiver_parse_failure_at is not None
+                and receiver_invoked_at is None
+            )
+        ):
+            raise ValueError("invalid receiver diagnostic")
         raw_lines = payload.get("lines")
         if not isinstance(raw_lines, list) or len(raw_lines) > 4:
             raise ValueError("invalid lines")
@@ -1034,8 +1114,14 @@ class GatewayStore:
                     device_id, observed_at, app_version, version_code,
                     target_sdk, android_version, manufacturer, model,
                     receive_mode, default_sms_role, receive_sms_granted,
-                    send_sms_granted, read_phone_state_granted, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    send_sms_granted, read_phone_state_granted,
+                    last_receiver_invoked_at,
+                    last_receiver_invoked_action,
+                    last_receiver_parse_failure_at,
+                    last_receiver_parse_failure_reason,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?)
                 ON CONFLICT(device_id) DO UPDATE SET
                     observed_at = excluded.observed_at,
                     app_version = excluded.app_version,
@@ -1050,6 +1136,46 @@ class GatewayStore:
                     send_sms_granted = excluded.send_sms_granted,
                     read_phone_state_granted =
                         excluded.read_phone_state_granted,
+                    last_receiver_invoked_at = CASE
+                        WHEN excluded.last_receiver_invoked_at IS NOT NULL
+                          AND (
+                            device_status.last_receiver_invoked_at IS NULL
+                            OR excluded.last_receiver_invoked_at >=
+                               device_status.last_receiver_invoked_at
+                          )
+                        THEN excluded.last_receiver_invoked_at
+                        ELSE device_status.last_receiver_invoked_at
+                    END,
+                    last_receiver_invoked_action = CASE
+                        WHEN excluded.last_receiver_invoked_at IS NOT NULL
+                          AND (
+                            device_status.last_receiver_invoked_at IS NULL
+                            OR excluded.last_receiver_invoked_at >=
+                               device_status.last_receiver_invoked_at
+                          )
+                        THEN excluded.last_receiver_invoked_action
+                        ELSE device_status.last_receiver_invoked_action
+                    END,
+                    last_receiver_parse_failure_at = CASE
+                        WHEN excluded.last_receiver_parse_failure_at IS NOT NULL
+                          AND (
+                            device_status.last_receiver_parse_failure_at IS NULL
+                            OR excluded.last_receiver_parse_failure_at >=
+                               device_status.last_receiver_parse_failure_at
+                          )
+                        THEN excluded.last_receiver_parse_failure_at
+                        ELSE device_status.last_receiver_parse_failure_at
+                    END,
+                    last_receiver_parse_failure_reason = CASE
+                        WHEN excluded.last_receiver_parse_failure_at IS NOT NULL
+                          AND (
+                            device_status.last_receiver_parse_failure_at IS NULL
+                            OR excluded.last_receiver_parse_failure_at >=
+                               device_status.last_receiver_parse_failure_at
+                          )
+                        THEN excluded.last_receiver_parse_failure_reason
+                        ELSE device_status.last_receiver_parse_failure_reason
+                    END,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1066,6 +1192,10 @@ class GatewayStore:
                     int(payload["receiveSmsGranted"]),
                     int(payload["sendSmsGranted"]),
                     int(payload["readPhoneStateGranted"]),
+                    receiver_invoked_at,
+                    receiver_invoked_action,
+                    receiver_parse_failure_at,
+                    receiver_parse_failure_reason,
                     now_ms,
                 ),
             )

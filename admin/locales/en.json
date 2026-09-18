@@ -236,7 +236,17 @@
     "purgeSuccess": "Device and associated data purged",
     "purgeError": "Failed to purge device",
     "auditTitle": "Administrative audit log",
-    "auditDescription": "Contains action metadata only, never SMS bodies or OTP codes."
+    "auditDescription": "Contains action metadata only, never SMS bodies or OTP codes.",
+    "ordinarySmsObserved": "Last ordinary SMS",
+    "otpObserved": "Last OTP SMS",
+    "receiverInvoked": "Last receiver invocation",
+    "otpOnlyWarning": "OTP messages have been observed, but no ordinary SMS has been verified on this Gateway. Do not treat OTP success as proof of general SMS delivery.",
+    "receiverParseFailure": "The latest receiver invocation could not be parsed ({reason}) at {time}.",
+    "receiverFailureReasons": {
+      "NO_MESSAGES": "no SMS PDU was present",
+      "PARSER_EXCEPTION": "the Android SMS parser failed",
+      "PROCESSING_EXCEPTION": "post-parse processing failed"
+    }
   },
   "outbound": {
     "title": "Remote SMS",

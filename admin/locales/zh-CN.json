@@ -236,7 +236,17 @@
     "purgeSuccess": "设备及其关联数据已彻底清除",
     "purgeError": "彻底清除设备失败",
     "auditTitle": "管理审计记录",
-    "auditDescription": "仅记录操作元数据，不包含短信正文或验证码。"
+    "auditDescription": "仅记录操作元数据，不包含短信正文或验证码。",
+    "ordinarySmsObserved": "最近普通短信",
+    "otpObserved": "最近验证码短信",
+    "receiverInvoked": "最近 Receiver 触发",
+    "otpOnlyWarning": "此 Gateway 已观察到验证码短信，但尚未验证普通短信。不能把验证码成功等同于普通短信接收正常。",
+    "receiverParseFailure": "最近一次 Receiver 触发在 {time} 解析失败（{reason}）。",
+    "receiverFailureReasons": {
+      "NO_MESSAGES": "广播中没有 SMS PDU",
+      "PARSER_EXCEPTION": "Android 短信解析器异常",
+      "PROCESSING_EXCEPTION": "解析后的处理流程异常"
+    }
   },
   "outbound": {
     "title": "远程发短信",

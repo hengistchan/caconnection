@@ -2,6 +2,7 @@ import base64
 import copy
 import http.client
 import json
+import sqlite3
 import ssl
 import tempfile
 import threading
@@ -203,6 +204,128 @@ class GatewayServerTest(unittest.TestCase):
             self.store.migrate_devices_from_config(config_devices),
         )
         self.assertEqual({}, self.store.load_devices())
+
+    def test_device_status_schema_adds_receiver_diagnostic_columns(self) -> None:
+        database_path = Path(self.temporary.name) / "legacy-status.db"
+        with sqlite3.connect(database_path) as database:
+            database.execute(
+                """
+                CREATE TABLE device_status (
+                    device_id TEXT PRIMARY KEY,
+                    observed_at INTEGER NOT NULL,
+                    app_version TEXT,
+                    version_code INTEGER,
+                    target_sdk INTEGER,
+                    android_version TEXT,
+                    manufacturer TEXT,
+                    model TEXT,
+                    receive_mode TEXT,
+                    default_sms_role INTEGER,
+                    receive_sms_granted INTEGER,
+                    send_sms_granted INTEGER,
+                    read_phone_state_granted INTEGER,
+                    last_incoming_sms_at INTEGER,
+                    last_otp_at INTEGER,
+                    last_ordinary_sms_at INTEGER,
+                    last_receiver_action TEXT,
+                    last_receiver_action_at INTEGER,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+
+        GatewayStore(database_path)
+
+        with sqlite3.connect(database_path) as database:
+            columns = {
+                row[1]
+                for row in database.execute(
+                    "PRAGMA table_info(device_status)"
+                ).fetchall()
+            }
+        self.assertTrue(
+            {
+                "last_receiver_invoked_at",
+                "last_receiver_invoked_action",
+                "last_receiver_parse_failure_at",
+                "last_receiver_parse_failure_reason",
+            }.issubset(columns)
+        )
+
+    def test_device_state_preserves_newest_receiver_diagnostics(self) -> None:
+        self.store.add_device(
+            "diagnostic-device",
+            base64.b64encode(b"d" * 32).decode(),
+            "Diagnostic gateway",
+            100,
+        )
+        base_state = {
+            "observedAt": 1_000,
+            "appVersion": "1.2.3",
+            "versionCode": 123,
+            "targetSdk": 37,
+            "androidVersion": "16",
+            "manufacturer": "Example",
+            "model": "Gateway Phone",
+            "receiveMode": "OBSERVER",
+            "defaultSmsRole": False,
+            "receiveSmsGranted": True,
+            "sendSmsGranted": True,
+            "readPhoneStateGranted": True,
+            "lines": [],
+        }
+        self.store.upsert_device_state(
+            "diagnostic-device",
+            {
+                **base_state,
+                "receiverInvokedAt": 900,
+                "receiverInvokedAction": "SMS_RECEIVED",
+                "receiverParseFailureAt": 950,
+                "receiverParseFailureReason": "NO_MESSAGES",
+            },
+            1_000,
+        )
+
+        self.store.upsert_device_state(
+            "diagnostic-device",
+            {**base_state, "observedAt": 2_000},
+            2_000,
+        )
+        status = self.store.get_device("diagnostic-device")["status"]
+        self.assertEqual(900, status["lastReceiverInvokedAt"])
+        self.assertEqual(
+            "SMS_RECEIVED",
+            status["lastReceiverInvokedAction"],
+        )
+        self.assertEqual(950, status["lastReceiverParseFailureAt"])
+        self.assertEqual(
+            "NO_MESSAGES",
+            status["lastReceiverParseFailureReason"],
+        )
+
+        self.store.upsert_device_state(
+            "diagnostic-device",
+            {
+                **base_state,
+                "observedAt": 3_000,
+                "receiverInvokedAt": 800,
+                "receiverInvokedAction": "SMS_DELIVER",
+                "receiverParseFailureAt": 850,
+                "receiverParseFailureReason": "PARSER_EXCEPTION",
+            },
+            3_000,
+        )
+        status = self.store.get_device("diagnostic-device")["status"]
+        self.assertEqual(900, status["lastReceiverInvokedAt"])
+        self.assertEqual(
+            "SMS_RECEIVED",
+            status["lastReceiverInvokedAction"],
+        )
+        self.assertEqual(950, status["lastReceiverParseFailureAt"])
+        self.assertEqual(
+            "NO_MESSAGES",
+            status["lastReceiverParseFailureReason"],
+        )
 
     def test_protocol_v2_golden_vector_matches_android(self) -> None:
         body = (
@@ -501,7 +624,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         status, version = self.api_request("GET", "/version")
         self.assertEqual(200, status)
         self.assertEqual("caconnection-gateway", version["service"])
-        self.assertEqual("0.4.0", version["version"])
+        self.assertEqual("0.4.1", version["version"])
         self.assertEqual(1, version["apiVersion"])
         self.assertEqual(2, version["protocolSchemaVersion"])
 
@@ -1162,6 +1285,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
     def test_device_state_health_receive_observations_and_retirement(self) -> None:
         secret = b"s" * 32
         secret_base64 = base64.b64encode(secret).decode()
+        observed_at = int(time.time() * 1000)
         self.assertEqual(
             201,
             self.api_request(
@@ -1176,7 +1300,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             )[0],
         )
         state_payload = {
-            "observedAt": int(time.time() * 1000),
+            "observedAt": observed_at,
             "appVersion": "1.2.3",
             "versionCode": 123,
             "targetSdk": 37,
@@ -1188,6 +1312,10 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             "receiveSmsGranted": True,
             "sendSmsGranted": True,
             "readPhoneStateGranted": True,
+            "receiverInvokedAt": observed_at - 100,
+            "receiverInvokedAction": "SMS_RECEIVED",
+            "receiverParseFailureAt": observed_at - 50,
+            "receiverParseFailureReason": "NO_MESSAGES",
             "lines": [
                 {
                     "slotIndex": 0,
@@ -1256,6 +1384,22 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
             "SMS_RECEIVED",
             device["status"]["lastReceiverAction"],
         )
+        self.assertEqual(
+            observed_at - 100,
+            device["status"]["lastReceiverInvokedAt"],
+        )
+        self.assertEqual(
+            "SMS_RECEIVED",
+            device["status"]["lastReceiverInvokedAction"],
+        )
+        self.assertEqual(
+            observed_at - 50,
+            device["status"]["lastReceiverParseFailureAt"],
+        )
+        self.assertEqual(
+            "NO_MESSAGES",
+            device["status"]["lastReceiverParseFailureReason"],
+        )
         self.assertIsNotNone(device["status"]["lastOrdinarySmsAt"])
         self.assertIsNone(device["status"]["lastOtpAt"])
         self.assertEqual(1, len(device["status"]["lines"]))
@@ -1294,6 +1438,57 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         actions = {entry["action"] for entry in audit["entries"]}
         self.assertIn("DEVICE_CREATE", actions)
         self.assertIn("DEVICE_RETIRE", actions)
+
+    def test_device_state_rejects_invalid_receiver_diagnostics(self) -> None:
+        base_state = {
+            "observedAt": int(time.time() * 1000),
+            "appVersion": "1.2.3",
+            "versionCode": 123,
+            "targetSdk": 37,
+            "androidVersion": "16",
+            "manufacturer": "Example",
+            "model": "Gateway Phone",
+            "receiveMode": "OBSERVER",
+            "defaultSmsRole": False,
+            "receiveSmsGranted": True,
+            "sendSmsGranted": True,
+            "readPhoneStateGranted": True,
+            "lines": [],
+        }
+        invalid_diagnostics = (
+            {"receiverInvokedAt": base_state["observedAt"]},
+            {"receiverInvokedAction": "SMS_RECEIVED"},
+            {
+                "receiverParseFailureAt": base_state["observedAt"],
+                "receiverParseFailureReason": "NO_MESSAGES",
+            },
+            {
+                "receiverInvokedAt": base_state["observedAt"],
+                "receiverInvokedAction": "UNSUPPORTED",
+            },
+            {
+                "receiverInvokedAt": base_state["observedAt"],
+                "receiverInvokedAction": "SMS_RECEIVED",
+                "receiverParseFailureAt": base_state["observedAt"],
+                "receiverParseFailureReason": "UNSUPPORTED",
+            },
+        )
+
+        for index, diagnostic in enumerate(invalid_diagnostics):
+            with self.subTest(diagnostic=diagnostic):
+                body = self.encrypted_body(
+                    event_type="DEVICE_STATE",
+                    source_event_id=f"invalid-diagnostic-{index}",
+                    payload={**base_state, **diagnostic},
+                )
+                self.assertEqual(
+                    400,
+                    self.request(
+                        body=body,
+                        nonce=f"invalid-diagnostic-nonce-{index}",
+                        idempotency_key=f"invalid-diagnostic-key-{index}",
+                    )[0],
+                )
 
     def test_pairing_invalid_expired_and_rate_limited_claims_are_generic(self) -> None:
         self.assertEqual(

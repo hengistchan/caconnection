@@ -9,6 +9,7 @@ import {
   getGatewayMessages,
   getGatewayNotifications,
   getGatewayOutboundMessages,
+  getGatewayDeviceDetails,
   getGatewayDeviceGroups,
   updateGatewayDeviceGroup,
 } from '../server/utils/gateway'
@@ -60,6 +61,41 @@ const outboundFixture = {
   errorDetail: null,
 }
 
+const deviceDetailFixture = {
+  deviceId: 'phone-1',
+  description: 'Primary gateway',
+  createdAt: 1_757_894_400_000,
+  lastSeenAt: 1_757_894_405_000,
+  retiredAt: null,
+  health: 'ONLINE',
+  status: {
+    observedAt: 1_757_894_405_000,
+    appVersion: '1.2.3',
+    versionCode: 123,
+    targetSdk: 37,
+    androidVersion: '16',
+    manufacturer: 'Example',
+    model: 'Gateway Phone',
+    receiveMode: 'OBSERVER',
+    defaultSmsRole: false,
+    permissions: {
+      receiveSms: true,
+      sendSms: true,
+      readPhoneState: true,
+    },
+    lastIncomingSmsAt: null,
+    lastOtpAt: 1_757_894_401_000,
+    lastOrdinarySmsAt: null,
+    lastReceiverAction: 'SMS_RECEIVED',
+    lastReceiverActionAt: 1_757_894_401_000,
+    lastReceiverInvokedAt: 1_757_894_404_000,
+    lastReceiverInvokedAction: 'SMS_RECEIVED',
+    lastReceiverParseFailureAt: 1_757_894_404_100,
+    lastReceiverParseFailureReason: 'NO_MESSAGES',
+    lines: [],
+  },
+} as const
+
 describe('Gateway BFF client', () => {
   beforeEach(() => {
     process.env.GATEWAY_URL = 'http://gateway.test'
@@ -94,6 +130,57 @@ describe('Gateway BFF client', () => {
     ))
     await expect(getGatewayNotifications()).resolves.toEqual({
       notifications: [notificationFixture],
+    })
+  })
+
+  it('accepts receiver diagnostics in device detail responses', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ devices: [deviceDetailFixture] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    ))
+    await expect(getGatewayDeviceDetails()).resolves.toEqual({
+      devices: [deviceDetailFixture],
+    })
+  })
+
+  it.each([
+    {
+      lastReceiverInvokedAt: null,
+      lastReceiverInvokedAction: 'SMS_RECEIVED',
+    },
+    {
+      lastReceiverParseFailureAt: 1_757_894_404_100,
+      lastReceiverParseFailureReason: null,
+    },
+    {
+      lastReceiverInvokedAt: null,
+      lastReceiverInvokedAction: null,
+      lastReceiverParseFailureAt: 1_757_894_404_100,
+      lastReceiverParseFailureReason: 'NO_MESSAGES',
+    },
+    {
+      lastReceiverParseFailureReason: 'UNSUPPORTED',
+    },
+    {
+      lastReceiverInvokedAt: -1,
+    },
+  ])('rejects malformed receiver diagnostics %#', async (diagnostic) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        devices: [{
+          ...deviceDetailFixture,
+          status: {
+            ...deviceDetailFixture.status,
+            ...diagnostic,
+          },
+        }],
+      }), { status: 200 }),
+    ))
+
+    await expect(getGatewayDeviceDetails()).rejects.toMatchObject({
+      statusCode: 502,
     })
   })
 

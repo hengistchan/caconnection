@@ -88,6 +88,14 @@ export interface GatewayDeviceDetail {
     lastOrdinarySmsAt: number | null
     lastReceiverAction: 'SMS_RECEIVED' | 'SMS_DELIVER' | null
     lastReceiverActionAt: number | null
+    lastReceiverInvokedAt: number | null
+    lastReceiverInvokedAction: 'SMS_RECEIVED' | 'SMS_DELIVER' | null
+    lastReceiverParseFailureAt: number | null
+    lastReceiverParseFailureReason:
+      | 'NO_MESSAGES'
+      | 'PARSER_EXCEPTION'
+      | 'PROCESSING_EXCEPTION'
+      | null
     lines: Array<{
       slotIndex: number
       subscriptionId: number | null

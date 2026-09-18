@@ -625,6 +625,39 @@
                     SEND_SMS={{ device.status.permissions.sendSms ?? '—' }},
                     READ_PHONE_STATE={{ device.status.permissions.readPhoneState ?? '—' }}
                   </span>
+                  <span class="device-meta">
+                    {{ t('devices.ordinarySmsObserved') }}:
+                    {{ formatOptionalTime(device.status.lastOrdinarySmsAt) }} ·
+                    {{ t('devices.otpObserved') }}:
+                    {{ formatOptionalTime(device.status.lastOtpAt) }}
+                  </span>
+                  <span class="device-meta">
+                    {{ t('devices.receiverInvoked') }}:
+                    {{ device.status.lastReceiverInvokedAction || '—' }} ·
+                    {{ formatOptionalTime(device.status.lastReceiverInvokedAt) }}
+                  </span>
+                  <p
+                    v-if="
+                      device.status.lastOtpAt !== null
+                      && device.status.lastOrdinarySmsAt === null
+                    "
+                    class="inline-alert inline-alert-warning"
+                    role="status"
+                  >
+                    {{ t('devices.otpOnlyWarning') }}
+                  </p>
+                  <p
+                    v-if="hasUnresolvedReceiverParseFailure(device)"
+                    class="inline-alert inline-alert-error"
+                    role="alert"
+                  >
+                    {{ t('devices.receiverParseFailure', {
+                      reason: t(
+                        `devices.receiverFailureReasons.${device.status.lastReceiverParseFailureReason}`,
+                      ),
+                      time: formatOptionalTime(device.status.lastReceiverParseFailureAt),
+                    }) }}
+                  </p>
                 </div>
                 <div class="device-actions">
                   <button class="btn btn-primary btn-sm" :disabled="pairingLoading" @click="generatePairingForDevice(device.deviceId)">
@@ -1371,6 +1404,17 @@ function formatTime(timestamp: number): string {
 
 function formatOptionalTime(timestamp: number | null | undefined): string {
   return timestamp ? formatTime(timestamp) : t('dashboard.never')
+}
+
+function hasUnresolvedReceiverParseFailure(
+  device: GatewayDeviceDetail,
+): boolean {
+  const failureAt = device.status.lastReceiverParseFailureAt
+  if (failureAt === null) return false
+  return (
+    device.status.lastIncomingSmsAt === null
+    || failureAt > device.status.lastIncomingSmsAt
+  )
 }
 
 async function refreshDashboard(silent = false): Promise<void> {

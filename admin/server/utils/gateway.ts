@@ -21,6 +21,15 @@ function isNullableInteger(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isSafeInteger(value))
 }
 
+function isNullableNonNegativeInteger(value: unknown): value is number | null {
+  return value === null
+    || (
+      typeof value === 'number'
+      && Number.isSafeInteger(value)
+      && value >= 0
+    )
+}
+
 function invalidGatewayResponse(): never {
   throw createError({
     statusCode: 502,
@@ -252,6 +261,14 @@ export interface GatewayDeviceDetail {
     lastOrdinarySmsAt: number | null
     lastReceiverAction: 'SMS_RECEIVED' | 'SMS_DELIVER' | null
     lastReceiverActionAt: number | null
+    lastReceiverInvokedAt: number | null
+    lastReceiverInvokedAction: 'SMS_RECEIVED' | 'SMS_DELIVER' | null
+    lastReceiverParseFailureAt: number | null
+    lastReceiverParseFailureReason:
+      | 'NO_MESSAGES'
+      | 'PARSER_EXCEPTION'
+      | 'PROCESSING_EXCEPTION'
+      | null
     lines: Array<{
       slotIndex: number
       subscriptionId: number | null
@@ -670,6 +687,31 @@ function parseDeviceDetail(value: unknown): GatewayDeviceDetail {
     || !isRecord(value.status)
     || !isRecord(value.status.permissions)
     || !Array.isArray(value.status.lines)
+    || !isNullableNonNegativeInteger(value.status.lastReceiverInvokedAt)
+    || !(
+      value.status.lastReceiverInvokedAction === null
+      || value.status.lastReceiverInvokedAction === 'SMS_RECEIVED'
+      || value.status.lastReceiverInvokedAction === 'SMS_DELIVER'
+    )
+    || !isNullableNonNegativeInteger(value.status.lastReceiverParseFailureAt)
+    || !(
+      value.status.lastReceiverParseFailureReason === null
+      || value.status.lastReceiverParseFailureReason === 'NO_MESSAGES'
+      || value.status.lastReceiverParseFailureReason === 'PARSER_EXCEPTION'
+      || value.status.lastReceiverParseFailureReason === 'PROCESSING_EXCEPTION'
+    )
+    || (
+      (value.status.lastReceiverInvokedAt === null)
+      !== (value.status.lastReceiverInvokedAction === null)
+    )
+    || (
+      (value.status.lastReceiverParseFailureAt === null)
+      !== (value.status.lastReceiverParseFailureReason === null)
+    )
+    || (
+      value.status.lastReceiverParseFailureAt !== null
+      && value.status.lastReceiverInvokedAt === null
+    )
   ) {
     return invalidGatewayResponse()
   }
