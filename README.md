@@ -15,6 +15,8 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 ## Implemented capabilities
 
 - Runtime dual-SIM discovery with `subscriptionId` and `slotIndex`.
+- Multi-Gateway identity and isolation using `(deviceId, slotIndex)` as the
+  stable route; `subscriptionId` remains telemetry only.
 - A single Android build target compiled against and targeting API 37.
 - Path A inbound receiver using `SMS_RECEIVED`.
 - Raw inbound extra key/type capture without persisting raw PDU bytes.
@@ -80,6 +82,12 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
   limits.
 - Authenticated `GET /v1/messages`, `GET /v1/notifications`, and atomic one-time
   `POST /v1/otp/claim` APIs.
+- Per-client `allowedDeviceIds` isolation, explicit per-device outbound
+  selection, reversible retirement, irreversible purge, and organizational
+  Gateway groups with group-scoped history filters.
+- Device-state telemetry that distinguishes ordinary SMS, OTP SMS, Receiver
+  invocation, and metadata-only parse failures. OTP success is not treated as
+  proof of ordinary SMS delivery.
 - Optional exact-message OTP claims plus a redacted SIM1/SIM2 cutover
   acceptance tool.
 - Thirty-day configurable retention, encrypted SQLite storage, verified
@@ -394,16 +402,23 @@ https://caconnection-gatway.hengistchan.online/admin/
 - **Multi-language**: Simplified Chinese (default) and English
 - **Gateway Status**: Real-time health, readiness, and version monitoring
 - **Communication Workspace**: Browse SMS and notification content with type,
-  SIM, source-app, text, and date filtering plus cursor-based loading
+  Gateway/group, SIM, source-app, text, and date filtering plus cursor-based
+  loading
 - **Device Workspace**: Manage device descriptions, shared-secret rotation,
-  per-device pairing, and deletion from a dedicated tab
+  per-device pairing, retirement/restore/purge, health and receive diagnostics,
+  and organizational groups from a dedicated tab
+- **Explicit Remote Routing**: Send only after selecting a Gateway and active
+  SIM line; no automatic rerouting or cross-Gateway fallback
 - **OTP Claim**: One-time verification code extraction with confirmation
 - **Privacy Protection**: SMS and notification content hidden by default
 
 Secret rotation atomically re-encrypts historical event payloads so existing
-content remains readable. Device deletion removes the decryption secret, so the
-confirmation dialog warns that historical encrypted content from that device
-will no longer be readable.
+content remains readable. Normal removal retires a device and preserves
+historical decryptability. A separate exact-confirmation purge removes the
+device secret and associated data irreversibly.
+
+See [Multi-Gateway Architecture](docs/MULTI_GATEWAY_ARCHITECTURE.md) for the
+routing, isolation, lifecycle, group, OTP, and real-device acceptance contract.
 
 ### Security Architecture
 

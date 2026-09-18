@@ -18,11 +18,16 @@ actions.
   replacing the current list
 - **Privacy Controls**: Reveal a single card or all visible content for a
   time-limited 30-second window
-- **Device Workspace**: Add, edit, rotate secrets, pair, and delete Gateway
-  devices from one dedicated tab
+- **Device Workspace**: Add, edit, rotate secrets, pair, retire, restore, and
+  purge Gateway devices from one dedicated tab
+- **Multi-Gateway Context**: Persist an explicit Gateway or organizational
+  group selection in the URL and apply it to read-only history views
+- **Ordinary-SMS Diagnostics**: Show ordinary-SMS and OTP observations
+  separately, plus metadata-only Receiver invocation and parse-failure state
 - **OTP Claim**: One-time verification code extraction
 - **Remote SMS**: Queue a message for a selected gateway and SIM, confirm the
-  carrier-charge warning, and track modem/delivery status
+  carrier-charge warning, and track modem/delivery status without automatic
+  rerouting or cross-Gateway fallback
 - **Privacy Protection**: Sensitive content hidden by default
 
 ## Security Architecture
@@ -207,6 +212,7 @@ This ensures:
 - Gateway health status
 - Readiness status
 - Version information
+- Persistent all-Gateway, single-Gateway, or Gateway-group context
 - SIM1/SIM2 message counts
 - Latest message timestamp
 - Last refresh time
@@ -221,6 +227,7 @@ This ensures:
 - Search sender, content, source app, or device ID
 - Filter by today, seven days, or thirty days
 - Preserve active filters in the page URL
+- Apply the current Gateway or group context before cursor pagination
 - Keep successful data visible when only one upstream source fails
 - Load older records using the Gateway `beforeId` cursor
 - Reveal all sensitive content for 30 seconds, with automatic hiding
@@ -242,6 +249,7 @@ This ensures:
 ### Remote SMS (`/admin/` - Remote SMS tab)
 
 - Select the gateway device and physical SIM slot
+- Require an explicit route; groups never select a sending Gateway
 - Review a carrier-charge warning and explicit confirmation before queueing
 - Use a unique idempotency key for each confirmed send
 - Mask recipient and message body by default in history
@@ -252,16 +260,22 @@ This ensures:
 
 ### Devices (`/admin/` - Devices tab)
 
-- Device inventory with created and last-seen timestamps
+- Device inventory with health, created, and last-seen timestamps
+- Receive mode, permissions, active SIM lines, ordinary-SMS/OTP observations,
+  and metadata-only Receiver invocation/parse-failure diagnostics
 - Client-side Base64 and decoded-length validation for shared secrets
 - Cryptographically secure 32-byte shared-secret generation
 - Hidden-by-default secret inputs with explicit copy controls
 - Description editing and optional shared-secret rotation
 - Atomic re-encryption of historical event payloads during secret rotation
 - Per-device pairing QR generation
-- Accessible custom confirmation dialog that warns device deletion also makes
-  its historical encrypted content unreadable
+- Reversible retirement and restore while historical content remains readable
+- Separate exact-confirmation purge for irreversible device and data removal
+- Organizational Gateway groups for read filtering only
 - Toast feedback for successful and failed mutations
+
+See [Multi-Gateway Architecture](../docs/MULTI_GATEWAY_ARCHITECTURE.md) for the
+cross-component routing and isolation contract.
 
 ## Internationalization
 
