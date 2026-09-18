@@ -50,8 +50,12 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       const nowMs = Date.now();
       const device = app.deviceRepo.add(deviceId, secretBase64, description, nowMs);
 
-      // Refresh device secrets
-      app.deviceSecrets = app.deviceRepo.loadSecrets();
+      // Reload device secrets
+      const newSecrets = app.deviceRepo.loadSecrets();
+      app.deviceSecrets.clear();
+      for (const [k, v] of newSecrets) {
+        app.deviceSecrets.set(k, v);
+      }
 
       app.auditRepo.record(clientId, 'DEVICE_CREATE', deviceId, 'SUCCESS');
       return reply.status(201).send({ device });
@@ -108,7 +112,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       }
 
       if (secretBase64) {
-        app.deviceSecrets = app.deviceRepo.loadSecrets();
+        const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
       }
 
       app.auditRepo.record(clientId, 'DEVICE_UPDATE', deviceId, 'SUCCESS', {
@@ -145,7 +149,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'device not found' });
     }
 
-    app.deviceSecrets = app.deviceRepo.loadSecrets();
+    const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
     app.auditRepo.record(clientId, 'DEVICE_RETIRE', deviceId, 'SUCCESS');
 
     return reply.send({ retired: true, device: app.deviceRepo.getById(deviceId) });
@@ -175,7 +179,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'device not found' });
     }
 
-    app.deviceSecrets = app.deviceRepo.loadSecrets();
+    const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
     app.auditRepo.record(clientId, 'DEVICE_RESTORE', deviceId, 'SUCCESS');
 
     return reply.send({ device: app.deviceRepo.getById(deviceId) });
@@ -205,7 +209,7 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       return reply.status(404).send({ error: 'device not found' });
     }
 
-    app.deviceSecrets = app.deviceRepo.loadSecrets();
+    const _newSecrets = app.deviceRepo.loadSecrets(); app.deviceSecrets.clear(); for (const [k, v] of _newSecrets) { app.deviceSecrets.set(k, v); }
     app.auditRepo.record(clientId, 'DEVICE_PURGE', deviceId, 'SUCCESS');
 
     return reply.send({ purged: true });

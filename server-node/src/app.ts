@@ -5,6 +5,8 @@
  */
 
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
+import { readFileSync } from 'node:fs';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { getDatabase, initializeDatabase, closeDatabase } from './database/database.js';
 import type { DatabaseConfig } from './database/database.js';
 import type { DatabaseSync } from 'node:sqlite';
@@ -86,10 +88,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   let apiClients = new Map<string, ApiClient>();
   if (config.configPath) {
     try {
-      const configData = JSON.parse(require('fs').readFileSync(config.configPath, 'utf-8'));
+      const configData = JSON.parse(readFileSync(config.configPath, 'utf-8'));
       apiClients = loadApiClients(configData);
-    } catch {
-      // No config file or invalid - will have no API clients
+    } catch (err) {
+      console.error('Failed to load config:', err);
     }
   }
 
@@ -119,10 +121,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
       throw { statusCode: 401, message: 'authentication required' };
     }
     const token = auth.slice(7).trim();
-    const tokenHash = require('node:crypto').createHash('sha256').update(token, 'utf-8').digest('hex');
+    const tokenHash = createHash('sha256').update(token, 'utf-8').digest('hex');
 
     for (const [clientId, client] of apiClients) {
-      if (require('node:crypto').timingSafeEqual(Buffer.from(client.tokenSha256, 'utf-8'), Buffer.from(tokenHash, 'utf-8'))) {
+      if (timingSafeEqual(Buffer.from(client.tokenSha256, 'utf-8'), Buffer.from(tokenHash, 'utf-8'))) {
         if (!client.scopes.has(requiredScope) && !client.scopes.has('*')) {
           throw { statusCode: 403, message: 'insufficient scope' };
         }
@@ -141,7 +143,8 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   });
 
   app.decorate('getClientSecrets', function(clientId: string): Map<string, Buffer> {
-    return getClientDeviceSecrets(clientId, apiClients, deviceSecrets);
+    // Always use the current deviceSecrets (which may have been updated)
+    return getClientDeviceSecrets(clientId, apiClients, app.deviceSecrets);
   });
 
   // Health check

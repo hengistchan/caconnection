@@ -8,11 +8,13 @@ import { join } from 'node:path';
 const PORT = parseInt(process.env.PORT ?? '8787', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
 const DATABASE_PATH = process.env.DATABASE_PATH ?? join(import.meta.dirname, '..', 'data', 'gateway.db');
+const CONFIG_PATH = process.env.CONFIG_PATH;
 
 async function main() {
   const app = await buildApp({
     database: { path: DATABASE_PATH },
     trustProxy: process.env.TRUST_PROXY === 'true',
+    configPath: CONFIG_PATH,
   });
 
   try {
