@@ -24,7 +24,7 @@ export interface AppConfig {
 /**
  * Build and configure the Fastify application.
  */
-export async function buildApp(config: A！ppConfig): Promise<FastifyInstance> {
+export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
       level: 'info',
