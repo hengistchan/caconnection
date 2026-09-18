@@ -13,7 +13,7 @@ mkdir -p runtime/backups
 chmod 700 runtime/backups
 
 OUTPUT="$(docker compose exec -T gateway \
-  python -m server.backup_database \
+  node /app/dist/operations/backup-database.js \
   --database /var/lib/gateway/gateway.db \
   --output-dir /var/lib/gateway/backups \
   --keep "$KEEP")"

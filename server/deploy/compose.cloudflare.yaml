@@ -2,9 +2,9 @@ name: caconnection-gateway
 
 services:
   gateway:
-    image: caconnection-gateway:0.2.0
+    image: caconnection-gateway:0.5.0
     build:
-      context: ..
+      context: ../../server-node
       dockerfile: Dockerfile
     restart: unless-stopped
     expose:
@@ -34,9 +34,9 @@ services:
     healthcheck:
       test:
         - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/ready', timeout=3)"
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8787/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -127,13 +127,12 @@ services:
         max-file: "5"
 
   smoke:
-    image: caconnection-gateway:0.2.0
+    image: caconnection-gateway:0.5.0
     profiles:
       - tools
     entrypoint:
-      - python
-      - -m
-      - server.protocol_smoke
+      - node
+      - /app/dist/operations/protocol-smoke.js
     secrets:
       - gateway_config
     read_only: true

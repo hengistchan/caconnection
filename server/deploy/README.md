@@ -9,7 +9,7 @@ Android -> public HTTPS -> Caddy -> private HTTP -> Gateway API -> SQLite
 The backend port is not published on the host. Only TCP 80, TCP 443, and UDP
 443 are exposed. Caddy obtains and renews the public certificate. Android uses
 normal system-CA validation in production, so routine certificate renewal does
-not require reprovisioning the phone. The Python and Caddy images are pinned by
+not require reprovisioning the phone. The Node.js and Caddy images are pinned by
 digest so a deployment does not silently move to different base-image content.
 
 ## Prepare

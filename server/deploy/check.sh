@@ -16,7 +16,7 @@ echo
 case "${GATEWAY_DEPLOYMENT_MODE:-direct}" in
   direct)
     docker compose exec -T gateway \
-      python -m server.protocol_smoke \
+      node /app/dist/operations/protocol-smoke.js \
       --url "https://${GATEWAY_DOMAIN}" \
       --connect-host caddy \
       --config /run/secrets/gateway_config

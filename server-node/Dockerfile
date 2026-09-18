@@ -1,51 +1,38 @@
-# Multi-stage build for production
-FROM node:22-alpine AS builder
+# Pinned multi-architecture Node 22 / Alpine image.
+FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85 AS builder
 
 WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install dependencies
-RUN npm ci
-
-# Copy source code
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 COPY tsconfig.json ./
 COPY src/ ./src/
-
-# Build TypeScript
 RUN npm run build
 
-# Production stage
-FROM node:22-alpine
+FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85
 
-# Security: run as non-root
-RUN addgroup -g 10001 -S gateway && \
-    adduser -u 10001 -S gateway -G gateway
+LABEL org.opencontainers.image.title="CA Connection Gateway" \
+      org.opencontainers.image.version="0.5.0"
+
+ENV NODE_ENV=production \
+    HOST=0.0.0.0 \
+    PORT=8787 \
+    CONFIG_PATH=/run/secrets/gateway_config \
+    DATABASE_PATH=/var/lib/gateway/gateway.db
+
+RUN addgroup -g 10001 -S gateway \
+    && adduser -u 10001 -S gateway -G gateway \
+    && mkdir -p /var/lib/gateway/backups \
+    && chown -R gateway:gateway /var/lib/gateway
 
 WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install production dependencies only
-RUN npm ci --omit=dev
-
-# Copy built files
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts \
+    && npm cache clean --force
 COPY --from=builder /app/dist ./dist
 
-# Create data directory
-RUN mkdir -p /app/data && chown -R gateway:gateway /app
-
-# Switch to non-root user
 USER gateway
-
-# Expose port
 EXPOSE 8787
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:8787/health || exit 1
-
-# Start server
+VOLUME ["/var/lib/gateway"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:8787/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 CMD ["node", "dist/main.js"]

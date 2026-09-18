@@ -32,16 +32,16 @@ trap restart_on_exit EXIT INT TERM
 
 docker compose run --rm --no-deps \
   -v "${TEMP_SOURCE}:/tmp/source.db:ro" \
-  --entrypoint python gateway \
-  -m server.restore_database \
+  --entrypoint node gateway \
+  /app/dist/operations/restore-database.js \
   --source /tmp/source.db \
   --database /var/lib/gateway/gateway.db \
   --confirm-gateway-stopped
 
 docker compose start gateway
 for ATTEMPT in $(seq 1 30); do
-  if docker compose exec -T gateway python -c \
-    "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/ready', timeout=3)" \
+  if docker compose exec -T gateway node -e \
+    "fetch('http://127.0.0.1:8787/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" \
     >/dev/null 2>&1
   then
     RESTART_REQUIRED=0
