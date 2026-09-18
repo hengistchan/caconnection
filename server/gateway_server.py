@@ -27,7 +27,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 MAX_BODY_BYTES = 1_048_576
 MAX_CLOCK_SKEW_MS = 300_000
 NONCE_RETENTION_MS = 600_000
-SERVICE_VERSION = "0.3.0"
+SERVICE_VERSION = "0.4.0"
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_OTP_MAX_AGE_SECONDS = 600
 DEFAULT_INGEST_REQUESTS_PER_MINUTE = 120
@@ -408,6 +408,21 @@ class GatewayStore:
                 );
                 CREATE INDEX IF NOT EXISTS index_admin_audit_occurred
                     ON admin_audit_log(occurred_at DESC);
+                CREATE TABLE IF NOT EXISTS gateway_groups (
+                    group_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS gateway_group_members (
+                    group_id TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    PRIMARY KEY(group_id, device_id),
+                    FOREIGN KEY(group_id) REFERENCES gateway_groups(group_id)
+                        ON DELETE CASCADE,
+                    FOREIGN KEY(device_id) REFERENCES devices(device_id)
+                        ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS gateway_metadata (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
@@ -575,6 +590,7 @@ class GatewayStore:
         limit: int,
         before_id: Optional[int] = None,
         device_id: Optional[str] = None,
+        device_ids: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
         clauses = []
         parameters: list[Any] = []
@@ -584,6 +600,12 @@ class GatewayStore:
         if device_id is not None:
             clauses.append("device_id = ?")
             parameters.append(device_id)
+        if device_ids is not None:
+            if not device_ids:
+                return []
+            placeholders = ",".join("?" for _ in device_ids)
+            clauses.append(f"device_id IN ({placeholders})")
+            parameters.extend(sorted(device_ids))
         parameters.append(min(max(limit, 1), 100))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         now_ms = int(time.time() * 1000)
@@ -1187,6 +1209,7 @@ class GatewayStore:
                 "outbound_commands",
                 "device_lines",
                 "device_status",
+                "gateway_group_members",
             ):
                 db.execute(
                     f"DELETE FROM {table} WHERE device_id = ?",
@@ -1244,7 +1267,7 @@ class GatewayStore:
             if not device_ids:
                 return []
             placeholders = ",".join("?" for _ in device_ids)
-            clauses.append(f"(device_id IS NULL OR device_id IN ({placeholders}))")
+            clauses.append(f"device_id IN ({placeholders})")
             parameters.extend(sorted(device_ids))
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         parameters.append(min(max(limit, 1), 100))
@@ -1260,7 +1283,7 @@ class GatewayStore:
                 """,
                 parameters,
             ).fetchall()
-        return [
+        result = [
             {
                 "id": row["id"],
                 "occurredAt": row["occurred_at"],
@@ -1272,6 +1295,189 @@ class GatewayStore:
             }
             for row in rows
         ]
+        return result
+
+    def list_groups(
+        self,
+        allowed_device_ids: Optional[set[str]] = None,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            groups = db.execute(
+                """
+                SELECT group_id, name, created_at, updated_at
+                FROM gateway_groups
+                ORDER BY name COLLATE NOCASE, group_id
+                """
+            ).fetchall()
+            members = db.execute(
+                """
+                SELECT group_id, device_id
+                FROM gateway_group_members
+                ORDER BY device_id
+                """
+            ).fetchall()
+        by_group: dict[str, list[str]] = defaultdict(list)
+        for member in members:
+            device_id = str(member["device_id"])
+            if (
+                allowed_device_ids is None
+                or device_id in allowed_device_ids
+            ):
+                by_group[str(member["group_id"])].append(device_id)
+        result = [
+            {
+                "groupId": row["group_id"],
+                "name": row["name"],
+                "deviceIds": by_group.get(str(row["group_id"]), []),
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in groups
+        ]
+        if allowed_device_ids is not None:
+            result = [group for group in result if group["deviceIds"]]
+        return result
+
+    def group_device_ids(self, group_id: str) -> Optional[set[str]]:
+        with self._connect() as db:
+            exists = db.execute(
+                "SELECT 1 FROM gateway_groups WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+            if exists is None:
+                return None
+            rows = db.execute(
+                """
+                SELECT device_id
+                FROM gateway_group_members
+                WHERE group_id = ?
+                """,
+                (group_id,),
+            ).fetchall()
+        return {str(row["device_id"]) for row in rows}
+
+    def create_group(
+        self,
+        group_id: str,
+        name: str,
+        device_ids: list[str],
+        now_ms: int,
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", group_id):
+            raise ValueError("invalid groupId")
+        normalized_name = name.strip()
+        if not 1 <= len(normalized_name) <= 128:
+            raise ValueError("invalid group name")
+        if len(set(device_ids)) != len(device_ids):
+            raise ValueError("duplicate deviceId")
+        with self._lock, self._connect() as db:
+            known = {
+                str(row["device_id"])
+                for row in db.execute(
+                    "SELECT device_id FROM devices"
+                ).fetchall()
+            }
+            if not set(device_ids).issubset(known):
+                raise ValueError("unknown deviceId")
+            try:
+                db.execute(
+                    """
+                    INSERT INTO gateway_groups(
+                        group_id, name, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (group_id, normalized_name, now_ms, now_ms),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("group already exists") from error
+            for device_id in device_ids:
+                db.execute(
+                    """
+                    INSERT INTO gateway_group_members(group_id, device_id)
+                    VALUES (?, ?)
+                    """,
+                    (group_id, device_id),
+                )
+        return next(
+            group
+            for group in self.list_groups()
+            if group["groupId"] == group_id
+        )
+
+    def update_group(
+        self,
+        group_id: str,
+        name: Optional[str],
+        device_ids: Optional[list[str]],
+        now_ms: int,
+    ) -> Optional[dict[str, Any]]:
+        normalized_name = name.strip() if name is not None else None
+        if normalized_name is not None and not 1 <= len(normalized_name) <= 128:
+            raise ValueError("invalid group name")
+        if device_ids is not None and len(set(device_ids)) != len(device_ids):
+            raise ValueError("duplicate deviceId")
+        with self._lock, self._connect() as db:
+            if db.execute(
+                "SELECT 1 FROM gateway_groups WHERE group_id = ?",
+                (group_id,),
+            ).fetchone() is None:
+                return None
+            if device_ids is not None:
+                known = {
+                    str(row["device_id"])
+                    for row in db.execute(
+                        "SELECT device_id FROM devices"
+                    ).fetchall()
+                }
+                if not set(device_ids).issubset(known):
+                    raise ValueError("unknown deviceId")
+                db.execute(
+                    "DELETE FROM gateway_group_members WHERE group_id = ?",
+                    (group_id,),
+                )
+                for device_id in device_ids:
+                    db.execute(
+                        """
+                        INSERT INTO gateway_group_members(group_id, device_id)
+                        VALUES (?, ?)
+                        """,
+                        (group_id, device_id),
+                    )
+            if normalized_name is not None:
+                db.execute(
+                    """
+                    UPDATE gateway_groups
+                    SET name = ?, updated_at = ?
+                    WHERE group_id = ?
+                    """,
+                    (normalized_name, now_ms, group_id),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE gateway_groups
+                    SET updated_at = ?
+                    WHERE group_id = ?
+                    """,
+                    (now_ms, group_id),
+                )
+        return next(
+            group
+            for group in self.list_groups()
+            if group["groupId"] == group_id
+        )
+
+    def delete_group(self, group_id: str) -> bool:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM gateway_group_members WHERE group_id = ?",
+                (group_id,),
+            )
+            cursor = db.execute(
+                "DELETE FROM gateway_groups WHERE group_id = ?",
+                (group_id,),
+            )
+            return cursor.rowcount == 1
 
     def add_device(
         self,
@@ -1606,6 +1812,7 @@ class GatewayStore:
         before_id: Optional[int] = None,
         slot_index: Optional[int] = None,
         device_id: Optional[str] = None,
+        device_ids: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
         clauses = ["event_type = 'INCOMING_SMS'"]
         parameters: list[Any] = []
@@ -1621,6 +1828,12 @@ class GatewayStore:
         if device_id is not None:
             clauses.append("device_id = ?")
             parameters.append(device_id)
+        if device_ids is not None:
+            if not device_ids:
+                return []
+            placeholders = ",".join("?" for _ in device_ids)
+            clauses.append(f"device_id IN ({placeholders})")
+            parameters.extend(sorted(device_ids))
         parameters.append(min(max(limit, 1), 100))
         with self._connect() as db:
             rows = db.execute(
@@ -1673,6 +1886,7 @@ class GatewayStore:
         after_id: Optional[int] = None,
         before_id: Optional[int] = None,
         device_id: Optional[str] = None,
+        device_ids: Optional[set[str]] = None,
     ) -> list[dict[str, Any]]:
         clauses = ["event_type = 'NOTIFICATION'"]
         parameters: list[Any] = []
@@ -1685,6 +1899,12 @@ class GatewayStore:
         if device_id is not None:
             clauses.append("device_id = ?")
             parameters.append(device_id)
+        if device_ids is not None:
+            if not device_ids:
+                return []
+            placeholders = ",".join("?" for _ in device_ids)
+            clauses.append(f"device_id IN ({placeholders})")
+            parameters.extend(sorted(device_ids))
         parameters.append(min(max(limit, 1), 100))
         with self._connect() as db:
             rows = db.execute(
@@ -1757,6 +1977,7 @@ class GatewayStore:
         slot_index: Optional[int] = None,
         event_id: Optional[int] = None,
         device_id: Optional[str] = None,
+        device_ids: Optional[set[str]] = None,
     ) -> Optional[dict[str, Any]]:
         cutoff = now_ms - max_age_seconds * 1000
         clauses = [
@@ -1774,6 +1995,12 @@ class GatewayStore:
         if device_id is not None:
             clauses.append("e.device_id = ?")
             parameters.append(device_id)
+        if device_ids is not None:
+            if not device_ids:
+                return None
+            placeholders = ",".join("?" for _ in device_ids)
+            clauses.append(f"e.device_id IN ({placeholders})")
+            parameters.extend(sorted(device_ids))
         with self._lock, self._connect() as db:
             rows = db.execute(
                 """
@@ -2101,6 +2328,32 @@ class GatewayHandler(BaseHTTPRequestHandler):
             if device_id in allowed
         }
 
+    def resolve_api_group_devices(
+        self,
+        client_id: str,
+        group_id: str,
+    ) -> Optional[set[str]]:
+        group_devices = self.app.store.group_device_ids(group_id)
+        if group_devices is None:
+            self.send_json(
+                HTTPStatus.NOT_FOUND,
+                {"error": "device group not found"},
+            )
+            return None
+        allowed = self.api_allowed_device_ids(client_id)
+        if allowed is None:
+            return group_devices
+        accessible = group_devices.intersection(allowed)
+        if not accessible:
+            # Do not let a scoped client probe the existence of groups that
+            # contain no device it is allowed to see.
+            self.send_json(
+                HTTPStatus.NOT_FOUND,
+                {"error": "device group not found"},
+            )
+            return None
+        return accessible
+
     def authorize_device_request(
         self,
         body: bytes,
@@ -2229,6 +2482,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "beforeId",
                         "slotIndex",
                         "deviceId",
+                        "groupId",
                     }
                     or any(len(values) != 1 for values in query.values())
                 ):
@@ -2260,6 +2514,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     device_id,
                 ):
                     raise ValueError("invalid deviceId")
+                group_id = query.get("groupId", [None])[0]
+                if group_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9._-]{1,64}",
+                    group_id,
+                ):
+                    raise ValueError("invalid groupId")
+                if device_id is not None and group_id is not None:
+                    raise ValueError("conflicting device filters")
             except (TypeError, ValueError):
                 self.send_json(
                     HTTPStatus.BAD_REQUEST, {"error": "invalid query"}
@@ -2273,6 +2535,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 )
             ):
                 return
+            accessible_ids = set(self.api_device_secrets(client_id))
+            if group_id is not None:
+                group_ids = self.resolve_api_group_devices(
+                    client_id,
+                    group_id,
+                )
+                if group_ids is None:
+                    return
+                accessible_ids.intersection_update(group_ids)
             messages = self.app.store.incoming_messages(
                 self.api_device_secrets(client_id),
                 limit,
@@ -2280,6 +2551,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 before_id=before_id,
                 slot_index=slot_index,
                 device_id=device_id,
+                device_ids=accessible_ids,
             )
             self.send_json(HTTPStatus.OK, {"messages": messages})
             return
@@ -2295,6 +2567,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "afterId",
                         "beforeId",
                         "deviceId",
+                        "groupId",
                     }
                     or any(len(values) != 1 for values in query.values())
                 ):
@@ -2322,6 +2595,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     device_id,
                 ):
                     raise ValueError("invalid deviceId")
+                group_id = query.get("groupId", [None])[0]
+                if group_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9._-]{1,64}",
+                    group_id,
+                ):
+                    raise ValueError("invalid groupId")
+                if device_id is not None and group_id is not None:
+                    raise ValueError("conflicting device filters")
             except (TypeError, ValueError):
                 self.send_json(
                     HTTPStatus.BAD_REQUEST, {"error": "invalid query"}
@@ -2335,12 +2616,22 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 )
             ):
                 return
+            accessible_ids = set(self.api_device_secrets(client_id))
+            if group_id is not None:
+                group_ids = self.resolve_api_group_devices(
+                    client_id,
+                    group_id,
+                )
+                if group_ids is None:
+                    return
+                accessible_ids.intersection_update(group_ids)
             notifications = self.app.store.notifications(
                 self.api_device_secrets(client_id),
                 limit,
                 after_id=after_id,
                 before_id=before_id,
                 device_id=device_id,
+                device_ids=accessible_ids,
             )
             self.send_json(
                 HTTPStatus.OK, {"notifications": notifications}
@@ -2353,7 +2644,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             try:
                 if (
-                    set(query) - {"limit", "beforeId", "deviceId"}
+                    set(query) - {"limit", "beforeId", "deviceId", "groupId"}
                     or any(len(values) != 1 for values in query.values())
                 ):
                     raise ValueError("invalid query")
@@ -2372,6 +2663,14 @@ class GatewayHandler(BaseHTTPRequestHandler):
                     device_id,
                 ):
                     raise ValueError("invalid deviceId")
+                group_id = query.get("groupId", [None])[0]
+                if group_id is not None and not re.fullmatch(
+                    r"[A-Za-z0-9._-]{1,64}",
+                    group_id,
+                ):
+                    raise ValueError("invalid groupId")
+                if device_id is not None and group_id is not None:
+                    raise ValueError("conflicting device filters")
             except (TypeError, ValueError):
                 self.send_json(
                     HTTPStatus.BAD_REQUEST,
@@ -2386,11 +2685,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 )
             ):
                 return
+            accessible_ids = set(self.api_device_secrets(client_id))
+            if group_id is not None:
+                group_ids = self.resolve_api_group_devices(
+                    client_id,
+                    group_id,
+                )
+                if group_ids is None:
+                    return
+                accessible_ids.intersection_update(group_ids)
             commands = self.app.store.list_outbound_commands(
                 self.api_device_secrets(client_id),
                 limit,
                 before_id=before_id,
                 device_id=device_id,
+                device_ids=accessible_ids,
             )
             self.send_json(
                 HTTPStatus.OK,
@@ -2424,6 +2733,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 or device["deviceId"] in allowed
             ]
             self.send_json(HTTPStatus.OK, {"devices": devices})
+            return
+        if path == "/v1/device-groups":
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
+                return
+            self.send_json(
+                HTTPStatus.OK,
+                {
+                    "groups": self.app.store.list_groups(
+                        self.api_allowed_device_ids(client_id)
+                    )
+                },
+            )
             return
         if path == "/v1/audit-log":
             client_id = self.authorize_api("pairing:create")
@@ -2489,6 +2811,76 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/v1/device-groups":
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
+                return
+            if self.api_allowed_device_ids(client_id) is not None:
+                self.send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "global device access required"},
+                )
+                return
+            try:
+                value = self.read_json_body(8_192)
+                if set(value) != {"groupId", "name", "deviceIds"}:
+                    raise ValueError("invalid request fields")
+                group_id = value.get("groupId")
+                name = value.get("name")
+                device_ids = value.get("deviceIds")
+                if (
+                    not isinstance(group_id, str)
+                    or not re.fullmatch(
+                        r"[A-Za-z0-9._-]{1,64}",
+                        group_id,
+                    )
+                    or not isinstance(name, str)
+                    or not isinstance(device_ids, list)
+                    or not all(
+                        isinstance(device_id, str)
+                        and re.fullmatch(
+                            r"[A-Za-z0-9._-]{1,64}",
+                            device_id,
+                        )
+                        for device_id in device_ids
+                    )
+                    or any(
+                        not self.api_can_access_device(
+                            client_id,
+                            device_id,
+                        )
+                        for device_id in device_ids
+                    )
+                ):
+                    raise ValueError("invalid device group")
+                group = self.app.store.create_group(
+                    group_id,
+                    name,
+                    device_ids,
+                    int(time.time() * 1000),
+                )
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as error:
+                status = (
+                    HTTPStatus.CONFLICT
+                    if str(error) == "group already exists"
+                    else HTTPStatus.BAD_REQUEST
+                )
+                self.send_json(status, {"error": str(error)})
+                return
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_GROUP_CREATE",
+                None,
+                "SUCCESS",
+                {"groupId": group_id, "deviceCount": len(device_ids)},
+            )
+            self.send_json(HTTPStatus.CREATED, {"group": group})
+            return
         lifecycle_match = re.fullmatch(
             r"/v1/devices/([A-Za-z0-9._-]{1,64})/(restore|purge)",
             path,
@@ -3125,6 +3517,77 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         path = urlparse(self.path).path
+        group_match = re.fullmatch(
+            r"/v1/device-groups/([A-Za-z0-9._-]{1,64})",
+            path,
+        )
+        if group_match:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
+                return
+            if self.api_allowed_device_ids(client_id) is not None:
+                self.send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "global device access required"},
+                )
+                return
+            group_id = group_match.group(1)
+            try:
+                value = self.read_json_body(8_192)
+                if not value or set(value) - {"name", "deviceIds"}:
+                    raise ValueError("invalid request fields")
+                name = value.get("name")
+                device_ids = value.get("deviceIds")
+                if name is not None and not isinstance(name, str):
+                    raise ValueError("invalid name")
+                if device_ids is not None and (
+                    not isinstance(device_ids, list)
+                    or not all(
+                        isinstance(device_id, str)
+                        and re.fullmatch(
+                            r"[A-Za-z0-9._-]{1,64}",
+                            device_id,
+                        )
+                        and self.api_can_access_device(
+                            client_id,
+                            device_id,
+                        )
+                        for device_id in device_ids
+                    )
+                ):
+                    raise ValueError("invalid deviceIds")
+                group = self.app.store.update_group(
+                    group_id,
+                    name,
+                    device_ids,
+                    int(time.time() * 1000),
+                )
+            except (
+                TypeError,
+                ValueError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as error:
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"error": str(error)},
+                )
+                return
+            if group is None:
+                self.send_json(
+                    HTTPStatus.NOT_FOUND,
+                    {"error": "device group not found"},
+                )
+                return
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_GROUP_UPDATE",
+                None,
+                "SUCCESS",
+                {"groupId": group_id},
+            )
+            self.send_json(HTTPStatus.OK, {"group": group})
+            return
         # PUT /v1/devices/{device_id}
         if path.startswith("/v1/devices/"):
             client_id = self.authorize_api("pairing:create")
@@ -3181,6 +3644,36 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
+        group_match = re.fullmatch(
+            r"/v1/device-groups/([A-Za-z0-9._-]{1,64})",
+            path,
+        )
+        if group_match:
+            client_id = self.authorize_api("pairing:create")
+            if client_id is None:
+                return
+            if self.api_allowed_device_ids(client_id) is not None:
+                self.send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "global device access required"},
+                )
+                return
+            group_id = group_match.group(1)
+            if not self.app.store.delete_group(group_id):
+                self.send_json(
+                    HTTPStatus.NOT_FOUND,
+                    {"error": "device group not found"},
+                )
+                return
+            self.app.store.record_audit(
+                client_id,
+                "DEVICE_GROUP_DELETE",
+                None,
+                "SUCCESS",
+                {"groupId": group_id},
+            )
+            self.send_json(HTTPStatus.OK, {"deleted": True})
+            return
         # DELETE /v1/devices/{device_id}
         if path.startswith("/v1/devices/"):
             client_id = self.authorize_api("pairing:create")

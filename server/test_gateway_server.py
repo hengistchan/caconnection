@@ -501,7 +501,7 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         status, version = self.api_request("GET", "/version")
         self.assertEqual(200, status)
         self.assertEqual("caconnection-gateway", version["service"])
-        self.assertEqual("0.3.0", version["version"])
+        self.assertEqual("0.4.0", version["version"])
         self.assertEqual(1, version["apiVersion"])
         self.assertEqual(2, version["protocolSchemaVersion"])
 
@@ -1658,6 +1658,311 @@ class GatewayHttpsIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(200, status)
         self.assertEqual([], scoped_outbound["outboundMessages"])
+
+    def test_gateway_groups_crud_and_read_filters(self) -> None:
+        device_a_secret = b"g" * 32
+        device_b_secret = b"h" * 32
+        devices = (
+            ("group-device-a", device_a_secret),
+            ("group-device-b", device_b_secret),
+        )
+        for device_id, secret in devices:
+            self.store.add_device(
+                device_id,
+                base64.b64encode(secret).decode(),
+                device_id,
+                int(time.time() * 1000),
+            )
+            self.server.devices[device_id] = secret
+            sms = self.encrypted_body(
+                event_type="INCOMING_SMS",
+                slot_index=0,
+                device_id=device_id,
+                secret=secret,
+                source_event_id=f"{device_id}-message",
+                payload={
+                    "originatingAddress": device_id,
+                    "body": f"Message from {device_id}",
+                    "partCount": 1,
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=sms,
+                    device_id=device_id,
+                    secret=secret,
+                    nonce=f"{device_id}-sms-nonce",
+                    idempotency_key=f"{device_id}-sms-key",
+                )[0],
+            )
+            notification = self.encrypted_body(
+                event_type="NOTIFICATION",
+                device_id=device_id,
+                secret=secret,
+                source_event_id=f"{device_id}-notification",
+                payload={
+                    "eventType": "POSTED",
+                    "sourcePackage": "com.example.group",
+                    "notificationId": 1,
+                    "postedAt": 1_000,
+                    "observedAt": 1_100,
+                    "title": device_id,
+                    "body": f"Notification from {device_id}",
+                },
+            )
+            self.assertEqual(
+                201,
+                self.request(
+                    body=notification,
+                    device_id=device_id,
+                    secret=secret,
+                    nonce=f"{device_id}-notification-nonce",
+                    idempotency_key=f"{device_id}-notification-key",
+                )[0],
+            )
+            self.assertEqual(
+                201,
+                self.api_request(
+                    "POST",
+                    "/v1/outbound-messages",
+                    token=self.api_token,
+                    value={
+                        "deviceId": device_id,
+                        "slotIndex": 0,
+                        "recipient": "10086",
+                        "body": f"Outbound from {device_id}",
+                        "idempotencyKey": f"{device_id}-outbound",
+                    },
+                )[0],
+            )
+        self.server.refresh_devices()
+
+        status, created = self.api_request(
+            "POST",
+            "/v1/device-groups",
+            token=self.api_token,
+            value={
+                "groupId": "primary",
+                "name": "Primary gateways",
+                "deviceIds": ["group-device-a"],
+            },
+        )
+        self.assertEqual(201, status)
+        self.assertEqual(
+            ["group-device-a"],
+            created["group"]["deviceIds"],
+        )
+
+        for path, collection in (
+            ("/v1/messages?groupId=primary&limit=1", "messages"),
+            (
+                "/v1/notifications?groupId=primary&limit=1",
+                "notifications",
+            ),
+            (
+                "/v1/outbound-messages?groupId=primary&limit=1",
+                "outboundMessages",
+            ),
+        ):
+            status, response = self.api_request(
+                "GET",
+                path,
+                token=self.api_token,
+            )
+            self.assertEqual(200, status)
+            self.assertEqual(1, len(response[collection]))
+            self.assertEqual(
+                "group-device-a",
+                response[collection][0]["deviceId"],
+            )
+
+        for path in (
+            "/v1/messages?groupId=missing",
+            "/v1/notifications?groupId=missing",
+            "/v1/outbound-messages?groupId=missing",
+        ):
+            self.assertEqual(
+                404,
+                self.api_request("GET", path, token=self.api_token)[0],
+            )
+        self.assertEqual(
+            400,
+            self.api_request(
+                "GET",
+                "/v1/messages?deviceId=group-device-a&groupId=primary",
+                token=self.api_token,
+            )[0],
+        )
+
+        scoped_token = "group-scoped-token"
+        self.server.api_clients["group-scoped"] = {
+            "token_sha256": __import__("hashlib").sha256(
+                scoped_token.encode()
+            ).hexdigest(),
+            "scopes": ["messages:read", "pairing:create"],
+            "allowed_device_ids": ["group-device-a"],
+        }
+        status, scoped_messages = self.api_request(
+            "GET",
+            "/v1/messages?limit=1",
+            token=scoped_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["group-device-a"],
+            [message["deviceId"] for message in scoped_messages["messages"]],
+        )
+
+        status, updated = self.api_request(
+            "PUT",
+            "/v1/device-groups/primary",
+            token=self.api_token,
+            value={
+                "name": "Secondary gateways",
+                "deviceIds": ["group-device-b"],
+            },
+        )
+        self.assertEqual(200, status)
+        self.assertEqual(
+            ["group-device-b"],
+            updated["group"]["deviceIds"],
+        )
+        for path, collection in (
+            ("/v1/messages?groupId=primary&limit=10", "messages"),
+            (
+                "/v1/notifications?groupId=primary&limit=10",
+                "notifications",
+            ),
+            (
+                "/v1/outbound-messages?groupId=primary&limit=10",
+                "outboundMessages",
+            ),
+        ):
+            status, response = self.api_request(
+                "GET",
+                path,
+                token=self.api_token,
+            )
+            self.assertEqual(200, status)
+            self.assertEqual(
+                {"group-device-b"},
+                {item["deviceId"] for item in response[collection]},
+            )
+
+        status, scoped_groups = self.api_request(
+            "GET",
+            "/v1/device-groups",
+            token=scoped_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual([], scoped_groups["groups"])
+        self.assertEqual(
+            404,
+            self.api_request(
+                "GET",
+                "/v1/messages?groupId=primary",
+                token=scoped_token,
+            )[0],
+        )
+        self.assertEqual(
+            403,
+            self.api_request(
+                "DELETE",
+                "/v1/device-groups/primary",
+                token=scoped_token,
+            )[0],
+        )
+        status, scoped_audit = self.api_request(
+            "GET",
+            "/v1/audit-log?limit=100",
+            token=scoped_token,
+        )
+        self.assertEqual(200, status)
+        self.assertFalse(
+            any(
+                entry["action"].startswith("DEVICE_GROUP_")
+                for entry in scoped_audit["entries"]
+            )
+        )
+
+        status, global_audit = self.api_request(
+            "GET",
+            "/v1/audit-log?limit=100",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        group_entries = [
+            entry
+            for entry in global_audit["entries"]
+            if entry["action"].startswith("DEVICE_GROUP_")
+        ]
+        self.assertEqual(
+            {"DEVICE_GROUP_CREATE", "DEVICE_GROUP_UPDATE"},
+            {entry["action"] for entry in group_entries},
+        )
+        serialized_audit = json.dumps(group_entries).lower()
+        for sensitive_name in ("body", "otp", "recipient", "secret"):
+            self.assertNotIn(sensitive_name, serialized_audit)
+
+        self.assertEqual(
+            201,
+            self.api_request(
+                "POST",
+                "/v1/device-groups",
+                token=self.api_token,
+                value={
+                    "groupId": "delete-only",
+                    "name": "Delete without devices",
+                    "deviceIds": ["group-device-a"],
+                },
+            )[0],
+        )
+        self.assertEqual(
+            (200, {"deleted": True}),
+            self.api_request(
+                "DELETE",
+                "/v1/device-groups/delete-only",
+                token=self.api_token,
+            ),
+        )
+        self.assertIsNotNone(self.store.get_device("group-device-a"))
+
+        self.assertEqual(
+            200,
+            self.api_request(
+                "POST",
+                "/v1/devices/group-device-b/purge",
+                token=self.api_token,
+                value={"confirmation": "PURGE group-device-b"},
+            )[0],
+        )
+        status, groups = self.api_request(
+            "GET",
+            "/v1/device-groups",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        primary = next(
+            group for group in groups["groups"]
+            if group["groupId"] == "primary"
+        )
+        self.assertEqual([], primary["deviceIds"])
+        status, messages = self.api_request(
+            "GET",
+            "/v1/messages?groupId=primary",
+            token=self.api_token,
+        )
+        self.assertEqual(200, status)
+        self.assertEqual([], messages["messages"])
+        self.assertEqual(
+            (200, {"deleted": True}),
+            self.api_request(
+                "DELETE",
+                "/v1/device-groups/primary",
+                token=self.api_token,
+            ),
+        )
 
     def test_api_rate_limit_returns_retry_after(self) -> None:
         self.server.api_requests_per_minute = 1

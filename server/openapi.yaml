@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: CA Connection Gateway API
-  version: 0.3.0
+  version: 0.4.0
   description: >
     Production API for Android gateway ingestion, authenticated SMS and
     notification retrieval, remote outbound SMS commands, device management,
@@ -394,6 +394,7 @@ paths:
   /v1/messages:
     get:
       summary: Read decrypted incoming SMS messages
+      description: deviceId and groupId are mutually exclusive.
       security:
         - bearerAuth: []
       parameters:
@@ -428,6 +429,14 @@ paths:
           schema:
             type: string
             pattern: "^[A-Za-z0-9._-]{1,64}$"
+        - in: query
+          name: groupId
+          description: >
+            Restrict results to members of one Gateway group. Scoped clients
+            receive not found when the group has no accessible members.
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
       responses:
         "200":
           description: Messages, including sensitive sender and body fields
@@ -447,11 +456,14 @@ paths:
           description: API authentication failed
         "403":
           description: Token lacks messages:read scope
+        "404":
+          description: Gateway group not found or not accessible
         "429":
           description: Rate limit exceeded
   /v1/notifications:
     get:
       summary: Read decrypted notifications captured from allowlisted apps
+      description: deviceId and groupId are mutually exclusive.
       security:
         - bearerAuth: []
       parameters:
@@ -481,6 +493,14 @@ paths:
           schema:
             type: string
             pattern: "^[A-Za-z0-9._-]{1,64}$"
+        - in: query
+          name: groupId
+          description: >
+            Restrict results to members of one Gateway group. Scoped clients
+            receive not found when the group has no accessible members.
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
       responses:
         "200":
           description: Notifications, including sensitive title and body fields
@@ -500,11 +520,16 @@ paths:
           description: API authentication failed
         "403":
           description: Token lacks messages:read scope
+        "404":
+          description: Gateway group not found or not accessible
         "429":
           description: Rate limit exceeded
   /v1/outbound-messages:
     get:
       summary: List remote outbound SMS commands and their current status
+      description: >
+        deviceId and groupId are mutually exclusive. Groups are read-only
+        filters and never select a target for a new outbound command.
       security:
         - bearerAuth: []
       parameters:
@@ -523,6 +548,14 @@ paths:
             minimum: 1
         - in: query
           name: deviceId
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
+        - in: query
+          name: groupId
+          description: >
+            Restrict results to members of one Gateway group. Scoped clients
+            receive not found when the group has no accessible members.
           schema:
             type: string
             pattern: "^[A-Za-z0-9._-]{1,64}$"
@@ -547,6 +580,8 @@ paths:
           description: API authentication failed
         "403":
           description: Token lacks messages:send scope
+        "404":
+          description: Gateway group not found or not accessible
         "429":
           description: Rate limit exceeded
     post:
@@ -578,6 +613,123 @@ paths:
           description: Token lacks messages:send scope
         "409":
           description: Idempotency key was already used for a different command
+        "429":
+          description: Rate limit exceeded
+  /v1/device-groups:
+    get:
+      summary: List Gateway groups and their accessible members
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Gateway groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/GatewayDeviceGroup"
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks pairing:create scope
+    post:
+      summary: Create a Gateway group
+      description: Group membership never enables automatic SMS rerouting.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayDeviceGroupCreate"
+      responses:
+        "201":
+          description: Group created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/GatewayDeviceGroup"
+        "400":
+          description: Invalid group or unknown device
+        "401":
+          description: API authentication failed
+        "403":
+          description: Global device access is required
+        "409":
+          description: Group already exists
+        "429":
+          description: Rate limit exceeded
+  /v1/device-groups/{groupId}:
+    parameters:
+      - in: path
+        name: groupId
+        required: true
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+    put:
+      summary: Rename a Gateway group or replace its members
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GatewayDeviceGroupUpdate"
+      responses:
+        "200":
+          description: Group updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [group]
+                properties:
+                  group:
+                    $ref: "#/components/schemas/GatewayDeviceGroup"
+        "400":
+          description: Invalid group update
+        "401":
+          description: API authentication failed
+        "403":
+          description: Global device access is required
+        "404":
+          description: Group not found
+        "429":
+          description: Rate limit exceeded
+    delete:
+      summary: Delete a Gateway group without deleting its devices
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Group deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deleted]
+                properties:
+                  deleted:
+                    type: boolean
+                    const: true
+        "401":
+          description: API authentication failed
+        "403":
+          description: Global device access is required
+        "404":
+          description: Group not found
         "429":
           description: Rate limit exceeded
   /v1/otp/claim:
@@ -785,6 +937,61 @@ components:
           type: boolean
         observedAt:
           type: integer
+    GatewayDeviceGroup:
+      type: object
+      additionalProperties: false
+      required: [groupId, name, deviceIds, createdAt, updatedAt]
+      properties:
+        groupId:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        deviceIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
+        createdAt:
+          type: integer
+        updatedAt:
+          type: integer
+    GatewayDeviceGroupCreate:
+      type: object
+      additionalProperties: false
+      required: [groupId, name, deviceIds]
+      properties:
+        groupId:
+          type: string
+          pattern: "^[A-Za-z0-9._-]{1,64}$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        deviceIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
+    GatewayDeviceGroupUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        deviceIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            pattern: "^[A-Za-z0-9._-]{1,64}$"
     DeviceCreate:
       type: object
       additionalProperties: false
