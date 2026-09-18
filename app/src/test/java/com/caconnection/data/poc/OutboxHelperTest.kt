@@ -97,7 +97,11 @@ class OutboxHelperTest {
                         displayName = "SIM 1",
                         active = true
                     )
-                )
+                ),
+                receiverInvokedAt = 4_900L,
+                receiverInvokedAction = "SMS_RECEIVED",
+                receiverParseFailureAt = 4_950L,
+                receiverParseFailureReason = "NO_MESSAGES"
             )
         )
 
@@ -106,6 +110,17 @@ class OutboxHelperTest {
         assertTrue(outbox.payloadData.contains("\"targetSdk\":37"))
         assertTrue(outbox.payloadData.contains("\"receiveMode\":\"OBSERVER\""))
         assertTrue(outbox.payloadData.contains("\"slotIndex\":0"))
+        assertTrue(outbox.payloadData.contains("\"receiverInvokedAt\":4900"))
+        assertTrue(
+            outbox.payloadData.contains(
+                "\"receiverInvokedAction\":\"SMS_RECEIVED\""
+            )
+        )
+        assertTrue(
+            outbox.payloadData.contains(
+                "\"receiverParseFailureReason\":\"NO_MESSAGES\""
+            )
+        )
         assertTrue(!outbox.payloadData.contains("phoneNumber"))
         assertTrue(!outbox.payloadData.contains("iccid", ignoreCase = true))
         assertTrue(!outbox.payloadData.contains("imsi", ignoreCase = true))

@@ -250,7 +250,11 @@ object OutboxHelper {
         val receiveSmsGranted: Boolean,
         val sendSmsGranted: Boolean,
         val readPhoneStateGranted: Boolean,
-        val lines: List<DeviceStateLine>
+        val lines: List<DeviceStateLine>,
+        val receiverInvokedAt: Long? = null,
+        val receiverInvokedAction: String? = null,
+        val receiverParseFailureAt: Long? = null,
+        val receiverParseFailureReason: String? = null
     )
 
     data class NotificationPayload(
