@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { backupDatabase } from '../../src/operations/backup-database.js';
@@ -27,12 +27,17 @@ describe('database operations', () => {
     database.close();
 
     const backupPath = await backupDatabase(databasePath, backupDirectory, 14);
+    expect(existsSync(`${backupPath}-wal`)).toBe(false);
+    expect(existsSync(`${backupPath}-shm`)).toBe(false);
+    expect(readdirSync(backupDirectory).some(name => name.includes('.partial'))).toBe(false);
 
     const changed = new DatabaseSync(databasePath);
     changed.prepare('UPDATE test_data SET value = ?').run('after-backup');
     changed.close();
 
     await restoreDatabase(backupPath, databasePath);
+    expect(existsSync(`${databasePath}.restore-wal`)).toBe(false);
+    expect(existsSync(`${databasePath}.restore-shm`)).toBe(false);
     const restored = new DatabaseSync(databasePath, { readOnly: true });
     expect(restored.prepare('SELECT value FROM test_data').get()).toEqual({ value: 'before-backup' });
     expect(restored.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });

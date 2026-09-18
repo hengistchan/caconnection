@@ -8,7 +8,7 @@ export async function restoreDatabase(sourcePath: string, databasePath: string):
 
   mkdirSync(dirname(databasePath), { recursive: true });
   const temporary = `${databasePath}.restore`;
-  for (const path of [temporary, `${temporary}-wal`, `${temporary}-shm`]) rmSync(path, { force: true });
+  removeDatabaseFiles(temporary);
 
   const source = new DatabaseSync(sourcePath, { readOnly: true });
   try {
@@ -18,13 +18,13 @@ export async function restoreDatabase(sourcePath: string, databasePath: string):
   }
 
   try {
-    assertIntegrity(temporary, 'restored database integrity check failed');
+    finalizeStandaloneDatabase(temporary, 'restored database integrity check failed');
     chmodSync(temporary, 0o600);
     rmSync(`${databasePath}-wal`, { force: true });
     rmSync(`${databasePath}-shm`, { force: true });
     renameSync(temporary, databasePath);
   } finally {
-    rmSync(temporary, { force: true });
+    removeDatabaseFiles(temporary);
   }
 }
 
@@ -36,6 +36,26 @@ function assertIntegrity(path: string, message: string): void {
   } finally {
     database.close();
   }
+}
+
+function finalizeStandaloneDatabase(path: string, message: string): void {
+  const database = new DatabaseSync(path);
+  try {
+    database.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    database.exec('PRAGMA journal_mode = DELETE');
+    const row = database.prepare('PRAGMA integrity_check').get() as { integrity_check?: string };
+    if (row.integrity_check !== 'ok') throw new Error(message);
+  } finally {
+    database.close();
+  }
+  rmSync(`${path}-wal`, { force: true });
+  rmSync(`${path}-shm`, { force: true });
+}
+
+function removeDatabaseFiles(path: string): void {
+  rmSync(path, { force: true });
+  rmSync(`${path}-wal`, { force: true });
+  rmSync(`${path}-shm`, { force: true });
 }
 
 async function main(): Promise<void> {
