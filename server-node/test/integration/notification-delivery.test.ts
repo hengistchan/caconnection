@@ -119,6 +119,26 @@ describe('Feishu notification delivery', () => {
     expect(full).toContain('482913');
   });
 
+  it('renders timestamps in UTC+8 regardless of host time zone', () => {
+    const base = {
+      id: 1,
+      eventId: 1,
+      kind: 'EVENT' as const,
+      attemptCount: 1,
+      createdAt: 1_000,
+      deviceId,
+      eventType: 'INCOMING_SMS',
+      receivedAt: Date.UTC(2026, 0, 1, 16, 30, 5),
+      slotIndex: 0,
+      envelopeJson: '{}',
+      contentMode: 'REDACTED' as const,
+      payload: { originatingAddress: '10086', body: 'hi' },
+    };
+    const rendered = renderFeishuNotification(base);
+    expect(rendered).toContain('2026-01-02 00:30:05');
+    expect(rendered).not.toMatch(/UTC|Z\b/);
+  });
+
   it('retries failed delivery and later marks it sent', async () => {
     notificationRepo.updateSettings(true, 'FULL', 1_000);
     const payload = { originatingAddress: '10086', body: 'hello' };

@@ -99,8 +99,25 @@ function maskIdentifier(value: string | null): string {
   return `${value.slice(0, 3)}${'*'.repeat(value.length - 7)}${value.slice(-4)}`;
 }
 
+const FEISHU_TIME_ZONE_OFFSET_MS = 8 * 3_600_000;
+
 function formatTime(timestampMs: number): string {
-  return new Date(timestampMs).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+  const shifted = new Date(timestampMs + FEISHU_TIME_ZONE_OFFSET_MS);
+  const date = [
+    shifted.getUTCFullYear(),
+    padded(shifted.getUTCMonth() + 1),
+    padded(shifted.getUTCDate()),
+  ].join('-');
+  const time = [
+    padded(shifted.getUTCHours()),
+    padded(shifted.getUTCMinutes()),
+    padded(shifted.getUTCSeconds()),
+  ].join(':');
+  return `${date} ${time}`;
+}
+
+function padded(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 export function isNotificationContentMode(value: string): value is NotificationContentMode {
