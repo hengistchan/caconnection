@@ -26,6 +26,7 @@ services:
     cpus: 0.50
     networks:
       - backend
+      - egress
     logging:
       driver: json-file
       options:
@@ -153,6 +154,7 @@ networks:
   edge:
   backend:
     internal: true
+  egress:
 
 secrets:
   gateway_config:
