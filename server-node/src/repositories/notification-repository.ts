@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
+  CALL_IDENTITY_CORRELATION_WINDOW_MS,
   DEFAULT_NOTIFICATION_RETRY_SECONDS,
   MAX_NOTIFICATION_RETRY_SECONDS,
   NOTIFICATION_CONTENT_MODES,
@@ -132,13 +133,70 @@ export class NotificationRepository {
     });
   }
 
-  enqueueEvent(eventId: number, contentMode: NotificationContentMode, nowMs: number): void {
+  enqueueEvent(
+    eventId: number,
+    contentMode: NotificationContentMode,
+    nowMs: number,
+    nextAttemptAt = nowMs,
+  ): void {
     this.db.prepare(`
       INSERT OR IGNORE INTO notification_outbox(
         channel, event_id, kind, content_mode, status, attempt_count,
         next_attempt_at, lease_started_at, created_at, sent_at, last_error
       ) VALUES ('FEISHU', ?, 'EVENT', ?, 'PENDING', 0, ?, NULL, ?, NULL, NULL)
-    `).run(eventId, contentMode, nowMs, nowMs);
+    `).run(eventId, contentMode, nextAttemptAt, nowMs);
+  }
+
+  findCallIdentityEnvelope(eventId: number): string | null {
+    const row = queryOne<{ envelope_json: string }>(this.db, `
+      SELECT identity.envelope_json
+      FROM events ringing
+      JOIN events identity
+        ON identity.device_id = ringing.device_id
+       AND identity.event_type = 'CALL_IDENTITY'
+       AND identity.created_at BETWEEN
+         ringing.created_at - 1000
+         AND ringing.created_at + ?
+       AND (
+         ringing.slot_index IS NULL
+         OR identity.slot_index IS NULL
+         OR identity.slot_index = ringing.slot_index
+       )
+      WHERE ringing.id = ?
+        AND ringing.event_type = 'CALL_STATE'
+      ORDER BY ABS(identity.created_at - ringing.created_at), identity.id
+      LIMIT 1
+    `, CALL_IDENTITY_CORRELATION_WINDOW_MS, eventId);
+    return row?.envelope_json ?? null;
+  }
+
+  expediteRelatedCallNotification(identityEventId: number, nowMs: number): void {
+    this.db.prepare(`
+      UPDATE notification_outbox
+      SET next_attempt_at = MIN(next_attempt_at, ?)
+      WHERE id = (
+        SELECT notification.id
+        FROM events identity
+        JOIN events ringing
+          ON ringing.device_id = identity.device_id
+         AND ringing.event_type = 'CALL_STATE'
+         AND ringing.created_at BETWEEN
+           identity.created_at - ?
+           AND identity.created_at + 1000
+         AND (
+           ringing.slot_index IS NULL
+           OR identity.slot_index IS NULL
+           OR identity.slot_index = ringing.slot_index
+         )
+        JOIN notification_outbox notification
+          ON notification.event_id = ringing.id
+         AND notification.status IN ('PENDING', 'RETRY')
+        WHERE identity.id = ?
+          AND identity.event_type = 'CALL_IDENTITY'
+        ORDER BY ABS(identity.created_at - ringing.created_at), notification.id
+        LIMIT 1
+      )
+    `).run(nowMs, CALL_IDENTITY_CORRELATION_WINDOW_MS, identityEventId);
   }
 
   enqueueTest(nowMs: number): number {

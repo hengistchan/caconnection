@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
+import { CALL_NOTIFICATION_IDENTITY_WAIT_MS } from '../../src/config/constants.js';
 import { parseRuntimeConfig } from '../../src/config/runtime-config.js';
 import { initializeDatabase } from '../../src/database/database.js';
 import { encryptPayload } from '../../src/crypto/payload-crypto.js';
@@ -114,6 +115,8 @@ describe('Feishu notification delivery', () => {
 
     expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
       .toMatchObject({ count: 1 });
+    expect(db.prepare('SELECT next_attempt_at FROM notification_outbox').get())
+      .toMatchObject({ next_attempt_at: 2_000 + CALL_NOTIFICATION_IDENTITY_WAIT_MS });
   });
 
   it('does not queue duplicate ringing states for the same call session', () => {
@@ -170,6 +173,58 @@ describe('Feishu notification delivery', () => {
     expect(rendered).toContain('+86*******5678');
     expect(rendered).not.toContain('+8613812345678');
     expect(rendered).toContain('SIM1');
+    expect(rendered).toContain('\n设备：');
+    expect(rendered).not.toContain('\\n');
+  });
+
+  it('waits for and merges the related call identity before delivery', async () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const ringing = {
+      sessionId: 'call-session-with-identity',
+      state: 'RINGING',
+      observedAt: 2_000,
+    };
+    ingestion.accept(
+      deviceId,
+      'call-ringing-with-identity',
+      'call-ringing-nonce-with-identity',
+      encryptedEnvelopeAt('CALL_STATE', ringing, 2_000, 0),
+      ringing,
+      2_000,
+    );
+    const identity = {
+      callerAddress: '+8613812345678',
+      callerDisplayName: 'Example caller',
+      observedAt: 2_300,
+    };
+    ingestion.accept(
+      deviceId,
+      'call-identity',
+      'call-identity-nonce',
+      encryptedEnvelopeAt('CALL_IDENTITY', identity, 2_300, 0),
+      identity,
+      2_300,
+    );
+    expect(db.prepare('SELECT next_attempt_at FROM notification_outbox').get())
+      .toMatchObject({ next_attempt_at: 2_300 });
+    const transport = new RecordingTransport();
+    const dispatcher = new NotificationDispatcher(
+      notificationRepo,
+      transport,
+      deviceRepo.loadSecrets(),
+    );
+
+    expect(await dispatcher.deliverOnce(
+      2_299,
+    )).toBe(false);
+    expect(await dispatcher.deliverOnce(
+      2_300,
+    )).toBe(true);
+    expect(transport.texts).toHaveLength(1);
+    expect(transport.texts[0]).toContain('来电号码：+8613812345678');
+    expect(transport.texts[0]).toContain('联系人：Example caller');
+    expect(transport.texts[0]).toContain('\n设备：');
+    expect(transport.texts[0]).not.toContain('\\n');
   });
 
   it('renders redacted and full messages with distinct privacy boundaries', () => {
@@ -268,14 +323,23 @@ describe('Feishu notification delivery', () => {
   });
 
   function encryptedEnvelope(eventType: string, payload: Record<string, unknown>) {
+    return encryptedEnvelopeAt(eventType, payload, 1_500, 1);
+  }
+
+  function encryptedEnvelopeAt(
+    eventType: string,
+    payload: Record<string, unknown>,
+    createdAt: number,
+    slotIndex: number,
+  ) {
     return encryptPayload({
       schemaVersion: 1,
       deliveryId: `delivery-${eventType}`,
       sourceEventId: `source-${eventType}`,
       eventType,
-      createdAt: 1_500,
+      createdAt,
       subscriptionId: 1,
-      slotIndex: 1,
+      slotIndex,
       payload,
     }, deviceId, secret);
   }

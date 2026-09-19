@@ -85,7 +85,7 @@ function renderIncomingCall(
   if (displayName) {
     lines.push(`联系人：${delivery.contentMode === 'REDACTED' ? maskIdentifier(displayName) : displayName}`);
   }
-  return lines.join('\\n');
+  return lines.join('\n');
 }
 
 function renderCapturedNotification(

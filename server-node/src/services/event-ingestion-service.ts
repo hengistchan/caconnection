@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { CALL_NOTIFICATION_IDENTITY_WAIT_MS } from '../config/constants.js';
 import type { DeviceRepository } from '../repositories/device-repository.js';
 import type { DeviceStateRepository } from '../repositories/device-state-repository.js';
 import type { EventRepository } from '../repositories/event-repository.js';
@@ -39,6 +40,17 @@ export class EventIngestionService {
       );
       const inserted = insertion.inserted;
 
+      if (
+        inserted
+        && insertion.eventId !== null
+        && envelope.eventType === 'CALL_IDENTITY'
+      ) {
+        this.notificationRepo.expediteRelatedCallNotification(
+          insertion.eventId,
+          nowMs,
+        );
+      }
+
       const notificationMode = this.notificationRepo.getActiveMode();
       const shouldNotifyCallRinging = isCallRinging
         && insertion.eventId !== null
@@ -59,6 +71,10 @@ export class EventIngestionService {
           insertion.eventId,
           notificationMode,
           nowMs,
+          isCallRinging
+            && this.notificationRepo.findCallIdentityEnvelope(insertion.eventId) === null
+            ? nowMs + CALL_NOTIFICATION_IDENTITY_WAIT_MS
+            : nowMs,
         );
       }
 

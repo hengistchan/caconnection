@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { CALL_IDENTITY_CORRELATION_WINDOW_MS } from '../config/constants.js';
 import { decryptPayload } from '../crypto/payload-crypto.js';
 import { queryAll } from '../database/helpers.js';
 
@@ -45,8 +46,6 @@ export interface CallRecord {
 interface MutableCallRecord extends CallRecord {
   identityObservedAt: number | null;
 }
-
-const IDENTITY_CORRELATION_WINDOW_MS = 10_000;
 
 export class CallRepository {
   constructor(private readonly db: DatabaseSync) {}
@@ -226,7 +225,7 @@ function nearestCall(
         || call.slotIndex === null
         || call.slotIndex === identityRow.slot_index
       )
-      && Math.abs(call.startedAt - observedAt) <= IDENTITY_CORRELATION_WINDOW_MS,
+      && Math.abs(call.startedAt - observedAt) <= CALL_IDENTITY_CORRELATION_WINDOW_MS,
     )
     .sort((left, right) =>
       Math.abs(left.startedAt - observedAt)

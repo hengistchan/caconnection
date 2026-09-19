@@ -62,7 +62,24 @@ export class NotificationDispatcher {
           delivery.deviceId,
           secret,
         );
-        renderable.payload = envelope.payload as Record<string, unknown>;
+        let payload = envelope.payload as Record<string, unknown>;
+        if (delivery.eventType === 'CALL_STATE' && delivery.eventId !== null) {
+          const identityEnvelopeJson = this.repository.findCallIdentityEnvelope(
+            delivery.eventId,
+          );
+          if (identityEnvelopeJson) {
+            const identityEnvelope = decryptPayload(
+              JSON.parse(identityEnvelopeJson),
+              delivery.deviceId,
+              secret,
+            );
+            payload = {
+              ...payload,
+              ...(identityEnvelope.payload as Record<string, unknown>),
+            };
+          }
+        }
+        renderable.payload = payload;
       }
       const text = renderFeishuNotification(renderable);
       if (text === null) {
