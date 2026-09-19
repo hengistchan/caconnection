@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 
 import argparse
+import http.client
 import json
 import re
+import socket
 import ssl
 import sys
 import time
@@ -10,7 +12,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import urlencode, urlparse
 
-from server.protocol_smoke import SniHttpsConnection
 from server.setup_production import write_private
 
 
@@ -18,6 +19,41 @@ JsonRequest = Callable[
     [str, str, str, str, Optional[dict[str, Any]], Optional[Path], Optional[str]],
     tuple[int, dict[str, Any]],
 ]
+
+
+class SniHttpsConnection(http.client.HTTPSConnection):
+    """Connect to one host while validating TLS for another server name."""
+
+    def __init__(
+        self,
+        connect_host: str,
+        server_name: str,
+        port: int,
+        context: ssl.SSLContext,
+        timeout: float,
+    ) -> None:
+        super().__init__(
+            connect_host,
+            port=port,
+            context=context,
+            timeout=timeout,
+        )
+        self._server_name = server_name
+
+    def connect(self) -> None:
+        sock = socket.create_connection(
+            (self.host, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        if self._tunnel_host:
+            self.sock = sock
+            self._tunnel()
+            sock = self.sock
+        self.sock = self._context.wrap_socket(
+            sock,
+            server_hostname=self._server_name,
+        )
 
 
 def validate_endpoint(endpoint: str) -> str:

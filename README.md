@@ -289,8 +289,7 @@ See [docs/PHASE3B_CALLER_ID_REPORT.md](docs/PHASE3B_CALLER_ID_REPORT.md).
 
 ## Phase 4B encrypted local transport
 
-When configured from the `Transport` page, WorkManager sends a unified
-schema-versioned envelope to the Mac receiver:
+Historically, Phase 4 used a Python receiver on the development Mac:
 
 ```text
 Room Outbox
@@ -298,29 +297,15 @@ Room Outbox
   -> HMAC-SHA256 signed request
   -> pinned-certificate HTTPS
   -> local Wi-Fi
-  -> Python receiver
+  -> local receiver
   -> certificate + timestamp + nonce + signature verification
   -> encrypted SQLite idempotent insert
   -> localhost-only browser viewer
 ```
 
-If transport is disabled or incomplete, the application falls back to
-`MockTransport`. Local runtime credentials live in ignored
-`server/config.json` and Android private preferences.
-
-Start the local receiver:
-
-```bash
-python3 -m pip install -r server/requirements.txt
-python3 server/setup_local.py
-python3 server/gateway_server.py
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8788/
-```
+That Python receiver has been removed after the Node Gateway cutover. The
+current maintained runtime is `server-node/`; `MockTransport` remains available
+for Android-side local tests.
 
 See:
 

@@ -1,7 +1,6 @@
 import hashlib
 import json
 import socket
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -10,8 +9,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
-from server.backup_database import backup_database
-from server.gateway_server import GatewayStore
 from server.prepare_runtime_permissions import (
     ADMIN_UID,
     CLOUDFLARED_UID,
@@ -19,7 +16,6 @@ from server.prepare_runtime_permissions import (
     prepare_runtime_permissions,
 )
 from server.production_preflight import ProductionHostAudit, valid_domain
-from server.restore_database import restore_database
 from server.setup_cloudflare import prepare_cloudflare_runtime
 
 
@@ -311,112 +307,6 @@ class RuntimePermissionTest(unittest.TestCase):
                     "cloudflare-tunnel",
                     enable_admin=True,
                     effective_uid=0,
-                )
-
-
-class DatabaseBackupTest(unittest.TestCase):
-    def test_backup_is_consistent_and_retention_is_enforced(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            database = root / "gateway.db"
-            backups = root / "backups"
-            store = GatewayStore(database)
-            store.accept(
-                "device",
-                "key",
-                "nonce",
-                {
-                    "schemaVersion": 2,
-                    "deliveryId": "delivery",
-                    "sourceEventId": "source",
-                    "eventType": "LOCAL_SELF_TEST",
-                    "createdAt": 1000,
-                    "subscriptionId": None,
-                    "slotIndex": None,
-                    "payload": {
-                        "algorithm": "AES-256-GCM",
-                        "nonceBase64": "AAECAwQFBgcICQoL",
-                        "ciphertextBase64": "ciphertext",
-                    },
-                },
-                1000,
-            )
-
-            first = backup_database(database, backups, keep=1)
-            second = backup_database(database, backups, keep=1)
-
-            self.assertFalse(first.exists())
-            self.assertTrue(second.exists())
-            self.assertEqual(1, len(list(backups.glob("gateway-*.db"))))
-            self.assertEqual([], list(backups.glob("*.partial")))
-            with sqlite3.connect(second) as copied:
-                self.assertEqual(
-                    1, copied.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                )
-                self.assertEqual(
-                    "ok", copied.execute("PRAGMA integrity_check").fetchone()[0]
-                )
-
-    def test_verified_backup_can_replace_a_changed_database(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            database = root / "gateway.db"
-            backups = root / "backups"
-            store = GatewayStore(database)
-            store.accept(
-                "device",
-                "original",
-                "nonce-original",
-                {
-                    "schemaVersion": 2,
-                    "deliveryId": "original",
-                    "sourceEventId": "source",
-                    "eventType": "LOCAL_SELF_TEST",
-                    "createdAt": 1000,
-                    "subscriptionId": None,
-                    "slotIndex": None,
-                    "payload": {
-                        "algorithm": "AES-256-GCM",
-                        "nonceBase64": "AAECAwQFBgcICQoL",
-                        "ciphertextBase64": "ciphertext",
-                    },
-                },
-                1000,
-            )
-            backup = backup_database(database, backups)
-            store.accept(
-                "device",
-                "later",
-                "nonce-later",
-                {
-                    "schemaVersion": 2,
-                    "deliveryId": "later",
-                    "sourceEventId": "source",
-                    "eventType": "LOCAL_SELF_TEST",
-                    "createdAt": 2000,
-                    "subscriptionId": None,
-                    "slotIndex": None,
-                    "payload": {
-                        "algorithm": "AES-256-GCM",
-                        "nonceBase64": "AAECAwQFBgcICQoL",
-                        "ciphertextBase64": "ciphertext",
-                    },
-                },
-                2000,
-            )
-
-            restore_database(backup, database)
-
-            with sqlite3.connect(database) as restored:
-                self.assertEqual(
-                    1,
-                    restored.execute("SELECT COUNT(*) FROM events").fetchone()[0],
-                )
-                self.assertEqual(
-                    "original",
-                    restored.execute(
-                        "SELECT idempotency_key FROM events"
-                    ).fetchone()[0],
                 )
 
 
