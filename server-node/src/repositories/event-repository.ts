@@ -104,6 +104,20 @@ export class EventRepository {
     return this.insertWithId(deviceId, idempotencyKey, envelope, nowMs).inserted;
   }
 
+  claimCallSessionRinging(
+    deviceId: string,
+    sessionId: string,
+    eventId: number,
+    nowMs: number,
+  ): boolean {
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO call_ringing_sessions(
+        device_id, session_id, first_event_id, created_at
+      ) VALUES (?, ?, ?, ?)
+    `).run(deviceId, sessionId, eventId, nowMs);
+    return result.changes > 0;
+  }
+
   insertWithId(
     deviceId: string,
     idempotencyKey: string,

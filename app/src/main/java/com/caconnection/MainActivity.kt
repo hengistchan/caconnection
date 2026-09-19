@@ -107,7 +107,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var heroTransport: TextView
     private lateinit var heroQueue: TextView
     private lateinit var homeMessagesMetric: TextView
-    private lateinit var homeSignalsMetric: TextView
+    private lateinit var homeNotificationsMetric: TextView
+    private lateinit var homeCallsMetric: TextView
     private lateinit var homeQueueMetric: TextView
     private lateinit var simList: LinearLayout
     private lateinit var homeReadinessList: LinearLayout
@@ -349,16 +350,23 @@ class MainActivity : AppCompatActivity() {
         heroBody.addView(details, topMarginParams(18))
         homeContent.addView(hero)
 
-        val stats = horizontal()
+        val stats = vertical()
+        val contentStats = horizontal()
         val messageStat = statCard(getString(R.string.messages_count))
         homeMessagesMetric = messageStat.second
-        stats.addView(messageStat.first, weightedParams(marginEnd = 5))
-        val signalStat = statCard(getString(R.string.signals_count))
-        homeSignalsMetric = signalStat.second
-        stats.addView(signalStat.first, weightedParams(marginStart = 5, marginEnd = 5))
+        contentStats.addView(messageStat.first, weightedParams(marginEnd = 5))
+        val notificationStat = statCard(getString(R.string.notifications_count))
+        homeNotificationsMetric = notificationStat.second
+        contentStats.addView(notificationStat.first, weightedParams(marginStart = 5))
+        stats.addView(contentStats)
+        val operationalStats = horizontal()
+        val callStat = statCard(getString(R.string.calls_count))
+        homeCallsMetric = callStat.second
+        operationalStats.addView(callStat.first, weightedParams(marginEnd = 5))
         val queueStat = statCard(getString(R.string.pending))
         homeQueueMetric = queueStat.second
-        stats.addView(queueStat.first, weightedParams(marginStart = 5))
+        operationalStats.addView(queueStat.first, weightedParams(marginStart = 5))
+        stats.addView(operationalStats, topMarginParams(10))
         homeContent.addView(stats, topMarginParams(12))
 
         homeContent.addView(sectionTitle(getString(R.string.sim_cards)))
@@ -818,8 +826,8 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.queue_count, pending, retrying)
         }
         homeMessagesMetric.text = formatCount(incomingEvents.size + outgoingEvents.size)
-        homeSignalsMetric.text =
-            formatCount(notificationEvents.size + callEvents.size + callIdentityEvents.size)
+        homeNotificationsMetric.text = formatCount(notificationEvents.size)
+        homeCallsMetric.text = formatCount(uniqueCallCount())
         homeQueueMetric.text = formatCount(pending + retrying)
 
         simList.removeAllViews()
@@ -1221,6 +1229,18 @@ class MainActivity : AppCompatActivity() {
             appendLine("LATEST RAW INBOUND EXTRAS")
             append(it.rawExtras.ifBlank { "(none)" })
         }
+    }
+
+    private fun uniqueCallCount(): Int {
+        val sessionCount = callEvents.map { it.sessionId }.distinct().size
+        val unmatchedIdentities = callIdentityEvents.count { identity ->
+            callEvents.none { call ->
+                val sameSlot = identity.resolvedSlotIndex == null ||
+                    identity.resolvedSlotIndex == call.slotIndex
+                sameSlot && kotlin.math.abs(identity.observedAt - call.observedAt) <= 10_000L
+            }
+        }
+        return sessionCount + unmatchedIdentities
     }
 
     private fun buildSanitizedLogs(): String = buildString {

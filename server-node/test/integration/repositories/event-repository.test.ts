@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { EventRepository } from '../../../src/repositories/event-repository.js';
+import { CallRepository } from '../../../src/repositories/call-repository.js';
 import { DeviceRepository } from '../../../src/repositories/device-repository.js';
 import { initializeDatabase } from '../../../src/database/database.js';
 import { encryptPayload } from '../../../src/crypto/payload-crypto.js';
@@ -269,6 +270,142 @@ describe('EventRepository', () => {
       expect(notifications[0].body).toBe('Test Body');
       expect(notifications[0].sourcePackage).toBe('com.example.app');
       expect(notifications[0].notificationId).toBe(12345);
+    });
+  });
+
+  describe('CallRepository', () => {
+    it('aggregates call states and nearby identity into one call session', () => {
+      const secret = deviceRepo.loadSecrets().get('test-device')!;
+      const sessionId = 'call-session-1';
+      const insert = (
+        key: string,
+        eventType: 'CALL_STATE' | 'CALL_IDENTITY',
+        payload: Record<string, unknown>,
+        createdAt: number,
+      ) => {
+        const envelope = createEncryptedEnvelope(
+          secret,
+          'test-device',
+          eventType,
+          payload,
+          {
+            deliveryId: `delivery-${key}`,
+            sourceEventId: `source-${key}`,
+            createdAt,
+            subscriptionId: 1,
+            slotIndex: 0,
+          },
+        );
+        eventRepo.accept(
+          'test-device',
+          `key-${key}`,
+          `nonce-${key}`,
+          envelope,
+          createdAt + 100,
+        );
+      };
+
+      insert('ringing', 'CALL_STATE', {
+        sessionId,
+        state: 'RINGING',
+        observedAt: 1_000,
+        initialSnapshot: false,
+      }, 1_000);
+      insert('identity', 'CALL_IDENTITY', {
+        callerAddress: '+8613800000000',
+        callerDisplayName: 'Example caller',
+        resolutionMethod: 'ACTIVE_CALL_STATE_CORRELATION',
+        resolutionConfidence: 'MEDIUM',
+        verificationStatus: 1,
+        observedAt: 1_050,
+        decision: 'ALLOW',
+      }, 1_050);
+      insert('offhook', 'CALL_STATE', {
+        sessionId,
+        state: 'OFFHOOK',
+        observedAt: 2_000,
+        initialSnapshot: false,
+      }, 2_000);
+      insert('idle', 'CALL_STATE', {
+        sessionId,
+        state: 'IDLE',
+        observedAt: 5_000,
+        initialSnapshot: false,
+      }, 5_000);
+
+      const calls = new CallRepository(db).list(
+        deviceRepo.loadSecrets(),
+        10,
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        deviceId: 'test-device',
+        sessionId,
+        direction: 'INCOMING',
+        state: 'IDLE',
+        answered: true,
+        startedAt: 1_000,
+        endedAt: 5_000,
+        durationMillis: 3_000,
+        subscriptionId: 1,
+        slotIndex: 0,
+        callerAddress: '+8613800000000',
+        callerDisplayName: 'Example caller',
+        resolutionMethod: 'ACTIVE_CALL_STATE_CORRELATION',
+        resolutionConfidence: 'MEDIUM',
+        verificationStatus: 1,
+        decision: 'ALLOW',
+      });
+      expect(calls[0].states.map(entry => entry.state)).toEqual([
+        'RINGING',
+        'OFFHOOK',
+        'IDLE',
+      ]);
+    });
+
+    it('keeps an unmatched identity as an incoming identity-only call', () => {
+      const secret = deviceRepo.loadSecrets().get('test-device')!;
+      const envelope = createEncryptedEnvelope(
+        secret,
+        'test-device',
+        'CALL_IDENTITY',
+        {
+          callerAddress: '10086',
+          observedAt: 10_000,
+          respondedAt: 10_010,
+          decision: 'ALLOW',
+        },
+        {
+          deliveryId: 'identity-only',
+          sourceEventId: 'identity-only',
+          createdAt: 10_000,
+          subscriptionId: 2,
+          slotIndex: 1,
+        },
+      );
+      eventRepo.accept(
+        'test-device',
+        'identity-only',
+        'identity-only',
+        envelope,
+        10_100,
+      );
+
+      const calls = new CallRepository(db).list(
+        deviceRepo.loadSecrets(),
+        10,
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        sessionId: null,
+        direction: 'INCOMING',
+        state: null,
+        callerAddress: '10086',
+        subscriptionId: 2,
+        slotIndex: 1,
+      });
     });
   });
 

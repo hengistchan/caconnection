@@ -31,6 +31,9 @@ export function renderFeishuNotification(
   if (delivery.eventType === 'NOTIFICATION') {
     return renderCapturedNotification(delivery, payload);
   }
+  if (delivery.eventType === 'CALL_STATE') {
+    return renderIncomingCall(delivery, payload);
+  }
   return null;
 }
 
@@ -60,6 +63,29 @@ function renderSms(
     }
   }
   return lines.join('\n');
+}
+
+function renderIncomingCall(
+  delivery: RenderableDelivery,
+  payload: Record<string, unknown>,
+): string {
+  const caller = typeof payload.callerAddress === 'string'
+    ? payload.callerAddress
+    : null;
+  const displayName = typeof payload.callerDisplayName === 'string'
+    ? payload.callerDisplayName
+    : null;
+  const lines = [
+    'CAConnection 来电提醒',
+    `设备：${delivery.deviceId}`,
+    `线路：${simLabel(delivery.slotIndex)}`,
+    `时间：${formatTime(delivery.receivedAt!)}`,
+    `来电号码：${delivery.contentMode === 'REDACTED' ? maskIdentifier(caller) : (caller ?? '未知')}`,
+  ];
+  if (displayName) {
+    lines.push(`联系人：${delivery.contentMode === 'REDACTED' ? maskIdentifier(displayName) : displayName}`);
+  }
+  return lines.join('\\n');
 }
 
 function renderCapturedNotification(

@@ -14,8 +14,10 @@ import {
   parseLimit,
   parseSlotIndex,
 } from '../http/query-validation.js';
+import { CallRepository } from '../repositories/call-repository.js';
 
 export async function messageRoutes(app: FastifyInstance) {
+  const callRepo = new CallRepository(app.db);
   /**
    * GET /v1/messages
    *
@@ -152,5 +154,77 @@ export async function messageRoutes(app: FastifyInstance) {
     });
 
     return reply.send({ notifications });
+  });
+
+  /**
+   * GET /v1/calls
+   *
+   * Read decrypted and session-aggregated call state and identity events.
+   * Requires messages:read scope.
+   */
+  app.get('/v1/calls', async (request, reply) => {
+    const clientId = app.verifyApi(request, 'messages:read');
+    const query = request.query as Record<string, unknown>;
+    let limit: number;
+    let afterId: number | undefined;
+    let beforeId: number | undefined;
+    let slotIndex: number | undefined;
+    let deviceId: string | undefined;
+    let groupId: string | undefined;
+    try {
+      assertAllowedQuery(query, new Set([
+        'limit',
+        'afterId',
+        'beforeId',
+        'slotIndex',
+        'deviceId',
+        'groupId',
+      ]));
+      limit = parseLimit(query.limit);
+      afterId = parseAfterId(query.afterId);
+      beforeId = parseBeforeId(query.beforeId);
+      slotIndex = parseSlotIndex(query.slotIndex);
+      deviceId = parseIdentifier(query.deviceId);
+      groupId = parseIdentifier(query.groupId);
+      if (afterId !== undefined && beforeId !== undefined) throw new InvalidQueryError();
+      if (deviceId !== undefined && groupId !== undefined) throw new InvalidQueryError();
+    } catch {
+      return reply.status(400).send({ error: 'invalid query' });
+    }
+
+    if (deviceId !== undefined && !app.verifyDeviceAccess(clientId, deviceId)) {
+      return reply.status(403).send({ error: 'device access denied' });
+    }
+
+    let deviceIds: Set<string> | undefined;
+    if (groupId !== undefined) {
+      const groupDevices = app.groupRepo.getDeviceIds(groupId);
+      if (!groupDevices) {
+        return reply.status(404).send({ error: 'device group not found' });
+      }
+      const allowed = app.getAllowedDeviceIds(clientId);
+      if (allowed !== null) {
+        deviceIds = new Set([...groupDevices].filter(id => allowed.has(id)));
+        if (deviceIds.size === 0) {
+          return reply.status(404).send({ error: 'device group not found' });
+        }
+      } else {
+        deviceIds = groupDevices;
+      }
+    } else if (deviceId !== undefined) {
+      deviceIds = new Set([deviceId]);
+    } else {
+      const allowed = app.getAllowedDeviceIds(clientId);
+      if (allowed !== null) deviceIds = allowed;
+    }
+
+    const calls = callRepo.list(app.getClientSecrets(clientId), limit, {
+      afterId,
+      beforeId,
+      slotIndex,
+      deviceId,
+      deviceIds,
+    });
+    return reply.send({ calls });
   });
 }

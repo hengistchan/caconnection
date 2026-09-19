@@ -52,7 +52,8 @@
     <string name="queue_empty">No pending items</string>
     <string name="queue_count">%1$d pending · %2$d retrying</string>
     <string name="messages_count">Messages</string>
-    <string name="signals_count">Signals</string>
+    <string name="notifications_count">Notifications</string>
+    <string name="calls_count">Calls</string>
     <string name="pending">Pending</string>
     <string name="sim_cards">SIM cards</string>
     <string name="no_sim_cards">No active SIM is visible. Grant phone permission and check the SIM state.</string>

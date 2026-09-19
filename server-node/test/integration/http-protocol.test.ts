@@ -222,6 +222,58 @@ describe('HTTP protocol integration', () => {
     expect(app.db.prepare('SELECT COUNT(*) AS count FROM events WHERE idempotency_key = ?').get('old-otp-event')).toMatchObject({ count: 0 });
   });
 
+  it('returns session-aggregated call events to authorized clients', async () => {
+    const sessionId = 'session-http-call';
+    const events = [
+      encryptedEvent('CALL_STATE', {
+        sessionId,
+        state: 'RINGING',
+        observedAt: 1_000,
+        initialSnapshot: false,
+      }, 1_000),
+      encryptedEvent('CALL_IDENTITY', {
+        callerAddress: '10086',
+        callerDisplayName: 'Carrier',
+        observedAt: 1_050,
+        respondedAt: 1_060,
+        resolutionMethod: 'ACTIVE_CALL_STATE_CORRELATION',
+        resolutionConfidence: 'MEDIUM',
+        verificationStatus: 1,
+        decision: 'ALLOW',
+      }, 1_050),
+      encryptedEvent('CALL_STATE', {
+        sessionId,
+        state: 'IDLE',
+        observedAt: 2_000,
+        initialSnapshot: false,
+      }, 2_000),
+    ];
+    for (const [index, envelope] of events.entries()) {
+      const response = await signedPost(
+        '/v1/events',
+        JSON.stringify(envelope),
+        `call-${index}`,
+      );
+      expect(response.statusCode).toBe(201);
+    }
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/calls?limit=10&slotIndex=0',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().calls).toHaveLength(1);
+    expect(response.json().calls[0]).toMatchObject({
+      sessionId,
+      direction: 'INCOMING',
+      state: 'IDLE',
+      callerAddress: '10086',
+      slotIndex: 0,
+    });
+  });
+
   it('enforces the configured concurrent request ceiling', async () => {
     await app.close();
     app = await buildApp({

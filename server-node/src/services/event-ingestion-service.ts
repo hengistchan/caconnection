@@ -28,6 +28,9 @@ export class EventIngestionService {
   ): boolean {
     return transaction(this.db, () => {
       this.eventRepo.recordNonce(deviceId, nonce, nowMs);
+      const isCallRinging = envelope.eventType === 'CALL_STATE'
+        && decryptedPayload.state === 'RINGING'
+        && typeof decryptedPayload.sessionId === 'string';
       const insertion = this.eventRepo.insertWithId(
         deviceId,
         idempotencyKey,
@@ -37,11 +40,20 @@ export class EventIngestionService {
       const inserted = insertion.inserted;
 
       const notificationMode = this.notificationRepo.getActiveMode();
+      const shouldNotifyCallRinging = isCallRinging
+        && insertion.eventId !== null
+        && this.eventRepo.claimCallSessionRinging(
+          deviceId,
+          decryptedPayload.sessionId as string,
+          insertion.eventId,
+          nowMs,
+        );
       if (
         inserted
         && insertion.eventId !== null
         && notificationMode !== null
         && shouldEnqueueNotification(envelope.eventType, decryptedPayload)
+        && (!isCallRinging || shouldNotifyCallRinging)
       ) {
         this.notificationRepo.enqueueEvent(
           insertion.eventId,
@@ -72,5 +84,6 @@ function shouldEnqueueNotification(
   payload: Record<string, unknown>,
 ): boolean {
   if (eventType === 'INCOMING_SMS') return true;
-  return eventType === 'NOTIFICATION' && payload.eventType !== 'REMOVED';
+  if (eventType === 'NOTIFICATION') return payload.eventType !== 'REMOVED';
+  return eventType === 'CALL_STATE' && payload.state === 'RINGING';
 }
