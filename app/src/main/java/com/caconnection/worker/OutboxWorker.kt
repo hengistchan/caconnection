@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.caconnection.data.poc.PocEventChangeNotifier
 import com.caconnection.data.poc.PocDatabase
 import com.caconnection.transport.GatewayTransportFactory
 import com.caconnection.transport.Transport
@@ -24,13 +25,16 @@ class OutboxWorker(
 
     override suspend fun doWork(): Result {
         val dao = PocDatabase.get(applicationContext).pocDao()
+        var recoveredStale = 0
+        var recoveredLegacy = 0
+        var processed = 0
         return try {
             val startedAt = System.currentTimeMillis()
-            dao.recoverStaleInProgress(
+            recoveredStale = dao.recoverStaleInProgress(
                 startedAt - IN_PROGRESS_LEASE_MS,
                 startedAt
             )
-            dao.recoverLegacyRetryExhaustion(startedAt)
+            recoveredLegacy = dao.recoverLegacyRetryExhaustion(startedAt)
 
             val processor = OutboxProcessor(
                 transportOverride ?: GatewayTransportFactory.create(applicationContext)
@@ -38,6 +42,7 @@ class OutboxWorker(
             val ready = dao.getReadyOutboxEvents(startedAt, BATCH_SIZE)
             ready.forEach { event ->
                 if (dao.claimReadyOutbox(event.eventId, System.currentTimeMillis()) == 1) {
+                    processed += 1
                     processor.process(event, dao::updateOutbox)
                 }
             }
@@ -49,6 +54,15 @@ class OutboxWorker(
         } catch (error: Exception) {
             Log.e(TAG, "Outbox drain failed", error)
             Result.retry()
+        } finally {
+            if (OutboxUiRefreshPolicy.shouldNotify(
+                    recoveredStale = recoveredStale,
+                    recoveredLegacy = recoveredLegacy,
+                    processed = processed
+                )
+            ) {
+                PocEventChangeNotifier.notify(applicationContext)
+            }
         }
     }
 
@@ -57,4 +71,12 @@ class OutboxWorker(
         val delay = max(0L, nextAttemptAt - System.currentTimeMillis())
         OutboxScheduler.enqueue(applicationContext, delay)
     }
+}
+
+internal object OutboxUiRefreshPolicy {
+    fun shouldNotify(
+        recoveredStale: Int,
+        recoveredLegacy: Int,
+        processed: Int
+    ): Boolean = recoveredStale > 0 || recoveredLegacy > 0 || processed > 0
 }

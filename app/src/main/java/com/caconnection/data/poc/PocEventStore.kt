@@ -3,7 +3,6 @@ package com.caconnection.data.poc
 import android.app.Activity
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.telephony.SmsManager
 import com.caconnection.telephony.inbound.DefaultSmsProviderWriter
 import com.caconnection.worker.OutboxScheduler
@@ -277,10 +276,7 @@ class PocEventStore private constructor(private val context: Context) {
     }
 
     private fun notifyChanged() {
-        context.sendBroadcast(
-            Intent(ACTION_DATA_CHANGED)
-                .setPackage(context.packageName)
-        )
+        PocEventChangeNotifier.notify(context)
     }
 
     private fun queueOutgoingStatus(event: OutgoingSmsEventEntity): Boolean {
@@ -303,7 +299,7 @@ class PocEventStore private constructor(private val context: Context) {
     }
 
     companion object {
-        const val ACTION_DATA_CHANGED = "com.caconnection.action.POC_DATA_CHANGED"
+        const val ACTION_DATA_CHANGED = PocEventChangeNotifier.ACTION_DATA_CHANGED
 
         @SuppressLint("StaticFieldLeak")
         @Volatile
