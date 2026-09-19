@@ -93,6 +93,85 @@ describe('Feishu notification delivery', () => {
     expect(JSON.stringify(outbox)).not.toContain('+8613812345678');
   });
 
+  it('queues only the first ringing state for a call session', () => {
+    notificationRepo.updateSettings(true, 'REDACTED', 1_000);
+    const states = ['RINGING', 'OFFHOOK', 'IDLE'];
+    for (const [index, state] of states.entries()) {
+      const payload = {
+        sessionId: 'call-session-1',
+        state,
+        observedAt: 2_000 + index * 1_000,
+      };
+      expect(ingestion.accept(
+        deviceId,
+        `call-state-${state}`,
+        `call-nonce-${state}`,
+        encryptedEnvelope('CALL_STATE', payload),
+        payload,
+        2_000 + index * 1_000,
+      )).toBe(true);
+    }
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
+      .toMatchObject({ count: 1 });
+  });
+
+  it('does not queue duplicate ringing states for the same call session', () => {
+    notificationRepo.updateSettings(true, 'REDACTED', 1_000);
+    const payload = {
+      sessionId: 'call-session-duplicate',
+      state: 'RINGING',
+      observedAt: 2_000,
+    };
+
+    expect(ingestion.accept(
+      deviceId,
+      'duplicate-call-state-1',
+      'duplicate-call-nonce-1',
+      encryptedEnvelope('CALL_STATE', payload),
+      payload,
+      2_000,
+    )).toBe(true);
+    expect(ingestion.accept(
+      deviceId,
+      'duplicate-call-state-2',
+      'duplicate-call-nonce-2',
+      encryptedEnvelope('CALL_STATE', payload),
+      payload,
+      2_001,
+    )).toBe(true);
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
+      .toMatchObject({ count: 1 });
+  });
+
+  it('renders a redacted incoming call notification', () => {
+    const rendered = renderFeishuNotification({
+      id: 1,
+      eventId: 1,
+      kind: 'EVENT',
+      attemptCount: 1,
+      createdAt: 1_000,
+      deviceId,
+      eventType: 'CALL_STATE',
+      receivedAt: 2_000,
+      slotIndex: 0,
+      envelopeJson: '{}',
+      contentMode: 'REDACTED',
+      payload: {
+        sessionId: 'call-session-1',
+        state: 'RINGING',
+        callerAddress: '+8613812345678',
+        callerDisplayName: 'Example caller',
+      },
+    });
+
+    expect(rendered).toContain('CAConnection 来电提醒');
+    expect(rendered).toContain('+86*******5678');
+    expect(rendered).not.toContain('+8613812345678');
+    expect(rendered).toContain('SIM1');
+  });
+
   it('renders redacted and full messages with distinct privacy boundaries', () => {
     const base = {
       id: 1,

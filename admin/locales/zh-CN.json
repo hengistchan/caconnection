@@ -6,7 +6,7 @@
   "nav": {
     "main": "主导航",
     "dashboard": "仪表盘",
-    "messages": "短信与通知",
+    "messages": "通信事件",
     "logout": "退出登录",
     "language": "语言",
     "devices": "设备",
@@ -54,10 +54,11 @@
     "notificationStats": "通知统计",
     "loadedNotifications": "已加载通知",
     "notificationSources": "来源应用",
-    "latestNotification": "最新通知时间"
+    "latestNotification": "最新通知时间",
+    "callsUpdated": "来电更新时间"
   },
   "messages": {
-    "title": "短信与通知",
+    "title": "通信事件",
     "filter": {
       "all": "全部",
       "sms": "短信",
@@ -70,17 +71,18 @@
       "sourceApp": "来源应用",
       "allApps": "全部应用",
       "search": "搜索",
-      "searchPlaceholder": "发送方、内容、应用或设备",
+      "searchPlaceholder": "发送方、内容、应用、来电号码或设备",
       "dateRange": "时间范围",
       "dateAll": "全部时间",
       "today": "今天",
       "last7Days": "最近 7 天",
       "last30Days": "最近 30 天",
-      "reset": "清除筛选"
+      "reset": "清除筛选",
+      "calls": "来电"
     },
     "refresh": "刷新",
     "refreshing": "刷新中...",
-    "empty": "暂无符合筛选条件的短信或通知",
+    "empty": "暂无符合筛选条件的通信事件",
     "error": "短信或通知加载失败",
     "retry": "重试",
     "eventId": "事件 ID",
@@ -143,7 +145,9 @@
     "smsLoadFailed": "短信刷新失败，已成功加载的通知仍可查看。",
     "notificationLoadFailed": "通知刷新失败，已成功加载的短信仍可查看。",
     "emptySmsForSim": "SIM{sim} 暂无短信。",
-    "emptyNotificationsForSource": "来源应用 {source} 暂无通知。"
+    "emptyNotificationsForSource": "来源应用 {source} 暂无通知。",
+    "callLoadFailed": "来电记录刷新失败，已成功加载的短信和通知仍可查看。",
+    "emptyCallsForSim": "SIM{sim} 暂无来电记录。"
   },
   "pairing": {
     "title": "配对 Android 设备",
@@ -354,5 +358,31 @@
     "saveError": "无法保存分组",
     "deleteError": "无法删除分组",
     "deleteConfirm": "确定删除分组 {name} 吗？设备本身不会被删除。"
+  },
+  "calls": {
+    "badge": "来电",
+    "sim": "SIM{sim}",
+    "caller": "来电号码",
+    "callerName": "联系人",
+    "unknownCaller": "未知号码",
+    "result": "结果",
+    "answered": "已接听",
+    "notAnswered": "未接听或状态未知",
+    "stateHistory": "通话状态时间线",
+    "sessionId": "通话会话 ID",
+    "resolutionMethod": "号码识别方式",
+    "confidence": "识别置信度",
+    "durationSeconds": "{seconds} 秒",
+    "durationMinutesSeconds": "{minutes} 分 {seconds} 秒",
+    "direction": {
+      "INCOMING": "来电",
+      "UNKNOWN": "方向未知"
+    },
+    "state": {
+      "RINGING": "响铃",
+      "OFFHOOK": "通话中",
+      "IDLE": "已结束",
+      "UNKNOWN": "状态未知"
+    }
   }
 }

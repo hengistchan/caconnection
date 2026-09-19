@@ -218,6 +218,37 @@ export interface GatewayNotificationsResponse {
   notifications: GatewayNotification[]
 }
 
+export interface GatewayCall {
+  id: number
+  deviceId: string
+  sessionId: string | null
+  createdAt: number
+  receivedAt: number
+  startedAt: number
+  endedAt: number | null
+  durationMillis: number | null
+  subscriptionId: number | null
+  slotIndex: number | null
+  direction: 'INCOMING' | 'UNKNOWN'
+  state: 'RINGING' | 'OFFHOOK' | 'IDLE' | null
+  answered: boolean
+  states: Array<{
+    state: 'RINGING' | 'OFFHOOK' | 'IDLE'
+    observedAt: number
+    initialSnapshot: boolean
+  }>
+  callerAddress: string | null
+  callerDisplayName: string | null
+  resolutionMethod: string | null
+  resolutionConfidence: string | null
+  verificationStatus: number | null
+  decision: string | null
+}
+
+export interface GatewayCallsResponse {
+  calls: GatewayCall[]
+}
+
 export interface GatewayOtpClaimResponse {
   otp: {
     eventId: number
@@ -446,6 +477,47 @@ function parseNotificationsResponse(value: unknown): GatewayNotificationsRespons
   return { notifications: value.notifications.map(parseNotification) }
 }
 
+function parseCall(value: unknown): GatewayCall {
+  if (
+    !isRecord(value)
+    || !Number.isSafeInteger(value.id)
+    || typeof value.deviceId !== 'string'
+    || !(value.sessionId === null || typeof value.sessionId === 'string')
+    || !Number.isSafeInteger(value.createdAt)
+    || !Number.isSafeInteger(value.receivedAt)
+    || !Number.isSafeInteger(value.startedAt)
+    || !isNullableInteger(value.endedAt)
+    || !isNullableNonNegativeInteger(value.durationMillis)
+    || !isNullableInteger(value.subscriptionId)
+    || !isNullableInteger(value.slotIndex)
+    || !['INCOMING', 'UNKNOWN'].includes(String(value.direction))
+    || !(value.state === null || ['RINGING', 'OFFHOOK', 'IDLE'].includes(String(value.state)))
+    || typeof value.answered !== 'boolean'
+    || !Array.isArray(value.states)
+    || !value.states.every(entry =>
+      isRecord(entry)
+      && ['RINGING', 'OFFHOOK', 'IDLE'].includes(String(entry.state))
+      && Number.isSafeInteger(entry.observedAt)
+      && typeof entry.initialSnapshot === 'boolean')
+    || !(value.callerAddress === null || typeof value.callerAddress === 'string')
+    || !(value.callerDisplayName === null || typeof value.callerDisplayName === 'string')
+    || !(value.resolutionMethod === null || typeof value.resolutionMethod === 'string')
+    || !(value.resolutionConfidence === null || typeof value.resolutionConfidence === 'string')
+    || !isNullableInteger(value.verificationStatus)
+    || !(value.decision === null || typeof value.decision === 'string')
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayCall
+}
+
+function parseCallsResponse(value: unknown): GatewayCallsResponse {
+  if (!isRecord(value) || !Array.isArray(value.calls)) {
+    return invalidGatewayResponse()
+  }
+  return { calls: value.calls.map(parseCall) }
+}
+
 function parseOutboundMessage(value: unknown): GatewayOutboundMessage {
   if (
     !isRecord(value)
@@ -612,6 +684,33 @@ export async function getGatewayNotifications(options: {
   const query = params.toString()
   return parseNotificationsResponse(
     await gatewayFetch(`/v1/notifications${query ? `?${query}` : ''}`),
+  )
+}
+
+export async function getGatewayCalls(options: {
+  limit?: number
+  slotIndex?: number | null
+  afterId?: number | null
+  beforeId?: number | null
+  deviceId?: string
+  groupId?: string
+} = {}): Promise<GatewayCallsResponse> {
+  const params = new URLSearchParams()
+  if (options.limit) params.set('limit', options.limit.toString())
+  if (options.slotIndex !== undefined && options.slotIndex !== null) {
+    params.set('slotIndex', options.slotIndex.toString())
+  }
+  if (options.afterId !== undefined && options.afterId !== null) {
+    params.set('afterId', options.afterId.toString())
+  }
+  if (options.beforeId !== undefined && options.beforeId !== null) {
+    params.set('beforeId', options.beforeId.toString())
+  }
+  if (options.deviceId) params.set('deviceId', options.deviceId)
+  if (options.groupId) params.set('groupId', options.groupId)
+  const query = params.toString()
+  return parseCallsResponse(
+    await gatewayFetch(`/v1/calls${query ? `?${query}` : ''}`),
   )
 }
 

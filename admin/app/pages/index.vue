@@ -87,6 +87,7 @@
             <span>{{ t('dashboard.statusUpdated') }}: {{ formatOptionalTime(statusLastSuccessAt) }}</span>
             <span>{{ t('dashboard.messagesUpdated') }}: {{ formatOptionalTime(messageLastSuccessAt) }}</span>
             <span>{{ t('dashboard.notificationsUpdated') }}: {{ formatOptionalTime(notificationLastSuccessAt) }}</span>
+            <span>{{ t('dashboard.callsUpdated') }}: {{ formatOptionalTime(callLastSuccessAt) }}</span>
           </div>
 
           <div class="dashboard-grid">
@@ -251,7 +252,10 @@
                 </select>
               </label>
 
-              <label v-if="contentFilter !== 'sms'" class="filter-field">
+              <label
+                v-if="contentFilter === 'all' || contentFilter === 'notifications'"
+                class="filter-field"
+              >
                 <span>{{ t('messages.filter.sourceApp') }}</span>
                 <select v-model="sourcePackageFilter" class="filter-select">
                   <option value="">{{ t('messages.filter.allApps') }}</option>
@@ -309,10 +313,16 @@
                 {{ t('common.retry') }}
               </button>
             </div>
+            <div v-if="callError" class="inline-alert inline-alert-warning" role="alert">
+              <span>{{ t('messages.callLoadFailed') }}</span>
+              <button class="btn btn-ghost btn-sm" @click="retryCalls">
+                {{ t('common.retry') }}
+              </button>
+            </div>
           </div>
 
           <div
-            v-if="contentLoading && messages.length === 0 && notifications.length === 0"
+            v-if="contentLoading && messages.length === 0 && notifications.length === 0 && calls.length === 0"
             class="loading-state"
           >
             <div class="spinner spinner-lg" aria-hidden="true" />
@@ -335,8 +345,13 @@
                 :reveal-all="revealAll"
               />
               <NotificationCard
-                v-else
+                v-else-if="item.kind === 'notification'"
                 :notification="item.notification"
+                :reveal-all="revealAll"
+              />
+              <CallCard
+                v-else
+                :call="item.call"
                 :reveal-all="revealAll"
               />
             </template>
@@ -1079,6 +1094,7 @@
 import QRCode from 'qrcode'
 import type {
   GatewayAuditEntry,
+  GatewayCall,
   GatewayDeviceGroup,
   GatewayDeviceDetail,
   GatewayMessage,
@@ -1092,12 +1108,13 @@ import {
 import type { SecretValidation } from '~/utils/deviceSecret'
 
 type AdminTab = 'dashboard' | 'messages' | 'outbound' | 'push' | 'devices'
-type ContentFilter = 'all' | 'sms' | 'notifications'
+type ContentFilter = 'all' | 'sms' | 'notifications' | 'calls'
 type DateRange = 'all' | 'today' | '7d' | '30d'
 type GatewayFilter = { deviceId?: string; groupId?: string }
 type TimelineItem =
   | { kind: 'sms'; key: string; receivedAt: number; message: GatewayMessage }
   | { kind: 'notification'; key: string; receivedAt: number; notification: GatewayNotification }
+  | { kind: 'call'; key: string; receivedAt: number; call: GatewayCall }
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -1107,25 +1124,31 @@ const {
   status,
   messages,
   notifications,
+  calls,
   outboundMessages,
   messageLoading,
   notificationLoading,
+  callLoading,
   outboundLoading,
   messageHasMore,
   notificationHasMore,
+  callHasMore,
   outboundHasMore,
   statusLastSuccessAt,
   messageLastSuccessAt,
   notificationLastSuccessAt,
+  callLastSuccessAt,
   statusError,
   messageError,
   notificationError,
+  callError,
   outboundError,
   simCounts,
   latestMessageTime,
   fetchStatus,
   fetchMessages,
   fetchNotifications,
+  fetchCalls,
   fetchOutboundMessages,
   sendOutboundMessage,
   fetchDeviceDetails,
@@ -1163,7 +1186,9 @@ const activeTab = ref<AdminTab>(
     : 'dashboard',
 )
 const contentFilter = ref<ContentFilter>(
-  route.query.type === 'sms' || route.query.type === 'notifications'
+  route.query.type === 'sms'
+  || route.query.type === 'notifications'
+  || route.query.type === 'calls'
     ? route.query.type
     : 'all',
 )
@@ -1258,7 +1283,9 @@ const toast = reactive<{
 }>({ message: '', tone: 'info' })
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
-const contentLoading = computed(() => messageLoading.value || notificationLoading.value)
+const contentLoading = computed(() =>
+  messageLoading.value || notificationLoading.value || callLoading.value,
+)
 const activeDevices = computed(() =>
   deviceDetails.value.filter(device => device.retiredAt === null),
 )
@@ -1318,9 +1345,10 @@ const newSecretValidation = computed(() => validateDeviceSecret(newDeviceSecret.
 const editSecretValidation = computed(() => validateDeviceSecret(editSecret.value))
 
 const contentFilterOptions = computed(() => [
-  { value: 'all' as const, label: 'messages.filter.all', count: messages.value.length + postedNotifications.value.length },
+  { value: 'all' as const, label: 'messages.filter.all', count: messages.value.length + postedNotifications.value.length + calls.value.length },
   { value: 'sms' as const, label: 'messages.filter.sms', count: messages.value.length },
   { value: 'notifications' as const, label: 'messages.filter.notifications', count: postedNotifications.value.length },
+  { value: 'calls' as const, label: 'messages.filter.calls', count: calls.value.length },
 ])
 
 const dateCutoff = computed(() => {
@@ -1338,7 +1366,7 @@ const filteredTimeline = computed<TimelineItem[]>(() => {
   const search = searchQuery.value.toLocaleLowerCase()
   const after = dateCutoff.value
 
-  if (contentFilter.value !== 'notifications') {
+  if (contentFilter.value === 'all' || contentFilter.value === 'sms') {
     messages.value
       .filter(message => currentFilter.value === null || message.slotIndex === currentFilter.value)
       .filter(message => after === null || message.receivedAt >= after)
@@ -1352,7 +1380,7 @@ const filteredTimeline = computed<TimelineItem[]>(() => {
       }))
   }
 
-  if (contentFilter.value !== 'sms') {
+  if (contentFilter.value === 'all' || contentFilter.value === 'notifications') {
     postedNotifications.value
       .filter(notification => !sourcePackageFilter.value || notification.sourcePackage === sourcePackageFilter.value)
       .filter(notification => after === null || notification.receivedAt >= after)
@@ -1367,6 +1395,24 @@ const filteredTimeline = computed<TimelineItem[]>(() => {
         key: `notification-${notification.id}`,
         receivedAt: notification.receivedAt,
         notification,
+      }))
+  }
+
+  if (contentFilter.value === 'all' || contentFilter.value === 'calls') {
+    calls.value
+      .filter(call => currentFilter.value === null || call.slotIndex === currentFilter.value)
+      .filter(call => after === null || call.receivedAt >= after)
+      .filter(call => !search || [
+        call.callerAddress,
+        call.callerDisplayName,
+        call.deviceId,
+        call.state,
+      ].some(value => value?.toLocaleLowerCase().includes(search)))
+      .forEach(call => timeline.push({
+        kind: 'call',
+        key: `call-${call.id}`,
+        receivedAt: call.receivedAt,
+        call,
       }))
   }
 
@@ -1387,6 +1433,9 @@ const emptyStateText = computed(() => {
   if (contentFilter.value === 'notifications' && sourcePackageFilter.value) {
     return t('messages.emptyNotificationsForSource', { source: sourcePackageFilter.value })
   }
+  if (contentFilter.value === 'calls' && currentFilter.value !== null) {
+    return t('messages.emptyCallsForSim', { sim: currentFilter.value + 1 })
+  }
   return t('messages.empty')
 })
 const canLoadMore = computed(() => {
@@ -1396,12 +1445,16 @@ const canLoadMore = computed(() => {
   if (contentFilter.value === 'notifications') {
     return notifications.value.length > 0 && notificationHasMore.value
   }
+  if (contentFilter.value === 'calls') {
+    return calls.value.length > 0 && callHasMore.value
+  }
   return (messages.value.length > 0 && messageHasMore.value)
     || (notifications.value.length > 0 && notificationHasMore.value)
+    || (calls.value.length > 0 && callHasMore.value)
 })
 
 watch(contentFilter, (value) => {
-  if (value === 'sms') sourcePackageFilter.value = ''
+  if (value === 'sms' || value === 'calls') sourcePackageFilter.value = ''
   if (value === 'notifications') currentFilter.value = null
 })
 watch(notificationSources, (sources) => {
@@ -1446,6 +1499,7 @@ watch(selectedDeviceId, async () => {
   await Promise.all([
     fetchMessages({ limit: 50, ...currentGatewayFilter.value }),
     fetchNotifications({ limit: 50, ...currentGatewayFilter.value }),
+    fetchCalls({ limit: 50, ...currentGatewayFilter.value }),
     fetchOutboundMessages({ limit: 50, ...currentGatewayFilter.value }),
   ])
 })
@@ -1548,6 +1602,7 @@ async function refreshDashboard(silent = false): Promise<void> {
     fetchStatus(),
     fetchMessages({ limit: 50, ...currentGatewayFilter.value }),
     fetchNotifications({ limit: 50, ...currentGatewayFilter.value }),
+    fetchCalls({ limit: 50, ...currentGatewayFilter.value }),
     fetchOutboundMessages({ limit: 20, ...currentGatewayFilter.value }),
     loadDevices(),
   ])
@@ -1562,11 +1617,14 @@ async function refreshDashboard(silent = false): Promise<void> {
 
 async function refreshContent(): Promise<void> {
   const jobs: Array<Promise<boolean>> = []
-  if (contentFilter.value !== 'notifications') {
+  if (contentFilter.value === 'all' || contentFilter.value === 'sms') {
     jobs.push(fetchMessages({ limit: 50, ...currentGatewayFilter.value }))
   }
-  if (contentFilter.value !== 'sms') {
+  if (contentFilter.value === 'all' || contentFilter.value === 'notifications') {
     jobs.push(fetchNotifications({ limit: 50, ...currentGatewayFilter.value }))
+  }
+  if (contentFilter.value === 'all' || contentFilter.value === 'calls') {
+    jobs.push(fetchCalls({ limit: 50, ...currentGatewayFilter.value }))
   }
   const results = await Promise.all(jobs)
   const successes = results.filter(Boolean).length
@@ -1655,9 +1713,16 @@ async function retryNotifications(): Promise<void> {
   })
 }
 
+async function retryCalls(): Promise<void> {
+  await fetchCalls({
+    limit: 50,
+    ...currentGatewayFilter.value,
+  })
+}
+
 async function loadMore(): Promise<void> {
   const jobs: Array<Promise<boolean>> = []
-  if (contentFilter.value !== 'notifications' && messageHasMore.value && messages.value.length) {
+  if ((contentFilter.value === 'all' || contentFilter.value === 'sms') && messageHasMore.value && messages.value.length) {
     jobs.push(fetchMessages({
       limit: 50,
       beforeId: Math.min(...messages.value.map(message => message.id)),
@@ -1665,10 +1730,18 @@ async function loadMore(): Promise<void> {
       append: true,
     }))
   }
-  if (contentFilter.value !== 'sms' && notificationHasMore.value && notifications.value.length) {
+  if ((contentFilter.value === 'all' || contentFilter.value === 'notifications') && notificationHasMore.value && notifications.value.length) {
     jobs.push(fetchNotifications({
       limit: 50,
       beforeId: Math.min(...notifications.value.map(notification => notification.id)),
+      ...currentGatewayFilter.value,
+      append: true,
+    }))
+  }
+  if ((contentFilter.value === 'all' || contentFilter.value === 'calls') && callHasMore.value && calls.value.length) {
+    jobs.push(fetchCalls({
+      limit: 50,
+      beforeId: Math.min(...calls.value.map(call => call.id)),
       ...currentGatewayFilter.value,
       append: true,
     }))
