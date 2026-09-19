@@ -37,6 +37,7 @@ export async function ingestRoutes(app: FastifyInstance) {
         decryptedPayload,
         auth.nowMs,
       );
+      if (inserted) app.notificationDispatcher?.wake();
       return reply.status(inserted ? 201 : 200).send({
         accepted: true,
         duplicate: !inserted,

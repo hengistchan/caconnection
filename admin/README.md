@@ -128,6 +128,15 @@ This creates:
 - `admin-config.json` - Setup metadata; it is not mounted into the container
 - Updates `config.json` with token hash only
 
+The Admin API token includes the `notifications:manage` scope used by the
+Feishu Push settings tab. Configure the protected Webhook separately:
+
+```bash
+python3 server/setup_feishu.py \
+  --runtime-dir server/deploy/runtime \
+  --webhook-url-file /secure/path/feishu-webhook.txt
+```
+
 ### 2. Set Permissions
 
 ```bash

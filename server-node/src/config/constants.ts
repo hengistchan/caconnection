@@ -1,5 +1,4 @@
-// Service version — must match Python gateway during migration
-export const SERVICE_VERSION = '0.5.0';
+export const SERVICE_VERSION = '0.6.0';
 
 // API and protocol versions — must remain identical to Python
 export const API_VERSION = 1;
@@ -21,6 +20,9 @@ export const DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE = 20;
 export const DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE = 20;
 export const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
 export const DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300;
+export const DEFAULT_NOTIFICATION_RETRY_SECONDS = 5;
+export const MAX_NOTIFICATION_RETRY_SECONDS = 15 * 60;
+export const NOTIFICATION_DELIVERY_LEASE_MS = 60_000;
 
 // Device health windows
 export const DEVICE_ONLINE_WINDOW_MS = 3 * 60 * 1000;
@@ -79,8 +81,12 @@ export const VALID_SCOPES = new Set([
   'messages:send',
   'otp:claim',
   'pairing:create',
+  'notifications:manage',
   '*',
 ]);
+
+export const NOTIFICATION_CONTENT_MODES = new Set(['REDACTED', 'FULL']);
+export const NOTIFICATION_EVENT_TYPES = new Set(['INCOMING_SMS', 'NOTIFICATION']);
 
 // Receiver diagnostic values
 export const RECEIVER_INVOKED_ACTIONS = new Set(['SMS_RECEIVED', 'SMS_DELIVER']);

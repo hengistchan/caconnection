@@ -396,6 +396,8 @@ https://caconnection-gatway.hengistchan.online/admin/
   SIM line; no automatic rerouting or cross-Gateway fallback
 - **OTP Claim**: One-time verification code extraction with confirmation
 - **Privacy Protection**: SMS and notification content hidden by default
+- **Feishu Push**: Durable asynchronous Webhook delivery with selectable
+  redacted or full-content mode
 
 Secret rotation atomically re-encrypts historical event payloads so existing
 content remains readable. Normal removal retires a device and preserves
@@ -419,6 +421,11 @@ routing, isolation, lifecycle, group, OTP, and real-device acceptance contract.
 ```bash
 # Generate admin credentials
 python3 server/setup_admin.py --runtime-dir server/deploy/runtime
+
+# Configure Feishu without placing the Webhook in shell history
+python3 server/setup_feishu.py \
+  --runtime-dir server/deploy/runtime \
+  --webhook-url-file /secure/path/feishu-webhook.txt
 
 # Set file permissions
 python3 server/prepare_runtime_permissions.py \

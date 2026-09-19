@@ -143,6 +143,19 @@ export interface GatewayAuditEntry {
   metadata: Record<string, unknown>
 }
 
+export interface GatewayNotificationSettings {
+  channel: 'FEISHU'
+  configured: boolean
+  signingEnabled: boolean
+  enabled: boolean
+  contentMode: 'REDACTED' | 'FULL'
+  updatedAt: number
+  pendingCount: number
+  retryCount: number
+  lastSuccessAt: number | null
+  lastAttemptAt: number | null
+}
+
 export interface GatewayDeviceGroup {
   groupId: string
   name: string
@@ -567,6 +580,43 @@ export function useGateway() {
     return data.entries
   }
 
+  async function fetchNotificationSettings(): Promise<GatewayNotificationSettings> {
+    const data = await $fetch<{ settings: GatewayNotificationSettings }>(
+      '/admin/api/gateway/notification-settings',
+      { credentials: 'include' },
+    )
+    return data.settings
+  }
+
+  async function updateNotificationSettings(options: {
+    enabled: boolean
+    contentMode: 'REDACTED' | 'FULL'
+  }): Promise<GatewayNotificationSettings> {
+    const data = await $fetch<{ settings: GatewayNotificationSettings }>(
+      '/admin/api/gateway/notification-settings',
+      {
+        method: 'PUT',
+        body: options,
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+    return data.settings
+  }
+
+  async function testNotification(): Promise<void> {
+    await $fetch('/admin/api/gateway/notification-settings/test', {
+      method: 'POST',
+      body: {},
+      headers: csrfToken.value
+        ? { 'X-CSRF-Token': csrfToken.value }
+        : undefined,
+      credentials: 'include',
+    })
+  }
+
   async function fetchDeviceGroups(): Promise<GatewayDeviceGroup[]> {
     const data = await $fetch<{ groups: GatewayDeviceGroup[] }>(
       '/admin/api/gateway/device-groups',
@@ -680,6 +730,9 @@ export function useGateway() {
     restoreDevice,
     purgeDevice,
     fetchAuditLog,
+    fetchNotificationSettings,
+    updateNotificationSettings,
+    testNotification,
     fetchDeviceGroups,
     createDeviceGroup,
     updateDeviceGroup,

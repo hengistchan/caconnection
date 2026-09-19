@@ -34,6 +34,7 @@ ADMIN_SCOPES = [
     "messages:send",
     "otp:claim",
     "pairing:create",
+    "notifications:manage",
 ]
 
 # Required fields in existing Gateway config

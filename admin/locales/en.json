@@ -10,7 +10,8 @@
     "logout": "Logout",
     "language": "Language",
     "devices": "Devices",
-    "outbound": "Send SMS"
+    "outbound": "Send SMS",
+    "push": "Feishu Push"
   },
   "login": {
     "title": "Admin Login",
@@ -286,6 +287,38 @@
       "EXPIRED": "Expired"
     },
     "deviceHealthWarning": "The selected gateway is {health}. The command will not be rerouted to another device."
+  },
+  "push": {
+    "title": "Feishu Webhook Push",
+    "description": "Asynchronously deliver new SMS and allowlisted app notifications through a durable Feishu queue.",
+    "refresh": "Refresh status",
+    "channel": "Channel",
+    "feishu": "Feishu custom bot",
+    "configured": "Webhook configuration",
+    "signing": "Signature verification",
+    "yes": "Configured",
+    "no": "Not configured",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "notConfigured": "The Gateway does not have a Feishu webhook configured. Add it to the protected Gateway configuration and redeploy first.",
+    "enableDelivery": "Enable proactive delivery",
+    "enableHelp": "Applies to newly stored SMS and notification events. Disabling delivery never blocks device ingestion.",
+    "contentMode": "Push content",
+    "redacted": "Redacted mode",
+    "redactedHelp": "Hide SMS bodies, OTP values, notification titles and bodies, and mask sender identifiers.",
+    "full": "Full-content mode",
+    "fullHelp": "Send sender identifiers, SMS bodies, OTP candidates, notification titles and bodies to Feishu. The third-party platform will receive sensitive data.",
+    "save": "Save push settings",
+    "test": "Send test notification",
+    "pending": "Pending",
+    "retrying": "Retrying",
+    "lastSuccess": "Last success",
+    "lastAttempt": "Last attempt",
+    "loadError": "Could not load Feishu push settings.",
+    "saveSuccess": "Feishu push settings saved",
+    "saveError": "Could not save Feishu push settings",
+    "testQueued": "Test notification queued",
+    "testError": "Could not queue a test notification"
   },
   "fleet": {
     "context": "Gateway scope",

@@ -45,4 +45,36 @@ describe('runtime config', () => {
       server: { pairing_public_endpoint: 'https://gateway.example.test/path' },
     })).toThrow('HTTPS origin');
   });
+
+  it('validates Feishu custom-bot configuration', () => {
+    const parsed = parseRuntimeConfig({
+      ...validConfig(),
+      notifications: {
+        feishu: {
+          webhook_url: 'https://open.feishu.cn/open-apis/bot/v2/hook/abcdefghijklmnop',
+          signing_secret: 'signing-secret',
+        },
+      },
+    });
+    expect(parsed.notifications.feishu).toEqual({
+      webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/abcdefghijklmnop',
+      signingSecret: 'signing-secret',
+    });
+    expect(() => parseRuntimeConfig({
+      ...validConfig(),
+      notifications: {
+        feishu: {
+          webhook_url: 'https://example.com/open-apis/bot/v2/hook/abcdefghijklmnop',
+        },
+      },
+    })).toThrow('webhook_url is invalid');
+    expect(() => parseRuntimeConfig({
+      ...validConfig(),
+      notifications: {
+        feishu: {
+          webhook_url: 'http://open.feishu.cn/open-apis/bot/v2/hook/abcdefghijklmnop',
+        },
+      },
+    })).toThrow('webhook_url is invalid');
+  });
 });

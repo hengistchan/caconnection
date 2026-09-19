@@ -55,6 +55,11 @@ export interface CapturedNotification {
   body: string | null;
 }
 
+export interface EventInsertResult {
+  inserted: boolean;
+  eventId: number | null;
+}
+
 export class EventRepository {
   constructor(private db: DatabaseSync) {}
 
@@ -70,7 +75,7 @@ export class EventRepository {
   ): boolean {
     return transaction(this.db, () => {
       this.recordNonce(deviceId, nonce, nowMs);
-      return this.insert(deviceId, idempotencyKey, envelope, nowMs);
+      return this.insertWithId(deviceId, idempotencyKey, envelope, nowMs).inserted;
     });
   }
 
@@ -96,6 +101,15 @@ export class EventRepository {
     envelope: Record<string, unknown>,
     nowMs: number,
   ): boolean {
+    return this.insertWithId(deviceId, idempotencyKey, envelope, nowMs).inserted;
+  }
+
+  insertWithId(
+    deviceId: string,
+    idempotencyKey: string,
+    envelope: Record<string, unknown>,
+    nowMs: number,
+  ): EventInsertResult {
     const result = this.db.prepare(`
       INSERT OR IGNORE INTO events(
         device_id, idempotency_key, delivery_id, source_event_id,
@@ -113,7 +127,10 @@ export class EventRepository {
       (envelope.slotIndex as number) ?? null,
       JSON.stringify(envelope),
     );
-    return result.changes > 0;
+    return {
+      inserted: result.changes > 0,
+      eventId: result.changes > 0 ? Number(result.lastInsertRowid) : null,
+    };
   }
 
   /**
@@ -255,6 +272,11 @@ export class EventRepository {
   pruneInTransaction(retentionDays: number, nowMs: number): number {
     if (retentionDays <= 0) return 0;
     const cutoff = nowMs - retentionDays * 86_400_000;
+    this.db.prepare(`
+      DELETE FROM notification_outbox
+      WHERE event_id IN (SELECT id FROM events WHERE received_at < ?)
+         OR (event_id IS NULL AND created_at < ?)
+    `).run(cutoff, cutoff);
     this.db.prepare('DELETE FROM otp_claims WHERE event_id IN (SELECT id FROM events WHERE received_at < ?)').run(cutoff);
     return this.db.prepare('DELETE FROM events WHERE received_at < ?').run(cutoff).changes as number;
   }
@@ -264,6 +286,7 @@ export class EventRepository {
    */
   clear(): void {
     transaction(this.db, () => {
+      this.db.prepare('DELETE FROM notification_outbox').run();
       this.db.prepare('DELETE FROM otp_claims').run();
       this.db.prepare('DELETE FROM events').run();
       this.db.prepare('DELETE FROM request_nonces').run();

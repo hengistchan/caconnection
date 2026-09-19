@@ -3,6 +3,7 @@ import type { DeviceRepository } from '../repositories/device-repository.js';
 import type { DeviceStateRepository } from '../repositories/device-state-repository.js';
 import type { EventRepository } from '../repositories/event-repository.js';
 import type { OutboundRepository } from '../repositories/outbound-repository.js';
+import type { NotificationRepository } from '../repositories/notification-repository.js';
 import { transaction } from '../database/transaction.js';
 import type { ValidatedEnvelope } from '../protocol/envelope.js';
 
@@ -13,6 +14,7 @@ export class EventIngestionService {
     private readonly deviceStateRepo: DeviceStateRepository,
     private readonly eventRepo: EventRepository,
     private readonly outboundRepo: OutboundRepository,
+    private readonly notificationRepo: NotificationRepository,
     private readonly retentionDays: number,
   ) {}
 
@@ -26,7 +28,27 @@ export class EventIngestionService {
   ): boolean {
     return transaction(this.db, () => {
       this.eventRepo.recordNonce(deviceId, nonce, nowMs);
-      const inserted = this.eventRepo.insert(deviceId, idempotencyKey, envelope, nowMs);
+      const insertion = this.eventRepo.insertWithId(
+        deviceId,
+        idempotencyKey,
+        envelope,
+        nowMs,
+      );
+      const inserted = insertion.inserted;
+
+      const notificationMode = this.notificationRepo.getActiveMode();
+      if (
+        inserted
+        && insertion.eventId !== null
+        && notificationMode !== null
+        && shouldEnqueueNotification(envelope.eventType, decryptedPayload)
+      ) {
+        this.notificationRepo.enqueueEvent(
+          insertion.eventId,
+          notificationMode,
+          nowMs,
+        );
+      }
 
       if (envelope.eventType === 'OUTBOUND_SMS_STATUS') {
         if (!this.outboundRepo.updateStatus(deviceId, decryptedPayload, nowMs)) {
@@ -43,4 +65,12 @@ export class EventIngestionService {
       return inserted;
     });
   }
+}
+
+function shouldEnqueueNotification(
+  eventType: string,
+  payload: Record<string, unknown>,
+): boolean {
+  if (eventType === 'INCOMING_SMS') return true;
+  return eventType === 'NOTIFICATION' && payload.eventType !== 'REMOVED';
 }

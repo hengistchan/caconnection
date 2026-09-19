@@ -1,0 +1,108 @@
+import { extractOtpCandidates } from '../crypto/otp-extraction.js';
+import type {
+  NotificationContentMode,
+  NotificationDelivery,
+} from '../repositories/notification-repository.js';
+
+export interface RenderableDelivery extends NotificationDelivery {
+  payload?: Record<string, unknown>;
+}
+
+export function renderFeishuNotification(
+  delivery: RenderableDelivery,
+): string | null {
+  if (delivery.kind === 'TEST') {
+    return [
+      'CAConnection 飞书推送测试',
+      `内容模式：${delivery.contentMode === 'REDACTED' ? '脱敏' : '明文'}`,
+      `时间：${formatTime(delivery.createdAt)}`,
+      '结果：飞书 Webhook 配置工作正常',
+    ].join('\n');
+  }
+
+  const payload = delivery.payload;
+  if (!payload || !delivery.deviceId || !delivery.eventType || delivery.receivedAt === null) {
+    throw new Error('notification event is unavailable');
+  }
+
+  if (delivery.eventType === 'INCOMING_SMS') {
+    return renderSms(delivery, payload);
+  }
+  if (delivery.eventType === 'NOTIFICATION') {
+    return renderCapturedNotification(delivery, payload);
+  }
+  return null;
+}
+
+function renderSms(
+  delivery: RenderableDelivery,
+  payload: Record<string, unknown>,
+): string {
+  const sender = typeof payload.originatingAddress === 'string'
+    ? payload.originatingAddress
+    : null;
+  const body = typeof payload.body === 'string' ? payload.body : '';
+  const otpCandidates = extractOtpCandidates(body);
+  const lines = [
+    'CAConnection 收到新短信',
+    `设备：${delivery.deviceId}`,
+    `线路：${simLabel(delivery.slotIndex)}`,
+    `发送方：${delivery.contentMode === 'REDACTED' ? maskIdentifier(sender) : (sender ?? '未知')}`,
+    `时间：${formatTime(delivery.receivedAt!)}`,
+  ];
+  if (delivery.contentMode === 'REDACTED') {
+    lines.push(`正文：已脱敏（${body.length} 个字符）`);
+    if (otpCandidates.length > 0) lines.push('提示：可能包含验证码');
+  } else {
+    lines.push(`正文：${body.slice(0, 4_000) || '（空）'}`);
+    if (otpCandidates.length > 0) {
+      lines.push(`验证码候选：${otpCandidates.slice(0, 5).join('、')}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function renderCapturedNotification(
+  delivery: RenderableDelivery,
+  payload: Record<string, unknown>,
+): string | null {
+  if (payload.eventType === 'REMOVED') return null;
+  const source = typeof payload.sourcePackage === 'string' ? payload.sourcePackage : '未知';
+  const title = typeof payload.title === 'string' ? payload.title : '';
+  const body = typeof payload.body === 'string' ? payload.body : '';
+  const lines = [
+    'CAConnection 收到应用通知',
+    `设备：${delivery.deviceId}`,
+    `来源应用：${source}`,
+    `时间：${formatTime(delivery.receivedAt!)}`,
+  ];
+  if (delivery.contentMode === 'REDACTED') {
+    lines.push(`标题：已脱敏（${title.length} 个字符）`);
+    lines.push(`正文：已脱敏（${body.length} 个字符）`);
+  } else {
+    lines.push(`标题：${title.slice(0, 1_000) || '（空）'}`);
+    lines.push(`正文：${body.slice(0, 4_000) || '（空）'}`);
+  }
+  return lines.join('\n');
+}
+
+function simLabel(slotIndex: number | null): string {
+  return slotIndex === null ? 'SIM 未识别' : `SIM${slotIndex + 1}`;
+}
+
+function maskIdentifier(value: string | null): string {
+  if (!value) return '未知';
+  if (value.length <= 4) return '*'.repeat(value.length);
+  if (value.length <= 8) {
+    return `${value.slice(0, 1)}${'*'.repeat(value.length - 2)}${value.slice(-1)}`;
+  }
+  return `${value.slice(0, 3)}${'*'.repeat(value.length - 7)}${value.slice(-4)}`;
+}
+
+function formatTime(timestampMs: number): string {
+  return new Date(timestampMs).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
+}
+
+export function isNotificationContentMode(value: string): value is NotificationContentMode {
+  return value === 'REDACTED' || value === 'FULL';
+}

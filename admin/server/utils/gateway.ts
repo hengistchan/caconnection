@@ -298,6 +298,19 @@ export interface GatewayAuditEntry {
   metadata: Record<string, unknown>
 }
 
+export interface GatewayNotificationSettings {
+  channel: 'FEISHU'
+  configured: boolean
+  signingEnabled: boolean
+  enabled: boolean
+  contentMode: 'REDACTED' | 'FULL'
+  updatedAt: number
+  pendingCount: number
+  retryCount: number
+  lastSuccessAt: number | null
+  lastAttemptAt: number | null
+}
+
 export interface GatewayDeviceGroup {
   groupId: string
   name: string
@@ -802,6 +815,75 @@ export async function getGatewayAuditLog(): Promise<{
     return entry as unknown as GatewayAuditEntry
   })
   return { entries }
+}
+
+function parseNotificationSettings(value: unknown): GatewayNotificationSettings {
+  if (
+    !isRecord(value)
+    || value.channel !== 'FEISHU'
+    || typeof value.configured !== 'boolean'
+    || typeof value.signingEnabled !== 'boolean'
+    || typeof value.enabled !== 'boolean'
+    || !['REDACTED', 'FULL'].includes(String(value.contentMode))
+    || !Number.isSafeInteger(value.updatedAt)
+    || !Number.isSafeInteger(value.pendingCount)
+    || !Number.isSafeInteger(value.retryCount)
+    || !isNullableInteger(value.lastSuccessAt)
+    || !isNullableInteger(value.lastAttemptAt)
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayNotificationSettings
+}
+
+function parseNotificationSettingsResponse(value: unknown): {
+  settings: GatewayNotificationSettings
+} {
+  if (!isRecord(value) || !isRecord(value.settings)) {
+    return invalidGatewayResponse()
+  }
+  return { settings: parseNotificationSettings(value.settings) }
+}
+
+export async function getGatewayNotificationSettings(): Promise<{
+  settings: GatewayNotificationSettings
+}> {
+  return parseNotificationSettingsResponse(
+    await gatewayFetch('/v1/notification-settings'),
+  )
+}
+
+export async function updateGatewayNotificationSettings(options: {
+  enabled: boolean
+  contentMode: 'REDACTED' | 'FULL'
+}): Promise<{ settings: GatewayNotificationSettings }> {
+  return parseNotificationSettingsResponse(
+    await gatewayFetch('/v1/notification-settings', {
+      method: 'PUT',
+      body: options,
+    }),
+  )
+}
+
+export async function testGatewayNotification(): Promise<{
+  queued: boolean
+  deliveryId: number
+}> {
+  const value = await gatewayFetch('/v1/notification-settings/test', {
+    method: 'POST',
+    body: {},
+  })
+  if (
+    !isRecord(value)
+    || value.queued !== true
+    || !Number.isSafeInteger(value.deliveryId)
+  ) {
+    return invalidGatewayResponse()
+  }
+  return {
+    queued: true,
+    deliveryId: value.deliveryId as number,
+  }
 }
 
 function parseDeviceGroup(value: unknown): GatewayDeviceGroup {

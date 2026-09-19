@@ -32,6 +32,14 @@ export interface RuntimeConfig {
   apiClients: Map<string, ApiClient>;
   configuredDevices: Map<string, Buffer>;
   server: ServerSettings;
+  notifications: {
+    feishu: FeishuConfig | null;
+  };
+}
+
+export interface FeishuConfig {
+  webhookUrl: string;
+  signingSecret: string | null;
 }
 
 const DEFAULT_SERVER_SETTINGS: ServerSettings = {
@@ -54,6 +62,7 @@ export function emptyRuntimeConfig(): RuntimeConfig {
     apiClients: new Map(),
     configuredDevices: new Map(),
     server: { ...DEFAULT_SERVER_SETTINGS },
+    notifications: { feishu: null },
   };
 }
 
@@ -78,12 +87,58 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfig {
   if (root.server !== undefined && !isRecord(root.server)) {
     throw new Error('server must be an object');
   }
+  if (root.notifications !== undefined && !isRecord(root.notifications)) {
+    throw new Error('notifications must be an object');
+  }
 
   return {
     apiClients: loadApiClients(root),
     configuredDevices: parseConfiguredDevices(root.devices ?? {}),
     server: parseServerSettings(root.server ?? {}),
+    notifications: parseNotificationSettings(root.notifications ?? {}),
   };
+}
+
+function parseNotificationSettings(value: unknown): RuntimeConfig['notifications'] {
+  const settings = requireRecord(value, 'notifications');
+  if (settings.feishu === undefined) return { feishu: null };
+  const feishu = requireRecord(settings.feishu, 'notifications.feishu');
+  const webhookUrl = optionalString(feishu, 'webhook_url', '').trim();
+  if (!webhookUrl) {
+    throw new Error('notifications.feishu.webhook_url is required');
+  }
+  validateFeishuWebhookUrl(webhookUrl);
+  const signingSecret = optionalString(feishu, 'signing_secret', '').trim();
+  if (signingSecret.length > 256) {
+    throw new Error('notifications.feishu.signing_secret is too long');
+  }
+  return {
+    feishu: {
+      webhookUrl,
+      signingSecret: signingSecret || null,
+    },
+  };
+}
+
+export function validateFeishuWebhookUrl(value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('notifications.feishu.webhook_url is invalid');
+  }
+  if (
+    url.protocol !== 'https:'
+    || !['open.feishu.cn', 'open.larksuite.com'].includes(url.hostname)
+    || (url.port !== '' && url.port !== '443')
+    || url.username
+    || url.password
+    || url.search
+    || url.hash
+    || !/^\/open-apis\/bot\/v2\/hook\/[A-Za-z0-9_-]{16,256}$/.test(url.pathname)
+  ) {
+    throw new Error('notifications.feishu.webhook_url is invalid');
+  }
 }
 
 function parseConfiguredDevices(value: unknown): Map<string, Buffer> {

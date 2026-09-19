@@ -192,6 +192,37 @@ export function initializeDatabase(db: DatabaseSync): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      enabled INTEGER NOT NULL,
+      content_mode TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    INSERT OR IGNORE INTO notification_settings(
+      id, enabled, content_mode, updated_at
+    ) VALUES (1, 0, 'REDACTED', 0);
+
+    CREATE TABLE IF NOT EXISTS notification_outbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      channel TEXT NOT NULL,
+      event_id INTEGER,
+      kind TEXT NOT NULL,
+      content_mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      attempt_count INTEGER NOT NULL,
+      next_attempt_at INTEGER NOT NULL,
+      lease_started_at INTEGER,
+      created_at INTEGER NOT NULL,
+      sent_at INTEGER,
+      last_error TEXT,
+      UNIQUE(channel, event_id),
+      FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS index_notification_outbox_due
+      ON notification_outbox(status, next_attempt_at, id);
   `);
 
   // Handle schema migrations for columns added after initial release

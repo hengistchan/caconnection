@@ -271,11 +271,33 @@ python3 ../setup_admin.py --runtime-dir runtime
 
 This creates:
 - `admin-ui-api-token.txt` - Gateway API token (`messages:read`,
-  `messages:send`, `otp:claim`, and `pairing:create` scopes)
+  `messages:send`, `otp:claim`, `pairing:create`, and
+  `notifications:manage` scopes)
 - `admin-ui-password.txt` - Admin password (show once, then securely store)
 - `admin-config.json` - Admin configuration (password hash, session secret)
 
 The Gateway `config.json` is updated with only the token SHA-256 hash.
+
+### Configure Feishu Push
+
+Create a private file containing only the custom-bot Webhook URL, then run:
+
+```bash
+python3 ../setup_feishu.py \
+  --runtime-dir runtime \
+  --webhook-url-file /secure/path/feishu-webhook.txt
+```
+
+If the Feishu bot has signature verification enabled, also pass:
+
+```bash
+--signing-secret-file /secure/path/feishu-signing-secret.txt
+```
+
+The values are stored only inside the protected Gateway `config.json`; the
+setup command and Admin API never print or return them. After deployment, use
+the Admin **Feishu Push** tab to choose redacted/full-content mode, enable
+delivery, and queue a test notification.
 
 ### Set Permissions
 

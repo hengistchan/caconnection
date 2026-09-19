@@ -18,6 +18,7 @@ import { OtpRepository } from './repositories/otp-repository.js';
 import { PairingRepository } from './repositories/pairing-repository.js';
 import { GroupRepository } from './repositories/group-repository.js';
 import { AuditRepository } from './repositories/audit-repository.js';
+import { NotificationRepository } from './repositories/notification-repository.js';
 import {
   verifyApiClient,
   type ApiClient,
@@ -36,6 +37,11 @@ import { API_VERSION, MAX_BODY_BYTES, PROTOCOL_SCHEMA_VERSION, SERVICE_VERSION }
 import { registerRawJsonParser } from './http/raw-json.js';
 import { DeviceRequestAuthenticator } from './services/device-request-authenticator.js';
 import { EventIngestionService } from './services/event-ingestion-service.js';
+import { NotificationDispatcher } from './services/notification-dispatcher.js';
+import {
+  FeishuWebhookClient,
+  type NotificationTransport,
+} from './notifications/feishu-client.js';
 import { messageRoutes } from './routes/message-routes.js';
 import { outboundRoutes } from './routes/outbound-routes.js';
 import { deviceRoutes } from './routes/device-routes.js';
@@ -47,6 +53,7 @@ import { otpRoutes } from './routes/otp-routes.js';
 import { outboundCommandRoutes } from './routes/outbound-command-routes.js';
 import { pairingRoutes } from './routes/pairing-routes.js';
 import { ingestRoutes } from './routes/ingest-routes.js';
+import { notificationRoutes } from './routes/notification-routes.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -60,11 +67,13 @@ declare module 'fastify' {
     pairingRepo: PairingRepository;
     groupRepo: GroupRepository;
     auditRepo: AuditRepository;
+    notificationRepo: NotificationRepository;
     apiClients: Map<string, ApiClient>;
     deviceSecrets: Map<string, Buffer>;
     rateLimiter: SlidingWindowRateLimiter;
     deviceAuthenticator: DeviceRequestAuthenticator;
     eventIngestionService: EventIngestionService;
+    notificationDispatcher: NotificationDispatcher | null;
     verifyApi: (request: FastifyRequest, requiredScope: string) => string;
     verifyDeviceAccess: (clientId: string, deviceId: string) => boolean;
     getAllowedDeviceIds: (clientId: string) => Set<string> | null;
@@ -78,6 +87,7 @@ export interface AppConfig {
   configPath?: string;
   runtimeConfig?: RuntimeConfig;
   trustProxy?: boolean;
+  notificationTransport?: NotificationTransport;
 }
 
 export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
@@ -112,6 +122,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const pairingRepo = new PairingRepository(db);
   const groupRepo = new GroupRepository(db);
   const auditRepo = new AuditRepository(db);
+  const notificationRepo = new NotificationRepository(db);
   const deviceSecrets = deviceRepo.loadSecrets();
   const rateLimiter = new SlidingWindowRateLimiter();
   const deviceAuthenticator = new DeviceRequestAuthenticator(
@@ -126,8 +137,20 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     deviceStateRepo,
     eventRepo,
     outboundRepo,
+    notificationRepo,
     runtimeConfig.server.retentionDays,
   );
+  const notificationTransport = config.notificationTransport
+    ?? (runtimeConfig.notifications.feishu
+      ? new FeishuWebhookClient(runtimeConfig.notifications.feishu)
+      : null);
+  const notificationDispatcher = notificationTransport
+    ? new NotificationDispatcher(
+      notificationRepo,
+      notificationTransport,
+      deviceSecrets,
+    )
+    : null;
 
   app.decorate('db', db);
   app.decorate('runtimeConfig', runtimeConfig);
@@ -139,11 +162,13 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   app.decorate('pairingRepo', pairingRepo);
   app.decorate('groupRepo', groupRepo);
   app.decorate('auditRepo', auditRepo);
+  app.decorate('notificationRepo', notificationRepo);
   app.decorate('apiClients', runtimeConfig.apiClients);
   app.decorate('deviceSecrets', deviceSecrets);
   app.decorate('rateLimiter', rateLimiter);
   app.decorate('deviceAuthenticator', deviceAuthenticator);
   app.decorate('eventIngestionService', eventIngestionService);
+  app.decorate('notificationDispatcher', notificationDispatcher);
 
   app.decorate('verifyApi', function verifyApi(request: FastifyRequest, requiredScope: string): string {
     return verifyApiClient(
@@ -215,9 +240,14 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   await app.register(otpRoutes);
   await app.register(outboundCommandRoutes);
   await app.register(pairingRoutes);
+  await app.register(notificationRoutes);
   await app.register(ingestRoutes);
 
+  app.addHook('onReady', async () => {
+    notificationDispatcher?.start();
+  });
   app.addHook('onClose', async () => {
+    await notificationDispatcher?.stop();
     db.close();
   });
 

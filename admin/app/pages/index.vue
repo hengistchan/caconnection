@@ -504,6 +504,114 @@
         </section>
 
         <section
+          v-if="activeTab === 'push'"
+          id="push-panel"
+          role="tabpanel"
+          aria-labelledby="push-tab"
+        >
+          <div class="section-header">
+            <div>
+              <h2>{{ t('push.title') }}</h2>
+              <p class="section-subtitle">{{ t('push.description') }}</p>
+            </div>
+            <button
+              class="btn btn-secondary btn-sm"
+              :disabled="pushLoading"
+              @click="loadNotificationSettings"
+            >
+              <span v-if="pushLoading" class="spinner" aria-hidden="true" />
+              {{ t('push.refresh') }}
+            </button>
+          </div>
+
+          <p v-if="pushError" class="inline-alert inline-alert-error" role="alert">
+            {{ pushError }}
+          </p>
+
+          <div v-if="notificationSettings" class="card push-settings-card">
+            <div class="status-items">
+              <div class="status-item">
+                <span class="status-label">{{ t('push.channel') }}</span>
+                <strong>{{ t('push.feishu') }}</strong>
+              </div>
+              <div class="status-item">
+                <span class="status-label">{{ t('push.configured') }}</span>
+                <span :class="notificationSettings.configured ? 'text-success' : 'text-danger'">
+                  {{ notificationSettings.configured ? t('push.yes') : t('push.no') }}
+                </span>
+              </div>
+              <div class="status-item">
+                <span class="status-label">{{ t('push.signing') }}</span>
+                <span>{{ notificationSettings.signingEnabled ? t('push.enabled') : t('push.disabled') }}</span>
+              </div>
+            </div>
+
+            <p
+              v-if="!notificationSettings.configured"
+              class="inline-alert inline-alert-warning"
+              role="status"
+            >
+              {{ t('push.notConfigured') }}
+            </p>
+
+            <form class="push-settings-form" @submit.prevent="saveNotificationSettings">
+              <label class="push-toggle">
+                <input
+                  v-model="pushEnabled"
+                  type="checkbox"
+                  :disabled="pushSaving || !notificationSettings.configured"
+                >
+                <span>
+                  <strong>{{ t('push.enableDelivery') }}</strong>
+                  <small>{{ t('push.enableHelp') }}</small>
+                </span>
+              </label>
+
+              <fieldset class="form-field form-field-wide push-mode-field">
+                <legend>{{ t('push.contentMode') }}</legend>
+                <label class="push-mode-option">
+                  <input v-model="pushContentMode" type="radio" value="REDACTED" :disabled="pushSaving">
+                  <span>
+                    <strong>{{ t('push.redacted') }}</strong>
+                    <small>{{ t('push.redactedHelp') }}</small>
+                  </span>
+                </label>
+                <label class="push-mode-option push-mode-danger">
+                  <input v-model="pushContentMode" type="radio" value="FULL" :disabled="pushSaving">
+                  <span>
+                    <strong>{{ t('push.full') }}</strong>
+                    <small>{{ t('push.fullHelp') }}</small>
+                  </span>
+                </label>
+              </fieldset>
+
+              <div class="form-actions">
+                <button class="btn btn-primary" type="submit" :disabled="pushSaving">
+                  <span v-if="pushSaving" class="spinner" aria-hidden="true" />
+                  {{ t('push.save') }}
+                </button>
+                <button
+                  class="btn btn-secondary"
+                  type="button"
+                  :disabled="pushTesting || !notificationSettings.configured"
+                  @click="sendNotificationTest"
+                >
+                  <span v-if="pushTesting" class="spinner" aria-hidden="true" />
+                  {{ t('push.test') }}
+                </button>
+              </div>
+            </form>
+
+            <div class="refresh-summary push-summary">
+              <span>{{ t('push.pending') }}: {{ notificationSettings.pendingCount }}</span>
+              <span>{{ t('push.retrying') }}: {{ notificationSettings.retryCount }}</span>
+              <span>{{ t('push.lastSuccess') }}: {{ formatOptionalTime(notificationSettings.lastSuccessAt) }}</span>
+              <span>{{ t('push.lastAttempt') }}: {{ formatOptionalTime(notificationSettings.lastAttemptAt) }}</span>
+            </div>
+          </div>
+        </section>
+
+        <section
           v-if="activeTab === 'devices'"
           id="devices-panel"
           role="tabpanel"
@@ -975,6 +1083,7 @@ import type {
   GatewayDeviceDetail,
   GatewayMessage,
   GatewayNotification,
+  GatewayNotificationSettings,
 } from '~/composables/useGateway'
 import {
   generateDeviceSecret,
@@ -982,7 +1091,7 @@ import {
 } from '~/utils/deviceSecret'
 import type { SecretValidation } from '~/utils/deviceSecret'
 
-type AdminTab = 'dashboard' | 'messages' | 'outbound' | 'devices'
+type AdminTab = 'dashboard' | 'messages' | 'outbound' | 'push' | 'devices'
 type ContentFilter = 'all' | 'sms' | 'notifications'
 type DateRange = 'all' | 'today' | '7d' | '30d'
 type GatewayFilter = { deviceId?: string; groupId?: string }
@@ -1026,6 +1135,9 @@ const {
   restoreDevice,
   purgeDevice,
   fetchAuditLog,
+  fetchNotificationSettings,
+  updateNotificationSettings,
+  testNotification,
   fetchDeviceGroups,
   createDeviceGroup,
   updateDeviceGroup,
@@ -1037,6 +1149,7 @@ const tabs: Array<{ id: AdminTab; label: string }> = [
   { id: 'dashboard', label: 'nav.dashboard' },
   { id: 'messages', label: 'nav.messages' },
   { id: 'outbound', label: 'nav.outbound' },
+  { id: 'push', label: 'nav.push' },
   { id: 'devices', label: 'nav.devices' },
 ]
 const tabRefs = new Map<AdminTab, HTMLButtonElement>()
@@ -1044,6 +1157,7 @@ const initialTab = route.query.view
 const activeTab = ref<AdminTab>(
   initialTab === 'messages'
   || initialTab === 'outbound'
+  || initialTab === 'push'
   || initialTab === 'devices'
     ? initialTab
     : 'dashboard',
@@ -1090,6 +1204,13 @@ const groupMutationLoading = ref<string | null>(null)
 const deviceLoading = ref(false)
 const deviceError = ref('')
 const dashboardRefreshing = ref(false)
+const notificationSettings = ref<GatewayNotificationSettings | null>(null)
+const pushEnabled = ref(false)
+const pushContentMode = ref<'REDACTED' | 'FULL'>('REDACTED')
+const pushLoading = ref(false)
+const pushSaving = ref(false)
+const pushTesting = ref(false)
+const pushError = ref('')
 
 const outboundDeviceId = ref('')
 const outboundSlotIndex = ref(0)
@@ -1330,6 +1451,9 @@ watch(selectedDeviceId, async () => {
 })
 watch(activeTab, (tab) => {
   if (tab !== 'messages') hideAllSensitive()
+  if (tab === 'push' && notificationSettings.value === null) {
+    void loadNotificationSettings()
+  }
 })
 watch(
   [
@@ -1362,6 +1486,7 @@ watch(
 
 onMounted(async () => {
   await refreshDashboard(true)
+  if (activeTab.value === 'push') await loadNotificationSettings()
   pairingTimer = setInterval(() => {
     pairingNow.value = Date.now()
     if (pairingExpiresAt.value && pairingSeconds.value <= 0) pairingQr.value = ''
@@ -1578,6 +1703,54 @@ function hideAllSensitive(): void {
   privacySeconds.value = 0
   if (privacyTimer) clearInterval(privacyTimer)
   privacyTimer = null
+}
+
+async function loadNotificationSettings(): Promise<void> {
+  pushLoading.value = true
+  pushError.value = ''
+  try {
+    const settings = await fetchNotificationSettings()
+    notificationSettings.value = settings
+    pushEnabled.value = settings.enabled
+    pushContentMode.value = settings.contentMode
+  } catch (error) {
+    pushError.value = gatewayErrorText(error, t('push.loadError'))
+  } finally {
+    pushLoading.value = false
+  }
+}
+
+async function saveNotificationSettings(): Promise<void> {
+  pushSaving.value = true
+  pushError.value = ''
+  try {
+    const settings = await updateNotificationSettings({
+      enabled: pushEnabled.value,
+      contentMode: pushContentMode.value,
+    })
+    notificationSettings.value = settings
+    showToast(t('push.saveSuccess'), 'success')
+  } catch (error) {
+    pushError.value = gatewayErrorText(error, t('push.saveError'))
+    showToast(pushError.value, 'error')
+  } finally {
+    pushSaving.value = false
+  }
+}
+
+async function sendNotificationTest(): Promise<void> {
+  pushTesting.value = true
+  pushError.value = ''
+  try {
+    await testNotification()
+    showToast(t('push.testQueued'), 'success')
+    window.setTimeout(() => void loadNotificationSettings(), 1_500)
+  } catch (error) {
+    pushError.value = gatewayErrorText(error, t('push.testError'))
+    showToast(pushError.value, 'error')
+  } finally {
+    pushTesting.value = false
+  }
 }
 
 async function loadDevices(): Promise<boolean> {
@@ -1930,6 +2103,17 @@ async function handleLogout(): Promise<void> {
 .messages-list, .device-list { display: grid; gap: var(--space-md); }
 .load-more-row { display: flex; justify-content: center; padding: var(--space-lg) 0; }
 .device-form, .outbound-form { margin-bottom: var(--space-lg); }
+.push-settings-card { display: grid; gap: var(--space-lg); max-width: 52rem; }
+.push-settings-form { display: grid; gap: var(--space-lg); padding-top: var(--space-md); border-top: 1px solid var(--color-border); }
+.push-toggle, .push-mode-option { display: flex; align-items: flex-start; gap: var(--space-sm); padding: var(--space-md); background: var(--color-bg-subtle); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; }
+.push-toggle input, .push-mode-option input { flex: none; width: 1rem; height: 1rem; margin-top: 0.2rem; accent-color: var(--color-primary); }
+.push-toggle span, .push-mode-option span { display: grid; gap: var(--space-xs); }
+.push-toggle small, .push-mode-option small { color: var(--color-text-secondary); font-weight: 500; }
+.push-mode-field { display: grid; gap: var(--space-sm); margin: 0; padding: 0; border: 0; }
+.push-mode-field legend { margin-bottom: var(--space-xs); padding: 0; }
+.push-mode-option:has(input:checked) { color: var(--color-primary-text); background: var(--color-primary-light); border-color: var(--color-primary); }
+.push-mode-danger:has(input:checked) { color: var(--color-danger-text); background: var(--color-danger-light); border-color: var(--color-danger); }
+.push-summary { margin: 0; padding-top: var(--space-md); border-top: 1px solid var(--color-border); }
 .outbound-warning { margin-bottom: var(--space-md); }
 .outbound-body-input { min-height: 7rem; resize: vertical; }
 .outbound-history-heading { margin-top: var(--space-xl); }

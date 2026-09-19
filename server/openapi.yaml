@@ -813,6 +813,70 @@ paths:
           description: API authentication failed
         "403":
           description: Token lacks pairing:create scope
+  /v1/notification-settings:
+    get:
+      summary: Read Feishu delivery state without exposing Webhook credentials
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Notification settings and delivery summary
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks notifications:manage or global device access
+    put:
+      summary: Enable or disable Feishu delivery and select content privacy
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [enabled, contentMode]
+              properties:
+                enabled:
+                  type: boolean
+                contentMode:
+                  type: string
+                  enum: [REDACTED, FULL]
+      responses:
+        "200":
+          description: Settings updated
+        "400":
+          description: Invalid settings
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks notifications:manage or global device access
+        "409":
+          description: Feishu Webhook is not configured
+  /v1/notification-settings/test:
+    post:
+      summary: Queue a non-sensitive Feishu test notification
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+      responses:
+        "202":
+          description: Test notification queued
+        "400":
+          description: Request body must be empty
+        "401":
+          description: API authentication failed
+        "403":
+          description: Token lacks notifications:manage or global device access
+        "409":
+          description: Feishu Webhook is not configured
 components:
   securitySchemes:
     bearerAuth:
