@@ -73,7 +73,7 @@
     <string name="phone_state_permission">读取电话状态</string>
     <string name="notification_permission">发送通知</string>
     <string name="default_sms_role">默认短信应用角色</string>
-    <string name="default_sms_role_detail">可选；仅权威接收短信时需要</string>
+    <string name="default_sms_role_detail">可选；CA Connection 按非默认短信观察模式运行</string>
     <string name="notification_access">通知读取权限</string>
     <string name="call_screening_role">来电号码识别角色</string>
     <string name="call_monitor">分 SIM 来电状态监听</string>

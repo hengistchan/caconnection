@@ -73,7 +73,7 @@
     <string name="phone_state_permission">Read phone state</string>
     <string name="notification_permission">Post notifications</string>
     <string name="default_sms_role">Default SMS role</string>
-    <string name="default_sms_role_detail">Optional; required only for authoritative SMS delivery</string>
+    <string name="default_sms_role_detail">Optional; CA Connection operates as a non-default SMS observer</string>
     <string name="notification_access">Notification access</string>
     <string name="call_screening_role">Incoming caller ID role</string>
     <string name="call_monitor">Per-SIM call monitor</string>

@@ -2,6 +2,8 @@ package com.caconnection.telephony.inbound
 
 import android.content.Context
 import android.content.Intent
+import android.provider.Telephony
+import android.util.Log
 import com.caconnection.data.poc.IncomingSmsEventEntity
 import com.caconnection.data.poc.PocEventStore
 import com.caconnection.notifications.NotificationHelper
@@ -9,42 +11,81 @@ import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.transport.DeviceStateReporter
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 object IncomingSmsProcessor {
+    private const val TAG = "IncomingSmsProcessor"
     private val executor = Executors.newSingleThreadExecutor()
 
     fun process(context: Context, intent: Intent, onComplete: () -> Unit) {
-        executor.execute {
-            val applicationContext = context.applicationContext
-            val invokedAt = System.currentTimeMillis()
-            val action = when (intent.action) {
-                android.provider.Telephony.Sms.Intents.SMS_RECEIVED_ACTION ->
-                    "SMS_RECEIVED"
-                android.provider.Telephony.Sms.Intents.SMS_DELIVER_ACTION ->
-                    "SMS_DELIVER"
-                else -> "UNKNOWN"
+        val applicationContext = context.applicationContext
+        val invokedAt = System.currentTimeMillis()
+        val action = when (intent.action) {
+            Telephony.Sms.Intents.SMS_RECEIVED_ACTION -> "SMS_RECEIVED"
+            Telephony.Sms.Intents.SMS_DELIVER_ACTION -> "SMS_DELIVER"
+            else -> {
+                onComplete()
+                return
             }
+        }
+        val completion = CompletionGuard(onComplete)
+
+        Log.i(TAG, "SMS receiver invoked action=$action")
+        reportReceiverInvocation(applicationContext, invokedAt, action)
+
+        runCatching {
+            executor.execute {
+                processOnWorker(
+                    applicationContext,
+                    intent,
+                    invokedAt,
+                    action,
+                    completion
+                )
+            }
+        }.onFailure { error ->
+            Log.e(TAG, "Unable to schedule SMS processing action=$action", error)
+            reportFailure(
+                applicationContext,
+                invokedAt,
+                action,
+                "PROCESSING_EXCEPTION",
+                completion::finish
+            )
+        }
+    }
+
+    private fun processOnWorker(
+        applicationContext: Context,
+        intent: Intent,
+        invokedAt: Long,
+        action: String,
+        completion: CompletionGuard
+    ) {
+        try {
             val parsed = try {
                 SmsParser.parse(intent)
-            } catch (_: RuntimeException) {
-                reportParseFailure(
+            } catch (error: RuntimeException) {
+                Log.e(TAG, "SMS parser failed action=$action", error)
+                reportFailure(
                     applicationContext,
                     invokedAt,
                     action,
                     "PARSER_EXCEPTION",
-                    onComplete
+                    completion::finish
                 )
-                return@execute
+                return
             }
             if (parsed == null) {
-                reportParseFailure(
+                Log.w(TAG, "SMS parser returned no messages action=$action")
+                reportFailure(
                     applicationContext,
                     invokedAt,
                     action,
                     "NO_MESSAGES",
-                    onComplete
+                    completion::finish
                 )
-                return@execute
+                return
             }
 
             runCatching {
@@ -56,8 +97,8 @@ object IncomingSmsProcessor {
                     extras,
                     subscriptions
                 )
-                val isDefaultDelivery = intent.action ==
-                    android.provider.Telephony.Sms.Intents.SMS_DELIVER_ACTION
+                val isDefaultDelivery =
+                    intent.action == Telephony.Sms.Intents.SMS_DELIVER_ACTION
                 val event = IncomingSmsEventEntity(
                     UUID.randomUUID().toString(),
                     intent.action.orEmpty(),
@@ -88,25 +129,80 @@ object IncomingSmsProcessor {
                 event to isDefaultDelivery
             }.onSuccess { result ->
                 val (event, shouldNotify) = result
-                PocEventStore.get(applicationContext).insertIncomingWithOutbox(event) {
-                    if (shouldNotify) {
-                        NotificationHelper.notifyIncoming(applicationContext, event)
+                PocEventStore.get(applicationContext).insertIncomingWithOutbox(
+                    event,
+                    onComplete = { inserted ->
+                        if (inserted) {
+                            Log.i(
+                                TAG,
+                                "Incoming SMS persisted and queued action=$action"
+                            )
+                            if (shouldNotify) {
+                                NotificationHelper.notifyIncoming(
+                                    applicationContext,
+                                    event
+                                )
+                            }
+                        } else {
+                            Log.i(
+                                TAG,
+                                "Duplicate incoming SMS ignored action=$action"
+                            )
+                        }
+                        completion.finish()
+                    },
+                    onFailure = { error ->
+                        Log.e(
+                            TAG,
+                            "Incoming SMS persistence failed action=$action",
+                            error
+                        )
+                        reportFailure(
+                            applicationContext,
+                            invokedAt,
+                            action,
+                            "PROCESSING_EXCEPTION",
+                            completion::finish
+                        )
                     }
-                    onComplete()
-                }
-            }.onFailure {
-                reportParseFailure(
+                )
+            }.onFailure { error ->
+                Log.e(TAG, "Incoming SMS processing failed action=$action", error)
+                reportFailure(
                     applicationContext,
                     invokedAt,
                     action,
                     "PROCESSING_EXCEPTION",
-                    onComplete
+                    completion::finish
                 )
             }
+        } catch (error: Exception) {
+            Log.e(TAG, "Unexpected SMS processing failure action=$action", error)
+            reportFailure(
+                applicationContext,
+                invokedAt,
+                action,
+                "PROCESSING_EXCEPTION",
+                completion::finish
+            )
         }
     }
 
-    private fun reportParseFailure(
+    private fun reportReceiverInvocation(
+        context: Context,
+        invokedAt: Long,
+        action: String
+    ) {
+        DeviceStateReporter.enqueue(
+            context,
+            DeviceStateReporter.ReceiverDiagnostic(
+                invokedAt = invokedAt,
+                action = action
+            )
+        )
+    }
+
+    private fun reportFailure(
         context: Context,
         invokedAt: Long,
         action: String,
@@ -123,5 +219,15 @@ object IncomingSmsProcessor {
             ),
             onComplete
         )
+    }
+}
+
+internal class CompletionGuard(private val onComplete: () -> Unit) {
+    private val completed = AtomicBoolean(false)
+
+    fun finish() {
+        if (completed.compareAndSet(false, true)) {
+            onComplete()
+        }
     }
 }

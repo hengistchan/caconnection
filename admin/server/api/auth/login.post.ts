@@ -1,5 +1,12 @@
 import { createError, readBody, setResponseStatus } from 'h3'
 import { verifyPassword } from '../../utils/crypto'
+import { verifyTotpCode } from '../../utils/totp'
+import { consumeRecoveryCode } from '../../utils/totp-state'
+import {
+  consumeTotpChallenge,
+  createTotpChallenge,
+  validateTotpChallenge,
+} from '../../utils/totp-auth'
 import {
   createSession,
   requireSameOrigin,
@@ -43,7 +50,43 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  const { password } = body
+  const { password, challenge, code } = body
+
+  if (typeof challenge === 'string' || typeof code === 'string') {
+    if (
+      typeof challenge !== 'string'
+      || typeof code !== 'string'
+      || code.length < 1
+      || code.length > 64
+    ) {
+      recordLoginAttempt(clientIp)
+      throw createError({ statusCode: 400, message: 'Invalid authentication challenge' })
+    }
+    const config = loadAdminConfig()
+    if (
+      !config.totpSecret
+      || !config.totpStatePath
+      || !validateTotpChallenge(challenge, clientIp)
+    ) {
+      recordLoginAttempt(clientIp)
+      throw createError({ statusCode: 401, message: 'Invalid credentials' })
+    }
+    const valid = verifyTotpCode(config.totpSecret, code)
+      || consumeRecoveryCode(config.totpStatePath, code)
+    if (!valid) {
+      recordLoginAttempt(clientIp)
+      throw createError({ statusCode: 401, message: 'Invalid credentials' })
+    }
+    if (!consumeTotpChallenge(challenge, clientIp)) {
+      recordLoginAttempt(clientIp)
+      throw createError({ statusCode: 401, message: 'Invalid credentials' })
+    }
+    clearLoginAttempts(clientIp)
+    const session = createSession()
+    setSessionCookie(event, session)
+    setResponseHeaders(event, { 'Cache-Control': 'no-store' })
+    return { success: true, csrfToken: session.csrfToken }
+  }
 
   // Validate password input
   if (typeof password !== 'string' || password.length === 0) {
@@ -81,6 +124,16 @@ export default defineEventHandler(async (event) => {
       statusCode: 401,
       message: 'Invalid credentials',
     })
+  }
+
+  const config = loadAdminConfig()
+  if (config.totpSecret) {
+    setResponseHeaders(event, { 'Cache-Control': 'no-store' })
+    return {
+      success: false,
+      requiresTotp: true,
+      challenge: createTotpChallenge(clientIp),
+    }
   }
 
   // Successful login - clear rate limit attempts

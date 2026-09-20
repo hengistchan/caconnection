@@ -100,6 +100,19 @@ function shouldEnqueueNotification(
   payload: Record<string, unknown>,
 ): boolean {
   if (eventType === 'INCOMING_SMS') return true;
-  if (eventType === 'NOTIFICATION') return payload.eventType !== 'REMOVED';
+  if (eventType === 'NOTIFICATION') {
+    if (payload.eventType === 'REMOVED') return false;
+    const sourcePackage = typeof payload.sourcePackage === 'string'
+      ? payload.sourcePackage
+      : typeof payload.packageName === 'string'
+        ? payload.packageName
+        : null;
+    return sourcePackage === null || !isFeishuWebhookLoopSource(sourcePackage);
+  }
   return eventType === 'CALL_STATE' && payload.state === 'RINGING';
+}
+
+function isFeishuWebhookLoopSource(packageName: string): boolean {
+  return packageName === 'com.ss.android.lark'
+    || packageName.startsWith('com.ss.android.lark.');
 }

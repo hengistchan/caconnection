@@ -7,11 +7,13 @@
             <span>CA</span>
           </div>
           <h1 class="login-title">{{ t('app.name') }}</h1>
-          <p class="login-subtitle">{{ t('login.subtitle') }}</p>
+          <p class="login-subtitle">
+            {{ t(step === 'password' ? 'login.subtitle' : 'login.totpSubtitle') }}
+          </p>
         </div>
 
         <form class="login-form" novalidate @submit.prevent="handleSubmit">
-          <div class="form-group">
+          <div v-if="step === 'password'" class="form-group">
             <label for="password" class="form-label">
               {{ t('login.password') }}
             </label>
@@ -40,6 +42,27 @@
             </div>
           </div>
 
+          <div v-else class="form-group">
+            <label for="totp-code" class="form-label">
+              {{ t('login.totpCode') }}
+            </label>
+            <input
+              id="totp-code"
+              v-model="code"
+              class="form-input"
+              :placeholder="t('login.totpPlaceholder')"
+              :disabled="isLoading"
+              autocomplete="one-time-code"
+              autocapitalize="characters"
+              spellcheck="false"
+              maxlength="64"
+              required
+            >
+            <p class="totp-hint">
+              {{ t('login.totpHint') }}
+            </p>
+          </div>
+
           <div v-if="errorMessage" class="login-error" role="alert">
             {{ errorMessage }}
           </div>
@@ -47,10 +70,23 @@
           <button
             type="submit"
             class="btn btn-primary btn-lg w-full"
-            :disabled="isLoading || !password"
+            :disabled="isLoading || !canSubmit"
           >
             <span v-if="isLoading" class="spinner" aria-hidden="true" />
-            {{ isLoading ? t('login.submitting') : t('login.submit') }}
+            {{
+              isLoading
+                ? t('login.submitting')
+                : t(step === 'password' ? 'login.submit' : 'login.verifyTotp')
+            }}
+          </button>
+          <button
+            v-if="step === 'totp'"
+            type="button"
+            class="btn w-full secondary-action"
+            :disabled="isLoading"
+            @click="resetToPassword"
+          >
+            {{ t('login.backToPassword') }}
           </button>
         </form>
 
@@ -70,11 +106,17 @@
 
 <script setup lang="ts">
 const { t } = useI18n()
-const { login, isLoading, checkSession } = useAuth()
+const { login, verifyTotp, isLoading, checkSession } = useAuth()
 
 const password = ref('')
+const code = ref('')
+const challenge = ref('')
+const step = ref<'password' | 'totp'>('password')
 const passwordVisible = ref(false)
 const errorMessage = ref<string | null>(null)
+const canSubmit = computed(() => (
+  step.value === 'password' ? password.value.length > 0 : code.value.trim().length > 0
+))
 
 // Redirect if already authenticated
 onMounted(async () => {
@@ -85,24 +127,53 @@ onMounted(async () => {
 })
 
 async function handleSubmit() {
-  if (!password.value || isLoading.value) return
+  if (!canSubmit.value || isLoading.value) return
 
   errorMessage.value = null
 
-  const result = await login(password.value)
+  if (step.value === 'password') {
+    const result = await login(password.value)
 
-  if (result.success) {
-    navigateTo('/')
-  } else {
-    if (result.error === 'rateLimit') {
-      errorMessage.value = t('login.rateLimit')
-    } else {
-      errorMessage.value = t('login.error')
+    if (result.success) {
+      await navigateTo('/')
+      return
     }
-    // Clear password on error
+    if (result.requiresTotp && result.challenge) {
+      challenge.value = result.challenge
+      password.value = ''
+      passwordVisible.value = false
+      step.value = 'totp'
+      await nextTick()
+      document.getElementById('totp-code')?.focus()
+      return
+    }
+    errorMessage.value = result.error === 'rateLimit'
+      ? t('login.rateLimit')
+      : t('login.error')
     password.value = ''
     passwordVisible.value = false
+    return
   }
+
+  const result = await verifyTotp(challenge.value, code.value)
+  if (result.success) {
+    await navigateTo('/')
+    return
+  }
+  errorMessage.value = result.error === 'rateLimit'
+    ? t('login.rateLimit')
+    : t('login.totpError')
+  code.value = ''
+}
+
+function resetToPassword() {
+  step.value = 'password'
+  challenge.value = ''
+  code.value = ''
+  errorMessage.value = null
+  nextTick(() => {
+    document.getElementById('password')?.focus()
+  })
 }
 </script>
 
@@ -187,6 +258,17 @@ async function handleSubmit() {
 .password-toggle:focus-visible {
   outline: 3px solid var(--color-border-focus);
   outline-offset: 1px;
+}
+
+.totp-hint {
+  margin: var(--space-sm) 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.secondary-action {
+  margin-top: var(--space-sm);
 }
 
 .login-error {

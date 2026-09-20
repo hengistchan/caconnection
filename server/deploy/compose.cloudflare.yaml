@@ -2,7 +2,7 @@ name: caconnection-gateway
 
 services:
   gateway:
-    image: caconnection-gateway:0.6.0
+    image: caconnection-gateway:0.6.1
     build:
       context: ../../server-node
       dockerfile: Dockerfile
@@ -44,7 +44,7 @@ services:
       start_period: 10s
 
   admin:
-    image: caconnection-admin:1.0.0
+    image: caconnection-admin:1.1.0
     build:
       context: ../../admin
       dockerfile: Dockerfile
@@ -57,11 +57,16 @@ services:
       - ADMIN_API_TOKEN_FILE=/run/secrets/admin_api_token
       - ADMIN_PASSWORD_HASH_FILE=/run/secrets/admin_password_hash
       - ADMIN_SESSION_SECRET_FILE=/run/secrets/admin_session_secret
+      - ADMIN_TOTP_SECRET_FILE=/run/secrets/admin_totp_secret
+      - ADMIN_TOTP_STATE_FILE=/var/lib/caconnection-admin/totp-state.json
       - TRUST_PROXY_HEADERS=true
     secrets:
       - admin_api_token
       - admin_password_hash
       - admin_session_secret
+      - admin_totp_secret
+    volumes:
+      - ./runtime/admin-totp-state:/var/lib/caconnection-admin
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777
@@ -128,7 +133,7 @@ services:
         max-file: "5"
 
   smoke:
-    image: caconnection-gateway:0.6.0
+    image: caconnection-gateway:0.6.1
     profiles:
       - tools
     entrypoint:
@@ -169,3 +174,5 @@ secrets:
     file: ./runtime/admin-ui-password-hash.txt
   admin_session_secret:
     file: ./runtime/admin-ui-session-secret.txt
+  admin_totp_secret:
+    file: ./runtime/admin-ui-totp-secret.txt

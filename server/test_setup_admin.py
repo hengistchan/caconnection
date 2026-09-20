@@ -12,7 +12,10 @@ from pathlib import Path
 from setup_admin import (
     ADMIN_CLIENT_ID,
     ADMIN_SCOPES,
+    generate_recovery_codes,
     generate_scrypt_hash,
+    generate_totp_secret,
+    recovery_code_hash,
     setup_admin_credentials,
     write_private_file,
 )
@@ -82,6 +85,17 @@ class TestWritePrivateFile(unittest.TestCase):
             self.assertEqual(path.read_text(), "updated")
 
 
+class TestTotpCredentials(unittest.TestCase):
+    def test_generates_standard_secret_and_hashed_recovery_codes(self):
+        secret = generate_totp_secret()
+        codes = generate_recovery_codes(3)
+        self.assertRegex(secret, r"^[A-Z2-7]{32}$")
+        self.assertEqual(len(codes), 3)
+        self.assertEqual(len(set(codes)), 3)
+        self.assertTrue(all(len(code) == 20 for code in codes))
+        self.assertRegex(recovery_code_hash(codes[0]), r"^[0-9a-f]{64}$")
+
+
 class TestSetupAdminCredentials(unittest.TestCase):
     """Test admin credential setup."""
 
@@ -145,6 +159,14 @@ class TestSetupAdminCredentials(unittest.TestCase):
             self.assertTrue((runtime_dir / "admin-ui-password.txt").exists())
             self.assertTrue((runtime_dir / "admin-ui-password-hash.txt").exists())
             self.assertTrue((runtime_dir / "admin-ui-session-secret.txt").exists())
+            self.assertTrue((runtime_dir / "admin-ui-totp-secret.txt").exists())
+            self.assertTrue(
+                (runtime_dir / "admin-totp-state" / "totp-state.json").exists()
+            )
+            self.assertEqual(
+                (runtime_dir / "admin-ui-totp-secret.txt").read_text(),
+                "\n",
+            )
 
     def test_gateway_config_contains_token_hash(self):
         """Gateway config should contain only the token hash, not the token."""
@@ -328,6 +350,58 @@ class TestSetupAdminCredentials(unittest.TestCase):
                 config2["session_secret"],
             )
 
+    def test_enable_rotate_and_disable_totp(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir) / "runtime"
+            self._create_valid_config(runtime_dir)
+
+            setup_admin_credentials(runtime_dir, enable_totp=True)
+            secret1 = (
+                runtime_dir / "admin-ui-totp-secret.txt"
+            ).read_text().strip()
+            state1 = json.loads(
+                (
+                    runtime_dir / "admin-totp-state" / "totp-state.json"
+                ).read_text()
+            )
+            recovery1 = (
+                runtime_dir / "admin-ui-totp-recovery-codes.txt"
+            ).read_text().splitlines()
+            uri1 = (runtime_dir / "admin-ui-totp-uri.txt").read_text()
+            self.assertRegex(secret1, r"^[A-Z2-7]{32}$")
+            self.assertEqual(len(recovery1), 10)
+            self.assertEqual(len(state1["recoveryCodeHashes"]), 10)
+            self.assertNotIn(recovery1[0], json.dumps(state1))
+            self.assertIn(secret1, uri1)
+
+            setup_admin_credentials(runtime_dir)
+            self.assertEqual(
+                secret1,
+                (runtime_dir / "admin-ui-totp-secret.txt").read_text().strip(),
+            )
+
+            setup_admin_credentials(runtime_dir, rotate_totp=True)
+            secret2 = (
+                runtime_dir / "admin-ui-totp-secret.txt"
+            ).read_text().strip()
+            self.assertNotEqual(secret1, secret2)
+
+            setup_admin_credentials(runtime_dir, disable_totp=True)
+            self.assertEqual(
+                (runtime_dir / "admin-ui-totp-secret.txt").read_text(),
+                "\n",
+            )
+            disabled_state = json.loads(
+                (
+                    runtime_dir / "admin-totp-state" / "totp-state.json"
+                ).read_text()
+            )
+            self.assertEqual(disabled_state["recoveryCodeHashes"], [])
+            self.assertFalse(
+                (runtime_dir / "admin-ui-totp-recovery-codes.txt").exists()
+            )
+            self.assertFalse((runtime_dir / "admin-ui-totp-uri.txt").exists())
+
     def test_no_credentials_in_stdout(self):
         """No credentials should be printed to stdout."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -366,6 +440,7 @@ class TestSetupAdminCredentials(unittest.TestCase):
                 "admin-ui-password.txt",
                 "admin-ui-password-hash.txt",
                 "admin-ui-session-secret.txt",
+                "admin-ui-totp-secret.txt",
             ]:
                 path = runtime_dir / filename
                 stat = path.stat()
@@ -375,6 +450,9 @@ class TestSetupAdminCredentials(unittest.TestCase):
                     0o600,
                     f"{filename} should have 0600 permissions, got {oct(perm)}",
                 )
+            state_path = runtime_dir / "admin-totp-state" / "totp-state.json"
+            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(state_path.parent.stat().st_mode & 0o777, 0o700)
 
             # Runtime directory should be 0700
             stat = runtime_dir.stat()

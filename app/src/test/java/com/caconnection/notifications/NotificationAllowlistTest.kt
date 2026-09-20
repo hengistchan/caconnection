@@ -28,4 +28,45 @@ class NotificationAllowlistTest {
     fun emptyInputProducesDenyAllAllowlist() {
         assertEquals(emptySet<String>(), NotificationAllowlist.parse(" \n, ; "))
     }
+
+    @Test
+    fun recommendedDefaultsPreserveExistingPackages() {
+        assertEquals(
+            sortedSetOf(
+                "com.android.mms",
+                "com.example.existing"
+            ),
+            NotificationAllowlist.mergeRecommended(
+                setOf(
+                    "com.example.existing",
+                    "com.ss.android.lark",
+                    "com.ss.android.lark.kami",
+                    "com.ss.android.lark.saxmsa667"
+                )
+            )
+        )
+    }
+
+    @Test
+    fun feishuPackagesAreRejectedAsWebhookLoopSources() {
+        assertEquals(
+            sortedSetOf("com.android.mms", "com.tencent.mm"),
+            NotificationAllowlist.parse(
+                """
+                com.android.mms
+                com.ss.android.lark
+                com.ss.android.lark.kami
+                com.ss.android.lark.saxmsa667
+                com.tencent.mm
+                """.trimIndent()
+            )
+        )
+    }
+
+    @Test
+    fun onlyFeishuPackageFamilyIsTreatedAsWebhookLoopSource() {
+        assertEquals(true, NotificationAllowlist.isWebhookLoopSource("com.ss.android.lark"))
+        assertEquals(true, NotificationAllowlist.isWebhookLoopSource("com.ss.android.lark.kami"))
+        assertEquals(false, NotificationAllowlist.isWebhookLoopSource("com.ss.android.ugc.aweme"))
+    }
 }

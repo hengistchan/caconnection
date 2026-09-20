@@ -1,23 +1,33 @@
 import { readFileSync } from 'node:fs'
 import { createError } from 'h3'
+import { isValidTotpSecret } from './totp'
+import { validateTotpStateFile } from './totp-state'
 
 // Cached configuration
 let adminConfig: {
   passwordHash: string
   sessionSecret: string
+  totpSecret: string | null
+  totpStatePath: string | null
 } | null = null
 
 /**
  * Load admin configuration
  * Password hash and session secret come from Docker secrets or environment
  */
-export function loadAdminConfig(): { passwordHash: string; sessionSecret: string } {
+export function loadAdminConfig(): {
+  passwordHash: string
+  sessionSecret: string
+  totpSecret: string | null
+  totpStatePath: string | null
+} {
   if (adminConfig) {
     return adminConfig
   }
 
   let passwordHash: string
   let sessionSecret: string
+  let totpSecret: string | null
 
   // Load password hash
   // Try Docker secret file first (production)
@@ -84,6 +94,27 @@ export function loadAdminConfig(): { passwordHash: string; sessionSecret: string
     })
   }
 
+  const totpSecretPath = process.env.ADMIN_TOTP_SECRET_FILE || '/run/secrets/admin_totp_secret'
+  try {
+    totpSecret = readFileSync(totpSecretPath, 'utf-8').trim() || null
+  } catch {
+    totpSecret = process.env.ADMIN_TOTP_SECRET?.trim() || null
+  }
+  if (totpSecret && !isValidTotpSecret(totpSecret)) {
+    throw createError({ statusCode: 500, message: 'Invalid TOTP secret format' })
+  }
+
+  const totpStatePath = totpSecret
+    ? process.env.ADMIN_TOTP_STATE_FILE || '/var/lib/caconnection-admin/totp-state.json'
+    : null
+  if (totpStatePath) {
+    try {
+      validateTotpStateFile(totpStatePath)
+    } catch {
+      throw createError({ statusCode: 500, message: 'Invalid TOTP state configuration' })
+    }
+  }
+
   // Validate session secret format (hex string)
   if (!/^[0-9a-f]{64}$/i.test(sessionSecret)) {
     throw createError({
@@ -92,7 +123,12 @@ export function loadAdminConfig(): { passwordHash: string; sessionSecret: string
     })
   }
 
-  adminConfig = { passwordHash, sessionSecret: sessionSecret.toLowerCase() }
+  adminConfig = {
+    passwordHash,
+    sessionSecret: sessionSecret.toLowerCase(),
+    totpSecret,
+    totpStatePath,
+  }
   return adminConfig
 }
 

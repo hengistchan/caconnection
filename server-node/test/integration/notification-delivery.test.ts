@@ -322,6 +322,34 @@ describe('Feishu notification delivery', () => {
       .toMatchObject({ count: 0 });
   });
 
+  it.each([
+    'com.ss.android.lark',
+    'com.ss.android.lark.kami',
+    'com.ss.android.lark.saxmsa667',
+  ])('stores but never forwards Feishu loop-source notifications from %s', sourcePackage => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const payload = {
+      eventType: 'POSTED',
+      sourcePackage,
+      title: 'CAConnection notification',
+      body: 'Would otherwise loop back into the Feishu webhook',
+    };
+
+    expect(ingestion.accept(
+      deviceId,
+      `feishu-loop-${sourcePackage}`,
+      `feishu-loop-nonce-${sourcePackage}`,
+      encryptedEnvelope('NOTIFICATION', payload),
+      payload,
+      2_000,
+    )).toBe(true);
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM events').get())
+      .toMatchObject({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
+      .toMatchObject({ count: 0 });
+  });
+
   function encryptedEnvelope(eventType: string, payload: Record<string, unknown>) {
     return encryptedEnvelopeAt(eventType, payload, 1_500, 1);
   }

@@ -21,8 +21,9 @@ class OutboxProcessorTest {
             now = { 1_000L }
         )
 
-        processor.process(event) { statuses += it.status }
+        val outcome = processor.process(event) { statuses += it.status }
 
+        assertEquals(OutboxStatus.SUCCESS, outcome)
         assertEquals(
             listOf(OutboxStatus.IN_PROGRESS.name, OutboxStatus.SUCCESS.name),
             statuses
@@ -40,8 +41,9 @@ class OutboxProcessorTest {
             now = { 10_000L }
         )
 
-        processor.process(event) {}
+        val outcome = processor.process(event) {}
 
+        assertEquals(OutboxStatus.RETRY, outcome)
         assertEquals(OutboxStatus.RETRY.name, event.status)
         assertEquals(1, event.retryCount)
         assertEquals(15_000L, event.nextRetryAt)
@@ -58,8 +60,9 @@ class OutboxProcessorTest {
             now = { 20_000L }
         )
 
-        processor.process(event) {}
+        val outcome = processor.process(event) {}
 
+        assertEquals(OutboxStatus.RETRY, outcome)
         assertEquals(OutboxStatus.RETRY.name, event.status)
         assertEquals(10, event.retryCount)
         assertEquals(320_000L, event.nextRetryAt)
@@ -90,9 +93,10 @@ class OutboxProcessorTest {
             }
         )
 
-        processor.process(event) {}
+        val outcome = processor.process(event) {}
 
         assertFalse(called)
+        assertEquals(OutboxStatus.FAILED, outcome)
         assertEquals(OutboxStatus.FAILED.name, event.status)
         assertEquals("Missing payload", event.lastError)
     }

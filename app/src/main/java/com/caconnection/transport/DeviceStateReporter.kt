@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.util.Log
 import androidx.core.content.ContextCompat
 import com.caconnection.data.poc.OutboxHelper
 import com.caconnection.data.poc.PocEventStore
@@ -11,11 +12,13 @@ import com.caconnection.telephony.smsrole.SmsRoleController
 import com.caconnection.telephony.subscription.SubscriptionRepository
 
 object DeviceStateReporter {
+    private const val TAG = "DeviceStateReporter"
+
     data class ReceiverDiagnostic(
         val invokedAt: Long,
         val action: String,
-        val parseFailureAt: Long,
-        val parseFailureReason: String
+        val parseFailureAt: Long? = null,
+        val parseFailureReason: String? = null
     )
 
     fun enqueue(
@@ -89,12 +92,18 @@ object DeviceStateReporter {
             runCatching {
                 PocEventStore.get(applicationContext).enqueueDeviceState(
                     payload,
-                    onComplete
+                    onComplete,
+                    onFailure = { error ->
+                        Log.e(TAG, "Unable to persist receiver diagnostic", error)
+                        onComplete?.invoke()
+                    }
                 )
-            }.onFailure {
+            }.onFailure { error ->
+                Log.e(TAG, "Unable to enqueue receiver diagnostic", error)
                 onComplete?.invoke()
             }
-        }.onFailure {
+        }.onFailure { error ->
+            Log.e(TAG, "Unable to build receiver diagnostic", error)
             onComplete?.invoke()
         }
     }

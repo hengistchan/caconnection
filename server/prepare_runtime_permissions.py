@@ -46,10 +46,30 @@ def prepare_runtime_permissions(
                 (runtime / "admin-ui-api-token.txt", ADMIN_UID),
                 (runtime / "admin-ui-password-hash.txt", ADMIN_UID),
                 (runtime / "admin-ui-session-secret.txt", ADMIN_UID),
+                (runtime / "admin-ui-totp-secret.txt", ADMIN_UID),
             )
         )
+    writable_directories = (
+        [(runtime / "admin-totp-state", ADMIN_UID)]
+        if enable_admin
+        else []
+    )
+    writable_assignments = (
+        [(runtime / "admin-totp-state" / "totp-state.json", ADMIN_UID)]
+        if enable_admin
+        else []
+    )
 
-    missing = [path for path, _uid in assignments if not path.is_file()]
+    missing = [
+        path
+        for path, _uid in [*assignments, *writable_assignments]
+        if not path.is_file()
+    ]
+    missing.extend(
+        path
+        for path, _uid in writable_directories
+        if not path.is_dir()
+    )
     if missing:
         raise ValueError("required runtime secret file is missing")
     uid = os.geteuid() if effective_uid is None else effective_uid
@@ -63,6 +83,24 @@ def prepare_runtime_permissions(
                 "runtime secret ownership requires a root deployment step"
             )
         path.chmod(0o400)
+    for path, owner_uid in writable_assignments:
+        stat = path.stat()
+        if uid == 0:
+            chown(path, owner_uid, owner_uid)
+        elif stat.st_uid != owner_uid or stat.st_gid != owner_uid:
+            raise PermissionError(
+                "runtime secret ownership requires a root deployment step"
+            )
+        path.chmod(0o600)
+    for path, owner_uid in writable_directories:
+        stat = path.stat()
+        if uid == 0:
+            chown(path, owner_uid, owner_uid)
+        elif stat.st_uid != owner_uid or stat.st_gid != owner_uid:
+            raise PermissionError(
+                "runtime secret ownership requires a root deployment step"
+            )
+        path.chmod(0o700)
 
 
 def main() -> None:

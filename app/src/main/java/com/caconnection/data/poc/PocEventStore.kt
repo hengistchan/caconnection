@@ -4,6 +4,7 @@ import android.app.Activity
 import android.annotation.SuppressLint
 import android.content.Context
 import android.telephony.SmsManager
+import android.util.Log
 import com.caconnection.telephony.inbound.DefaultSmsProviderWriter
 import com.caconnection.worker.OutboxScheduler
 import java.util.concurrent.Executors
@@ -32,16 +33,37 @@ class PocEventStore private constructor(private val context: Context) {
         }
     }
 
-    fun insertIncomingWithOutbox(event: IncomingSmsEventEntity, onComplete: (() -> Unit)? = null) {
+    fun insertIncomingWithOutbox(
+        event: IncomingSmsEventEntity,
+        onComplete: ((inserted: Boolean) -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null
+    ) {
         executor.execute {
-            database.runInTransaction {
-                dao.insertIncoming(event)
+            runCatching {
                 val outboxEvent = OutboxHelper.createOutboxForIncoming(event)
-                dao.insertOutbox(outboxEvent)
+                var inserted = false
+                database.runInTransaction {
+                    // The manifest receiver and the runtime HyperOS fallback can
+                    // observe the same broadcast. The stable SMS idempotency key
+                    // prevents duplicate local rows and duplicate uploads.
+                    if (dao.findOutboxByIdempotencyKey(
+                            outboxEvent.idempotencyKey
+                        ) == null
+                    ) {
+                        dao.insertIncoming(event)
+                        dao.insertOutbox(outboxEvent)
+                        inserted = true
+                    }
+                }
+                OutboxScheduler.enqueueNow(context)
+                if (inserted) notifyChanged()
+                inserted
+            }.onSuccess { inserted ->
+                onComplete?.invoke(inserted)
+            }.onFailure { error ->
+                Log.e(TAG, "Unable to persist incoming SMS and Outbox row", error)
+                onFailure?.invoke(error)
             }
-            OutboxScheduler.enqueueNow(context)
-            notifyChanged()
-            onComplete?.invoke()
         }
     }
 
@@ -56,13 +78,20 @@ class PocEventStore private constructor(private val context: Context) {
 
     fun enqueueDeviceState(
         payload: OutboxHelper.DeviceStatePayload,
-        onComplete: (() -> Unit)? = null
+        onComplete: (() -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null
     ) {
         executor.execute {
-            dao.insertOutbox(OutboxHelper.createDeviceState(payload))
-            OutboxScheduler.enqueueNow(context)
-            notifyChanged()
-            onComplete?.invoke()
+            runCatching {
+                dao.insertOutbox(OutboxHelper.createDeviceState(payload))
+                OutboxScheduler.enqueueNow(context)
+                notifyChanged()
+            }.onSuccess {
+                onComplete?.invoke()
+            }.onFailure { error ->
+                Log.e(TAG, "Unable to persist device-state Outbox row", error)
+                onFailure?.invoke(error)
+            }
         }
     }
 
@@ -299,6 +328,7 @@ class PocEventStore private constructor(private val context: Context) {
     }
 
     companion object {
+        private const val TAG = "PocEventStore"
         const val ACTION_DATA_CHANGED = PocEventChangeNotifier.ACTION_DATA_CHANGED
 
         @SuppressLint("StaticFieldLeak")

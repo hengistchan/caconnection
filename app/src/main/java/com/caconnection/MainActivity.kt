@@ -1031,7 +1031,7 @@ class MainActivity : AppCompatActivity() {
             ReadinessUi(
                 getString(R.string.default_sms_role),
                 getString(R.string.default_sms_role_detail),
-                SmsRoleController(this).isRoleHeld(),
+                !SmsRoleController(this).isRoleHeld(),
                 true
             ),
             ReadinessUi(
@@ -1211,6 +1211,10 @@ class MainActivity : AppCompatActivity() {
         appendLine("deviceId: ${transport.deviceId.ifBlank { "(none)" }}")
         appendLine("secret: ${if (transport.sharedSecretBase64.isBlank()) "missing" else "configured (hidden)"}")
         appendLine("certificate pin: ${if (transport.certificatePinSha256Base64.isBlank()) "system CA" else "configured (hidden)"}")
+        appendLine(
+            "notification allowlist: " +
+                NotificationAllowlist.get(this@MainActivity).joinToString(",").ifBlank { "(empty)" }
+        )
         lastConnectionDiagnosticReport?.let {
             appendLine()
             appendLine("CONNECTION DIAGNOSTICS")
@@ -1224,6 +1228,32 @@ class MainActivity : AppCompatActivity() {
         appendLine("calls: ${callEvents.size}")
         appendLine("caller identities: ${callIdentityEvents.size}")
         appendLine("outbox: ${outboxEvents.size}")
+        appendLine()
+        appendLine("OUTBOX HEALTH (LATEST ${outboxEvents.size})")
+        val statusCounts = outboxEvents.groupingBy { it.status }.eachCount().toSortedMap()
+        if (statusCounts.isEmpty()) {
+            appendLine("(empty)")
+        } else {
+            statusCounts.forEach { (status, count) ->
+                appendLine("$status: $count")
+            }
+        }
+        val activeOutbox = outboxEvents.filter {
+            it.status == "PENDING" || it.status == "IN_PROGRESS" || it.status == "RETRY"
+        }
+        activeOutbox.minByOrNull { it.createdAt }?.let {
+            appendLine(
+                "oldest active age seconds: " +
+                    ((System.currentTimeMillis() - it.createdAt).coerceAtLeast(0L) / 1_000L)
+            )
+        }
+        activeOutbox.mapNotNull { it.nextRetryAt.takeIf { retryAt -> retryAt > 0L } }
+            .minOrNull()
+            ?.let { appendLine("next retry at: $it") }
+        outboxEvents.firstOrNull { !it.lastError.isNullOrBlank() }?.lastError
+            ?.let(UiPrivacy::sanitizeDiagnosticText)
+            ?.take(160)
+            ?.let { appendLine("latest error: $it") }
         incomingEvents.firstOrNull()?.let {
             appendLine()
             appendLine("LATEST RAW INBOUND EXTRAS")
