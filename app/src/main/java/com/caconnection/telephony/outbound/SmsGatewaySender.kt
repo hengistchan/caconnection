@@ -92,10 +92,14 @@ class SmsGatewaySender(private val context: Context) {
             null
         )
 
-        PocEventStore.get(context).insertOutgoingAndDispatch(event) {
-            dispatch(event)
-        }
-        onAccepted(eventId)
+        PocEventStore.get(context).insertOutgoingAndDispatch(
+            event = event,
+            dispatch = { dispatch(event) },
+            onPersisted = { onAccepted(eventId) },
+            onFailure = {
+                onRejected("Unable to persist outgoing SMS")
+            }
+        )
     }
 
     private fun dispatch(event: OutgoingSmsEventEntity) {
@@ -105,7 +109,33 @@ class SmsGatewaySender(private val context: Context) {
             val parts = manager.divideMessage(event.body).takeIf { it.isNotEmpty() }
                 ?: arrayListOf(event.body)
 
-            PocEventStore.get(context).markDispatching(event.eventId, parts.size)
+            PocEventStore.get(context).markDispatching(
+                eventId = event.eventId,
+                partCount = parts.size,
+                onComplete = {
+                    sendPrepared(event, manager, parts)
+                },
+                onFailure = {
+                    PocEventStore.get(context).markDispatchFailure(
+                        event.eventId,
+                        "Unable to persist dispatch state"
+                    )
+                }
+            )
+        } catch (error: Throwable) {
+            PocEventStore.get(context).markDispatchFailure(
+                event.eventId,
+                "${error.javaClass.simpleName}: SMS dispatch preparation failed"
+            )
+        }
+    }
+
+    private fun sendPrepared(
+        event: OutgoingSmsEventEntity,
+        manager: SmsManager,
+        parts: ArrayList<String>
+    ) {
+        try {
             val sentIntents = ArrayList<PendingIntent>(parts.size)
             val deliveryIntents = ArrayList<PendingIntent>(parts.size)
             parts.indices.forEach { index ->

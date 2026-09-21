@@ -13,12 +13,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 SubscriptionSnapshotEntity.class,
                 IncomingSmsEventEntity.class,
                 OutgoingSmsEventEntity.class,
+                OutgoingSmsPartResultEntity.class,
                 NotificationEventEntity.class,
                 CallEventEntity.class,
                 CallIdentityEventEntity.class,
                 OutboxEventEntity.class
         },
-        version = 6,
+        version = 7,
         exportSchema = true
 )
 public abstract class PocDatabase extends RoomDatabase {
@@ -139,6 +140,27 @@ public abstract class PocDatabase extends RoomDatabase {
         }
     };
 
+    static final Migration MIGRATION_6_7 = new Migration(6, 7) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `outgoing_sms_part_results` (" +
+                "`eventId` TEXT NOT NULL, " +
+                "`partIndex` INTEGER NOT NULL, " +
+                "`callbackType` TEXT NOT NULL, " +
+                "`resultCode` INTEGER NOT NULL, " +
+                "`observedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`eventId`, `partIndex`, `callbackType`), " +
+                "FOREIGN KEY(`eventId`) REFERENCES `outgoing_sms_events`(`eventId`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE)"
+            );
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_outgoing_sms_part_results_eventId` " +
+                "ON `outgoing_sms_part_results` (`eventId`)"
+            );
+        }
+    };
+
     public abstract PocDao pocDao();
 
     public static PocDatabase get(Context context) {
@@ -155,7 +177,8 @@ public abstract class PocDatabase extends RoomDatabase {
                                     MIGRATION_2_3,
                                     MIGRATION_3_4,
                                     MIGRATION_4_5,
-                                    MIGRATION_5_6
+                                    MIGRATION_5_6,
+                                    MIGRATION_6_7
                             )
                             .build();
                 }
