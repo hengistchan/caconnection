@@ -60,6 +60,16 @@ export interface EventInsertResult {
   eventId: number | null;
 }
 
+export interface MessageQueryResult {
+  messages: IncomingMessage[];
+  unreadableRecords: number;
+}
+
+export interface NotificationQueryResult {
+  notifications: CapturedNotification[];
+  unreadableRecords: number;
+}
+
 export class EventRepository {
   constructor(private db: DatabaseSync) {}
 
@@ -161,6 +171,20 @@ export class EventRepository {
       deviceIds?: Set<string>;
     } = {},
   ): IncomingMessage[] {
+    return this.getMessagesResult(secrets, limit, options).messages;
+  }
+
+  getMessagesResult(
+    secrets: Map<string, Buffer>,
+    limit: number,
+    options: {
+      afterId?: number;
+      beforeId?: number;
+      slotIndex?: number;
+      deviceId?: string;
+      deviceIds?: Set<string>;
+    } = {},
+  ): MessageQueryResult {
     const clauses = ["event_type = 'INCOMING_SMS'"];
     const params: (string | number | null)[] = [];
 
@@ -169,7 +193,9 @@ export class EventRepository {
     if (options.slotIndex !== undefined) { clauses.push('slot_index = ?'); params.push(options.slotIndex); }
     if (options.deviceId !== undefined) { clauses.push('device_id = ?'); params.push(options.deviceId); }
     if (options.deviceIds !== undefined) {
-      if (options.deviceIds.size === 0) return [];
+      if (options.deviceIds.size === 0) {
+        return { messages: [], unreadableRecords: 0 };
+      }
       const ids = [...options.deviceIds].sort();
       clauses.push(`device_id IN (${ids.map(() => '?').join(',')})`);
       params.push(...ids);
@@ -182,14 +208,16 @@ export class EventRepository {
       FROM events WHERE ${clauses.join(' AND ')} ORDER BY id DESC LIMIT ?
     `, ...params);
 
-    return rows
-      .map(row => {
+    const messages: IncomingMessage[] = [];
+    let unreadableRecords = 0;
+    for (const row of rows) {
+      try {
         const secret = secrets.get(row.device_id);
-        if (!secret) return null;
+        if (!secret) continue;
         const envelope = decryptPayload(JSON.parse(row.envelope_json), row.device_id, secret);
         const payload = envelope.payload as Record<string, unknown>;
-        const body = payload.body as string | null;
-        return {
+        const body = typeof payload.body === 'string' ? payload.body : null;
+        messages.push({
           id: row.id,
           deviceId: row.device_id,
           createdAt: row.created_at,
@@ -202,9 +230,12 @@ export class EventRepository {
           resolutionMethod: (payload.resolutionMethod as string) || null,
           resolutionConfidence: (payload.resolutionConfidence as string) || null,
           otpCandidates: extractOtpCandidates(body),
-        };
-      })
-      .filter((m): m is IncomingMessage => m !== null);
+        });
+      } catch {
+        unreadableRecords += 1;
+      }
+    }
+    return { messages, unreadableRecords };
   }
 
   /**
@@ -220,6 +251,19 @@ export class EventRepository {
       deviceIds?: Set<string>;
     } = {},
   ): CapturedNotification[] {
+    return this.getNotificationsResult(secrets, limit, options).notifications;
+  }
+
+  getNotificationsResult(
+    secrets: Map<string, Buffer>,
+    limit: number,
+    options: {
+      afterId?: number;
+      beforeId?: number;
+      deviceId?: string;
+      deviceIds?: Set<string>;
+    } = {},
+  ): NotificationQueryResult {
     const clauses = ["event_type = 'NOTIFICATION'"];
     const params: (string | number | null)[] = [];
 
@@ -227,7 +271,9 @@ export class EventRepository {
     if (options.beforeId !== undefined) { clauses.push('id < ?'); params.push(options.beforeId); }
     if (options.deviceId !== undefined) { clauses.push('device_id = ?'); params.push(options.deviceId); }
     if (options.deviceIds !== undefined) {
-      if (options.deviceIds.size === 0) return [];
+      if (options.deviceIds.size === 0) {
+        return { notifications: [], unreadableRecords: 0 };
+      }
       const ids = [...options.deviceIds].sort();
       clauses.push(`device_id IN (${ids.map(() => '?').join(',')})`);
       params.push(...ids);
@@ -240,13 +286,15 @@ export class EventRepository {
       FROM events WHERE ${clauses.join(' AND ')} ORDER BY id DESC LIMIT ?
     `, ...params);
 
-    return rows
-      .map(row => {
+    const notifications: CapturedNotification[] = [];
+    let unreadableRecords = 0;
+    for (const row of rows) {
+      try {
         const secret = secrets.get(row.device_id);
-        if (!secret) return null;
+        if (!secret) continue;
         const envelope = decryptPayload(JSON.parse(row.envelope_json), row.device_id, secret);
         const payload = envelope.payload as Record<string, unknown>;
-        return {
+        notifications.push({
           id: row.id,
           deviceId: row.device_id,
           createdAt: row.created_at,
@@ -260,9 +308,12 @@ export class EventRepository {
           category: typeof payload.category === 'string' ? payload.category : null,
           title: typeof payload.title === 'string' ? payload.title : null,
           body: typeof payload.body === 'string' ? payload.body : null,
-        };
-      })
-      .filter((n): n is CapturedNotification => n !== null);
+        });
+      } catch {
+        unreadableRecords += 1;
+      }
+    }
+    return { notifications, unreadableRecords };
   }
 
   /**

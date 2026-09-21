@@ -7,6 +7,7 @@ import { validateTotpStateFile } from './totp-state'
 let adminConfig: {
   passwordHash: string
   sessionSecret: string
+  sessionStatePath: string
   totpSecret: string | null
   totpStatePath: string | null
 } | null = null
@@ -18,6 +19,7 @@ let adminConfig: {
 export function loadAdminConfig(): {
   passwordHash: string
   sessionSecret: string
+  sessionStatePath: string
   totpSecret: string | null
   totpStatePath: string | null
 } {
@@ -123,9 +125,13 @@ export function loadAdminConfig(): {
     })
   }
 
+  const sessionStatePath = process.env.ADMIN_SESSION_STATE_FILE
+    || '/var/lib/caconnection-admin/session-state.json'
+
   adminConfig = {
     passwordHash,
     sessionSecret: sessionSecret.toLowerCase(),
+    sessionStatePath,
     totpSecret,
     totpStatePath,
   }

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import os
 from pathlib import Path
 from typing import Callable, Optional
@@ -41,6 +42,33 @@ def prepare_runtime_permissions(
 
     # Admin UI files (only when admin is enabled)
     if enable_admin:
+        session_state_path = (
+            runtime / "admin-totp-state" / "session-state.json"
+        )
+        if not session_state_path.exists():
+            session_state_path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(
+                session_state_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as state_file:
+                    json.dump(
+                        {
+                            "version": 1,
+                            "generation": 1,
+                            "revokedSessions": {},
+                        },
+                        state_file,
+                        indent=2,
+                    )
+                    state_file.write("\n")
+                    state_file.flush()
+                    os.fsync(state_file.fileno())
+            except Exception:
+                session_state_path.unlink(missing_ok=True)
+                raise
         assignments.extend(
             (
                 (runtime / "admin-ui-api-token.txt", ADMIN_UID),
@@ -55,7 +83,10 @@ def prepare_runtime_permissions(
         else []
     )
     writable_assignments = (
-        [(runtime / "admin-totp-state" / "totp-state.json", ADMIN_UID)]
+        [
+            (runtime / "admin-totp-state" / "totp-state.json", ADMIN_UID),
+            (runtime / "admin-totp-state" / "session-state.json", ADMIN_UID),
+        ]
         if enable_admin
         else []
     )

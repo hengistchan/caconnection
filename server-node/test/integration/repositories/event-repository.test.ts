@@ -243,6 +243,34 @@ describe('EventRepository', () => {
 
       expect(messages[0].otpCandidates).toContain('123456');
     });
+
+    it('should isolate unreadable messages instead of failing the whole query', () => {
+      const secret = deviceRepo.loadSecrets().get('test-device')!;
+      const readable = createEncryptedEnvelope(
+        secret,
+        'test-device',
+        'INCOMING_SMS',
+        { body: 'Readable' },
+        { deliveryId: 'readable', sourceEventId: 'readable' },
+      );
+      const corrupted = createEncryptedEnvelope(
+        secret,
+        'test-device',
+        'INCOMING_SMS',
+        { body: 'Corrupted' },
+        { deliveryId: 'corrupted', sourceEventId: 'corrupted' },
+      );
+      eventRepo.accept('test-device', 'readable', 'readable', readable, 1_000_000);
+      eventRepo.accept('test-device', 'corrupted', 'corrupted', corrupted, 1_000_001);
+      db.prepare('UPDATE events SET envelope_json = ? WHERE idempotency_key = ?')
+        .run('{invalid', 'corrupted');
+
+      const result = eventRepo.getMessagesResult(deviceRepo.loadSecrets(), 100);
+
+      expect(result.unreadableRecords).toBe(1);
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].body).toBe('Readable');
+    });
   });
 
   describe('getNotifications', () => {
@@ -270,6 +298,24 @@ describe('EventRepository', () => {
       expect(notifications[0].body).toBe('Test Body');
       expect(notifications[0].sourcePackage).toBe('com.example.app');
       expect(notifications[0].notificationId).toBe(12345);
+    });
+
+    it('should isolate unreadable notifications', () => {
+      const secret = deviceRepo.loadSecrets().get('test-device')!;
+      const envelope = createEncryptedEnvelope(
+        secret,
+        'test-device',
+        'NOTIFICATION',
+        { eventType: 'POSTED', sourcePackage: 'com.example', title: 'Readable' },
+        { deliveryId: 'notification', sourceEventId: 'notification' },
+      );
+      eventRepo.accept('test-device', 'notification', 'notification', envelope, 1_000_000);
+      db.prepare('UPDATE events SET envelope_json = ? WHERE idempotency_key = ?')
+        .run('{invalid', 'notification');
+
+      const result = eventRepo.getNotificationsResult(deviceRepo.loadSecrets(), 100);
+
+      expect(result).toEqual({ notifications: [], unreadableRecords: 1 });
     });
   });
 
@@ -406,6 +452,42 @@ describe('EventRepository', () => {
         subscriptionId: 2,
         slotIndex: 1,
       });
+    });
+
+    it('isolates unreadable call events', () => {
+      const secret = deviceRepo.loadSecrets().get('test-device')!;
+      const envelope = createEncryptedEnvelope(
+        secret,
+        'test-device',
+        'CALL_STATE',
+        {
+          sessionId: 'corrupted-call',
+          state: 'RINGING',
+          observedAt: 10_000,
+          initialSnapshot: false,
+        },
+        {
+          deliveryId: 'corrupted-call',
+          sourceEventId: 'corrupted-call',
+          createdAt: 10_000,
+        },
+      );
+      eventRepo.accept(
+        'test-device',
+        'corrupted-call',
+        'corrupted-call',
+        envelope,
+        10_100,
+      );
+      db.prepare('UPDATE events SET envelope_json = ? WHERE idempotency_key = ?')
+        .run('{invalid', 'corrupted-call');
+
+      const result = new CallRepository(db).listResult(
+        deviceRepo.loadSecrets(),
+        10,
+      );
+
+      expect(result).toEqual({ calls: [], unreadableRecords: 1 });
     });
   });
 

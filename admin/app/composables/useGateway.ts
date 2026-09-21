@@ -179,6 +179,7 @@ export interface GatewayNotificationSettings {
   updatedAt: number
   pendingCount: number
   retryCount: number
+  failedCount: number
   lastSuccessAt: number | null
   lastAttemptAt: number | null
 }
@@ -200,6 +201,18 @@ export function useGateway() {
     () => [],
   )
   const calls = useState<GatewayCall[]>('gateway-calls', () => [])
+  const messageUnreadableRecords = useState<number>(
+    'gateway-message-unreadable-records',
+    () => 0,
+  )
+  const notificationUnreadableRecords = useState<number>(
+    'gateway-notification-unreadable-records',
+    () => 0,
+  )
+  const callUnreadableRecords = useState<number>(
+    'gateway-call-unreadable-records',
+    () => 0,
+  )
   const outboundMessages = useState<GatewayOutboundMessage[]>(
     'gateway-outbound-messages',
     () => [],
@@ -308,7 +321,10 @@ export function useGateway() {
       const query = params.toString()
       const url = `/admin/api/gateway/messages${query ? `?${query}` : ''}`
 
-      const data = await $fetch<{ messages: GatewayMessage[] }>(url, {
+      const data = await $fetch<{
+        messages: GatewayMessage[]
+        unreadableRecords?: number
+      }>(url, {
         credentials: 'include',
       })
 
@@ -320,6 +336,7 @@ export function useGateway() {
         messages.value = data.messages
       }
       messageHasMore.value = data.messages.length === (options.limit ?? 50)
+      messageUnreadableRecords.value = data.unreadableRecords ?? 0
       messageError.value = null
       messageLastSuccessAt.value = Date.now()
       return true
@@ -356,7 +373,10 @@ export function useGateway() {
       if (options.groupId) params.set('groupId', options.groupId)
       const query = params.toString()
       const url = `/admin/api/gateway/notifications${query ? `?${query}` : ''}`
-      const data = await $fetch<{ notifications: GatewayNotification[] }>(url, {
+      const data = await $fetch<{
+        notifications: GatewayNotification[]
+        unreadableRecords?: number
+      }>(url, {
         credentials: 'include',
       })
 
@@ -373,6 +393,7 @@ export function useGateway() {
       }
       notificationHasMore.value
         = data.notifications.length === (options.limit ?? 50)
+      notificationUnreadableRecords.value = data.unreadableRecords ?? 0
       notificationError.value = null
       notificationLastSuccessAt.value = Date.now()
       return true
@@ -410,7 +431,10 @@ export function useGateway() {
       if (options.deviceId) params.set('deviceId', options.deviceId)
       if (options.groupId) params.set('groupId', options.groupId)
       const query = params.toString()
-      const data = await $fetch<{ calls: GatewayCall[] }>(
+      const data = await $fetch<{
+        calls: GatewayCall[]
+        unreadableRecords?: number
+      }>(
         `/admin/api/gateway/calls${query ? `?${query}` : ''}`,
         { credentials: 'include' },
       )
@@ -422,6 +446,7 @@ export function useGateway() {
         calls.value = data.calls
       }
       callHasMore.value = data.calls.length === (options.limit ?? 50)
+      callUnreadableRecords.value = data.unreadableRecords ?? 0
       callError.value = null
       callLastSuccessAt.value = Date.now()
       return true
@@ -776,6 +801,9 @@ export function useGateway() {
     messages: readonly(messages),
     notifications: readonly(notifications),
     calls: readonly(calls),
+    messageUnreadableRecords: readonly(messageUnreadableRecords),
+    notificationUnreadableRecords: readonly(notificationUnreadableRecords),
+    callUnreadableRecords: readonly(callUnreadableRecords),
     outboundMessages: readonly(outboundMessages),
     isLoading: computed(() =>
       messageLoading.value || notificationLoading.value),

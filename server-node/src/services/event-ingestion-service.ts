@@ -7,6 +7,7 @@ import type { OutboundRepository } from '../repositories/outbound-repository.js'
 import type { NotificationRepository } from '../repositories/notification-repository.js';
 import { transaction } from '../database/transaction.js';
 import type { ValidatedEnvelope } from '../protocol/envelope.js';
+import { InvalidEventPayloadError } from '../http/operational-errors.js';
 
 export class EventIngestionService {
   constructor(
@@ -80,7 +81,7 @@ export class EventIngestionService {
 
       if (envelope.eventType === 'OUTBOUND_SMS_STATUS') {
         if (!this.outboundRepo.updateStatus(deviceId, decryptedPayload, nowMs)) {
-          throw new Error('unknown outbound command');
+          throw new InvalidEventPayloadError('unknown outbound command');
         }
       } else if (envelope.eventType === 'DEVICE_STATE') {
         this.deviceStateRepo.upsertState(deviceId, decryptedPayload, nowMs);

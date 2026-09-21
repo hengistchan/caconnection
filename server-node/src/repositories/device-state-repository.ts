@@ -2,6 +2,7 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import { extractOtpCandidates } from '../crypto/otp-extraction.js';
+import { InvalidEventPayloadError } from '../http/operational-errors.js';
 
 export class DeviceStateRepository {
   constructor(private readonly db: DatabaseSync) {}
@@ -14,7 +15,7 @@ export class DeviceStateRepository {
   upsertState(deviceId: string, payload: Record<string, unknown>, nowMs: number): void {
     for (const field of ['defaultSmsRole', 'receiveSmsGranted', 'sendSmsGranted', 'readPhoneStateGranted']) {
       if (typeof payload[field] !== 'boolean') {
-        throw new Error(`invalid ${field}`);
+        throw new InvalidEventPayloadError(`invalid ${field}`);
       }
     }
 
@@ -25,11 +26,11 @@ export class DeviceStateRepository {
     for (const field of ['appVersion', 'androidVersion', 'manufacturer', 'model', 'receiveMode']) {
       const value = payload[field];
       if (typeof value !== 'string' || !value.trim() || value.length > 128) {
-        throw new Error('invalid device state');
+        throw new InvalidEventPayloadError('invalid device state');
       }
     }
     if (payload.receiveMode !== 'OBSERVER' && payload.receiveMode !== 'DEFAULT_SMS') {
-      throw new Error('invalid receiveMode');
+      throw new InvalidEventPayloadError('invalid receiveMode');
     }
 
     const receiverInvokedAt = optionalNonNegativeInteger(payload.receiverInvokedAt);
@@ -42,49 +43,51 @@ export class DeviceStateRepository {
       && receiverInvokedAction !== 'SMS_RECEIVED'
       && receiverInvokedAction !== 'SMS_DELIVER'
     ) {
-      throw new Error('invalid receiver diagnostic');
+      throw new InvalidEventPayloadError('invalid receiver diagnostic');
     }
     if (
       receiverParseFailureReason !== undefined
       && receiverParseFailureReason !== null
       && !['NO_MESSAGES', 'PARSER_EXCEPTION', 'PROCESSING_EXCEPTION'].includes(String(receiverParseFailureReason))
     ) {
-      throw new Error('invalid receiver diagnostic');
+      throw new InvalidEventPayloadError('invalid receiver diagnostic');
     }
     if (
       (receiverInvokedAt === null) !== (receiverInvokedAction == null)
       || (receiverParseFailureAt === null) !== (receiverParseFailureReason == null)
       || (receiverParseFailureAt !== null && receiverInvokedAt === null)
     ) {
-      throw new Error('invalid receiver diagnostic');
+      throw new InvalidEventPayloadError('invalid receiver diagnostic');
     }
 
     const rawLines = payload.lines;
     if (!Array.isArray(rawLines) || rawLines.length > 4) {
-      throw new Error('invalid lines');
+      throw new InvalidEventPayloadError('invalid lines');
     }
     const seenSlots = new Set<number>();
     const lines = rawLines.map(rawLine => {
       if (typeof rawLine !== 'object' || rawLine === null || Array.isArray(rawLine)) {
-        throw new Error('invalid line');
+        throw new InvalidEventPayloadError('invalid line');
       }
       const line = rawLine as Record<string, unknown>;
       const allowedKeys = new Set(['slotIndex', 'subscriptionId', 'carrierName', 'displayName', 'active']);
       if (Object.keys(line).some(key => !allowedKeys.has(key))) {
-        throw new Error('invalid line');
+        throw new InvalidEventPayloadError('invalid line');
       }
       const slotIndex = requireInteger(line.slotIndex, 0, 3, 'invalid line');
-      if (seenSlots.has(slotIndex)) throw new Error('invalid line');
+      if (seenSlots.has(slotIndex)) throw new InvalidEventPayloadError('invalid line');
       seenSlots.add(slotIndex);
       const subscriptionId = line.subscriptionId;
       if (subscriptionId != null && (!Number.isInteger(subscriptionId) || typeof subscriptionId !== 'number')) {
-        throw new Error('invalid line');
+        throw new InvalidEventPayloadError('invalid line');
       }
-      if (typeof line.active !== 'boolean') throw new Error('invalid line');
+      if (typeof line.active !== 'boolean') {
+        throw new InvalidEventPayloadError('invalid line');
+      }
       for (const field of ['carrierName', 'displayName']) {
         const value = line[field];
         if (value != null && (typeof value !== 'string' || value.length > 128)) {
-          throw new Error('invalid line');
+          throw new InvalidEventPayloadError('invalid line');
         }
       }
       return {
@@ -223,7 +226,7 @@ export class DeviceStateRepository {
 
 function requireInteger(value: unknown, minimum: number, maximum: number, message: string): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) {
-    throw new Error(message);
+    throw new InvalidEventPayloadError(message);
   }
   return value;
 }

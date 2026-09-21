@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createFeishuSignature,
   FeishuWebhookClient,
+  NotificationTransportError,
 } from '../../src/notifications/feishu-client.js';
 
 const webhookUrl = 'https://open.feishu.cn/open-apis/bot/v2/hook/abcdefghijklmnop';
@@ -54,6 +55,27 @@ describe('Feishu webhook client', () => {
     );
     await expect(client.sendText('hello')).rejects.toThrow(
       'Feishu webhook rejected the message',
+    );
+    await expect(client.sendText('hello')).rejects.toMatchObject({
+      retryable: false,
+    });
+  });
+
+  it('retries rate limits but not permanent HTTP rejections', async () => {
+    const clientFor = (status: number) => new FeishuWebhookClient(
+      { webhookUrl, signingSecret: null },
+      (async () => new Response('rejected', { status })) as typeof fetch,
+    );
+
+    await expect(clientFor(429).sendText('hello')).rejects.toEqual(
+      expect.objectContaining<Partial<NotificationTransportError>>({
+        retryable: true,
+      }),
+    );
+    await expect(clientFor(403).sendText('hello')).rejects.toEqual(
+      expect.objectContaining<Partial<NotificationTransportError>>({
+        retryable: false,
+      }),
     );
   });
 });

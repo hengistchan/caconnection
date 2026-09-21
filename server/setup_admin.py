@@ -48,6 +48,8 @@ ADMIN_SCOPES = [
 REQUIRED_CONFIG_SECTIONS = ["devices", "api_clients", "server"]
 TOTP_STATE_VERSION = 1
 TOTP_RECOVERY_CODE_COUNT = 10
+SESSION_STATE_VERSION = 1
+MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 def generate_scrypt_hash(password: str) -> str:
@@ -200,6 +202,7 @@ def setup_admin_credentials(
     totp_secret_path = runtime / "admin-ui-totp-secret.txt"
     totp_state_dir = runtime / "admin-totp-state"
     totp_state_path = totp_state_dir / "totp-state.json"
+    session_state_path = totp_state_dir / "session-state.json"
     totp_recovery_path = runtime / "admin-ui-totp-recovery-codes.txt"
     totp_uri_path = runtime / "admin-ui-totp-uri.txt"
     totp_state_dir.mkdir(parents=True, exist_ok=True)
@@ -232,6 +235,39 @@ def setup_admin_credentials(
     admin_config = {}
     if admin_config_path.exists():
         admin_config = json.loads(admin_config_path.read_text(encoding="utf-8"))
+
+    if session_state_path.exists():
+        try:
+            session_state = json.loads(
+                session_state_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            print("ERROR: Invalid Admin session state file.", file=sys.stderr)
+            sys.exit(1)
+        generation = session_state.get("generation")
+        revoked_sessions = session_state.get("revokedSessions")
+        if (
+            session_state.get("version") != SESSION_STATE_VERSION
+            or type(generation) is not int
+            or generation < 1
+            or generation > MAX_SAFE_INTEGER
+            or not isinstance(revoked_sessions, dict)
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", session_id) is None
+                or type(expires_at) is not int
+                or expires_at < 0
+                or expires_at > MAX_SAFE_INTEGER
+                for session_id, expires_at in revoked_sessions.items()
+            )
+        ):
+            print("ERROR: Invalid Admin session state file.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        session_state = {
+            "version": SESSION_STATE_VERSION,
+            "generation": 1,
+            "revokedSessions": {},
+        }
 
     # Track changes
     changes = []
@@ -272,6 +308,9 @@ def setup_admin_credentials(
         # Write password hash to separate file for Docker secret mounting
         write_private_file(password_hash_path, password_hash + "\n")
         changes.append("admin password")
+        if rotate_password:
+            session_state["generation"] += 1
+            session_state["revokedSessions"] = {}
     elif not password_file_path.is_file():
         print("WARNING: Password file missing but hash exists. Password file will not be regenerated.", file=sys.stderr)
 
@@ -282,6 +321,9 @@ def setup_admin_credentials(
         # Write session secret to separate file for Docker secret mounting
         write_private_file(session_secret_path, session_secret + "\n")
         changes.append("session secret")
+        if rotate_session_secret:
+            session_state["generation"] += 1
+            session_state["revokedSessions"] = {}
 
     # 4. Optional TOTP setup. Empty secret/state files are always created so
     # Compose remains backwards-compatible when TOTP is disabled.
@@ -376,6 +418,11 @@ def setup_admin_credentials(
                 ) + "\n",
             )
 
+    write_private_file(
+        session_state_path,
+        json.dumps(session_state, indent=2) + "\n",
+    )
+
     # Write admin config (reference file, not used by Docker secrets)
     write_private_file(
         admin_config_path,
@@ -405,6 +452,10 @@ def setup_admin_credentials(
     print(
         f"  - {totp_state_dir.name}/{totp_state_path.name} "
         "(writable hashed recovery-code state)"
+    )
+    print(
+        f"  - {totp_state_dir.name}/{session_state_path.name} "
+        "(writable session revocation state)"
     )
     if totp_enabled:
         print(f"  - {totp_recovery_path.name} (protected recovery codes)")

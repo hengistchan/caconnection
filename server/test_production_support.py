@@ -286,6 +286,10 @@ class RuntimePermissionTest(unittest.TestCase):
             state_dir.mkdir()
             state_path = state_dir / "totp-state.json"
             state_path.write_text('{"version":1,"recoveryCodeHashes":[]}')
+            session_state_path = state_dir / "session-state.json"
+            session_state_path.write_text(
+                '{"version":1,"generation":1,"revokedSessions":{}}'
+            )
             calls = []
             prepare_runtime_permissions(
                 runtime,
@@ -304,15 +308,24 @@ class RuntimePermissionTest(unittest.TestCase):
                     ("admin-ui-totp-secret.txt", ADMIN_UID, ADMIN_UID),
                     ("admin-totp-state", ADMIN_UID, ADMIN_UID),
                     ("totp-state.json", ADMIN_UID, ADMIN_UID),
+                    ("session-state.json", ADMIN_UID, ADMIN_UID),
                 },
                 {
                     item for item in calls
                     if item[0].startswith("admin-ui-")
-                    or item[0] in {"admin-totp-state", "totp-state.json"}
+                    or item[0] in {
+                        "admin-totp-state",
+                        "totp-state.json",
+                        "session-state.json",
+                    }
                 },
             )
             self.assertEqual(
                 state_path.stat().st_mode & 0o777,
+                0o600,
+            )
+            self.assertEqual(
+                session_state_path.stat().st_mode & 0o777,
                 0o600,
             )
             self.assertEqual(state_dir.stat().st_mode & 0o777, 0o700)
@@ -327,6 +340,44 @@ class RuntimePermissionTest(unittest.TestCase):
                     enable_admin=True,
                     effective_uid=0,
                 )
+
+    def test_admin_permission_upgrade_creates_session_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary)
+            for filename in [
+                "config.json",
+                "cloudflared-config.yml",
+                "cloudflare-tunnel-credentials.json",
+                "admin-ui-api-token.txt",
+                "admin-ui-password-hash.txt",
+                "admin-ui-session-secret.txt",
+                "admin-ui-totp-secret.txt",
+            ]:
+                (runtime / filename).write_text("private")
+            state_dir = runtime / "admin-totp-state"
+            state_dir.mkdir()
+            (state_dir / "totp-state.json").write_text(
+                '{"version":1,"recoveryCodeHashes":[]}'
+            )
+
+            prepare_runtime_permissions(
+                runtime,
+                "cloudflare-tunnel",
+                enable_admin=True,
+                effective_uid=0,
+                chown=lambda _path, _uid, _gid: None,
+            )
+
+            state_path = state_dir / "session-state.json"
+            self.assertEqual(
+                json.loads(state_path.read_text()),
+                {
+                    "version": 1,
+                    "generation": 1,
+                    "revokedSessions": {},
+                },
+            )
+            self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
 
 
 class ProductionHostAuditTest(unittest.TestCase):

@@ -2,11 +2,13 @@ import {
   clearSessionCookie,
   requireAuth,
   requireCsrf,
+  revokeAdminSession,
 } from '../../utils/session'
 
 export default defineEventHandler(async (event) => {
   const session = requireAuth(event)
   requireCsrf(event, session)
+  revokeAdminSession(session)
   clearSessionCookie(event)
 
   // Return success

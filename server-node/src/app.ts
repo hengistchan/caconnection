@@ -54,6 +54,10 @@ import { outboundCommandRoutes } from './routes/outbound-command-routes.js';
 import { pairingRoutes } from './routes/pairing-routes.js';
 import { ingestRoutes } from './routes/ingest-routes.js';
 import { notificationRoutes } from './routes/notification-routes.js';
+import {
+  isRetryableSqliteError,
+  ServiceUnavailableError,
+} from './http/operational-errors.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -219,6 +223,9 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   });
 
   app.setErrorHandler((error: Error & { statusCode?: number; retryAfterMs?: number }, _request, reply) => {
+    if (isRetryableSqliteError(error)) {
+      error = new ServiceUnavailableError();
+    }
     if (error.statusCode) {
       const headers: Record<string, string> = {};
       if (error.retryAfterMs) {

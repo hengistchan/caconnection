@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
-import { CALL_NOTIFICATION_IDENTITY_WAIT_MS } from '../../src/config/constants.js';
+import {
+  CALL_NOTIFICATION_IDENTITY_WAIT_MS,
+  MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
+} from '../../src/config/constants.js';
 import { parseRuntimeConfig } from '../../src/config/runtime-config.js';
 import { initializeDatabase } from '../../src/database/database.js';
 import { encryptPayload } from '../../src/crypto/payload-crypto.js';
@@ -300,6 +303,67 @@ describe('Feishu notification delivery', () => {
     expect(transport.texts).toHaveLength(1);
     expect(db.prepare('SELECT status, attempt_count FROM notification_outbox').get())
       .toMatchObject({ status: 'SENT', attempt_count: 2 });
+  });
+
+  it('moves unreadable encrypted notifications to failed without retrying forever', async () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const payload = { originatingAddress: '10086', body: 'hello' };
+    ingestion.accept(
+      deviceId,
+      'poison-event-key',
+      'poison-event-nonce',
+      encryptedEnvelope('INCOMING_SMS', payload),
+      payload,
+      2_000,
+    );
+    db.prepare('UPDATE events SET envelope_json = ?').run('{invalid');
+    const dispatcher = new NotificationDispatcher(
+      notificationRepo,
+      new RecordingTransport(),
+      deviceRepo.loadSecrets(),
+    );
+
+    expect(await dispatcher.deliverOnce(2_000)).toBe(true);
+    expect(db.prepare(`
+      SELECT status, attempt_count, last_error FROM notification_outbox
+    `).get()).toMatchObject({
+      status: 'FAILED',
+      attempt_count: 1,
+      last_error: 'invalid encrypted payload',
+    });
+    expect(notificationRepo.getSettings(true, false).failedCount).toBe(1);
+  });
+
+  it('stops retrying after the configured delivery attempt limit', async () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const payload = { originatingAddress: '10086', body: 'hello' };
+    ingestion.accept(
+      deviceId,
+      'exhausted-event-key',
+      'exhausted-event-nonce',
+      encryptedEnvelope('INCOMING_SMS', payload),
+      payload,
+      2_000,
+    );
+    db.prepare(`
+      UPDATE notification_outbox
+      SET attempt_count = ?, next_attempt_at = 0
+    `).run(MAX_NOTIFICATION_DELIVERY_ATTEMPTS - 1);
+    const transport = new RecordingTransport();
+    transport.failures = 1;
+    const dispatcher = new NotificationDispatcher(
+      notificationRepo,
+      transport,
+      deviceRepo.loadSecrets(),
+    );
+
+    expect(await dispatcher.deliverOnce(2_000)).toBe(true);
+    expect(db.prepare(`
+      SELECT status, attempt_count FROM notification_outbox
+    `).get()).toMatchObject({
+      status: 'FAILED',
+      attempt_count: MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
+    });
   });
 
   it('skips removed app-notification events', async () => {

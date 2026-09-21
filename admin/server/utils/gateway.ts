@@ -30,6 +30,12 @@ function isNullableNonNegativeInteger(value: unknown): value is number | null {
     )
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+}
+
 function invalidGatewayResponse(): never {
   throw createError({
     statusCode: 502,
@@ -196,6 +202,7 @@ export interface GatewayMessage {
 
 export interface GatewayMessagesResponse {
   messages: GatewayMessage[]
+  unreadableRecords: number
 }
 
 export interface GatewayNotification {
@@ -216,6 +223,7 @@ export interface GatewayNotification {
 
 export interface GatewayNotificationsResponse {
   notifications: GatewayNotification[]
+  unreadableRecords: number
 }
 
 export interface GatewayCall {
@@ -247,6 +255,7 @@ export interface GatewayCall {
 
 export interface GatewayCallsResponse {
   calls: GatewayCall[]
+  unreadableRecords: number
 }
 
 export interface GatewayOtpClaimResponse {
@@ -338,6 +347,7 @@ export interface GatewayNotificationSettings {
   updatedAt: number
   pendingCount: number
   retryCount: number
+  failedCount: number
   lastSuccessAt: number | null
   lastAttemptAt: number | null
 }
@@ -439,10 +449,20 @@ function parseMessage(value: unknown): GatewayMessage {
 }
 
 function parseMessagesResponse(value: unknown): GatewayMessagesResponse {
-  if (!isRecord(value) || !Array.isArray(value.messages)) {
+  const unreadableRecords = isRecord(value)
+    ? value.unreadableRecords ?? 0
+    : undefined
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.messages)
+    || !isNonNegativeInteger(unreadableRecords)
+  ) {
     return invalidGatewayResponse()
   }
-  return { messages: value.messages.map(parseMessage) }
+  return {
+    messages: value.messages.map(parseMessage),
+    unreadableRecords,
+  }
 }
 
 function parseNotification(value: unknown): GatewayNotification {
@@ -471,10 +491,20 @@ function parseNotification(value: unknown): GatewayNotification {
 }
 
 function parseNotificationsResponse(value: unknown): GatewayNotificationsResponse {
-  if (!isRecord(value) || !Array.isArray(value.notifications)) {
+  const unreadableRecords = isRecord(value)
+    ? value.unreadableRecords ?? 0
+    : undefined
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.notifications)
+    || !isNonNegativeInteger(unreadableRecords)
+  ) {
     return invalidGatewayResponse()
   }
-  return { notifications: value.notifications.map(parseNotification) }
+  return {
+    notifications: value.notifications.map(parseNotification),
+    unreadableRecords,
+  }
 }
 
 function parseCall(value: unknown): GatewayCall {
@@ -512,10 +542,20 @@ function parseCall(value: unknown): GatewayCall {
 }
 
 function parseCallsResponse(value: unknown): GatewayCallsResponse {
-  if (!isRecord(value) || !Array.isArray(value.calls)) {
+  const unreadableRecords = isRecord(value)
+    ? value.unreadableRecords ?? 0
+    : undefined
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.calls)
+    || !isNonNegativeInteger(unreadableRecords)
+  ) {
     return invalidGatewayResponse()
   }
-  return { calls: value.calls.map(parseCall) }
+  return {
+    calls: value.calls.map(parseCall),
+    unreadableRecords,
+  }
 }
 
 function parseOutboundMessage(value: unknown): GatewayOutboundMessage {
@@ -917,6 +957,7 @@ export async function getGatewayAuditLog(): Promise<{
 }
 
 function parseNotificationSettings(value: unknown): GatewayNotificationSettings {
+  const failedCount = isRecord(value) ? value.failedCount ?? 0 : undefined
   if (
     !isRecord(value)
     || value.channel !== 'FEISHU'
@@ -927,12 +968,16 @@ function parseNotificationSettings(value: unknown): GatewayNotificationSettings 
     || !Number.isSafeInteger(value.updatedAt)
     || !Number.isSafeInteger(value.pendingCount)
     || !Number.isSafeInteger(value.retryCount)
+    || !isNonNegativeInteger(failedCount)
     || !isNullableInteger(value.lastSuccessAt)
     || !isNullableInteger(value.lastAttemptAt)
   ) {
     return invalidGatewayResponse()
   }
-  return value as unknown as GatewayNotificationSettings
+  return {
+    ...value,
+    failedCount,
+  } as unknown as GatewayNotificationSettings
 }
 
 function parseNotificationSettingsResponse(value: unknown): {

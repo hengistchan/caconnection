@@ -10,7 +10,9 @@ actions.
 - **Multi-language Support**: Simplified Chinese (default) and English
 - **Secure Authentication**: scrypt-hashed passwords, optional TOTP, persistent
   one-time recovery codes, and rate-limited login
-- **Session Management**: Stateless HMAC-signed HttpOnly cookies with bounded expiry
+- **Session Management**: HMAC-signed HttpOnly cookies with bounded expiry,
+  persistent logout revocation, and generation-based invalidation after
+  password or session-secret rotation
 - **Request Protection**: Per-session CSRF tokens on every authenticated mutation
 - **Gateway Status**: Real-time health and readiness monitoring
 - **Communication Workspace**: Browse SMS and captured notifications with type,
@@ -50,7 +52,8 @@ The token is stored as a Docker secret and only accessible server-side.
 3. Recovery codes are stored only as SHA-256 hashes in a writable private
    state file and are atomically removed after use
 4. Login attempts rate-limited per IP (5 attempts / 15 minutes)
-5. Sessions use HMAC-SHA256 signed, stateless HttpOnly cookies
+5. Sessions use HMAC-SHA256 signed HttpOnly cookies plus a private persistent
+   state file for logout revocation and credential-rotation invalidation
 6. Cookie restricted to `/admin` path with `SameSite=Strict`
 7. Remote SMS, OTP, pairing, device mutations, and logout requests require a
    signed-session CSRF token
@@ -134,6 +137,8 @@ This creates:
 - `admin-ui-session-secret.txt` - Session signing secret
 - `admin-ui-totp-secret.txt` - TOTP secret; empty when TOTP is disabled
 - `admin-totp-state/totp-state.json` - Writable hashed recovery-code state
+- `admin-totp-state/session-state.json` - Writable session generation and
+  logout-revocation state
 - `admin-config.json` - Setup metadata; it is not mounted into the container
 - Updates `config.json` with token hash only
 
@@ -186,6 +191,10 @@ python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-totp
 python3 server/setup_admin.py --runtime-dir server/deploy/runtime --disable-totp
 ```
 
+Rotating either the Admin password or session signing secret increments the
+persistent session generation, clears expired/redundant revocation entries, and
+invalidates every previously issued Admin cookie.
+
 When TOTP is enabled, import the protected URI from
 `admin-ui-totp-uri.txt` into an authenticator and securely store the codes in
 `admin-ui-totp-recovery-codes.txt`. Neither file is mounted into the container.
@@ -214,6 +223,8 @@ The container reads credentials from:
 - `/run/secrets/admin_session_secret` - Session signing secret
 - `/run/secrets/admin_totp_secret` - TOTP secret; empty when disabled
 - `/var/lib/caconnection-admin/totp-state.json` - Writable hashed recovery state
+- `/var/lib/caconnection-admin/session-state.json` - Writable session
+  generation and logout-revocation state
 
 ## Cloudflare Tunnel Integration
 
@@ -267,6 +278,8 @@ This ensures:
 - Preserve active filters in the page URL
 - Apply the current Gateway or group context before cursor pagination
 - Keep successful data visible when only one upstream source fails
+- Warn when individual encrypted records are unreadable while continuing to
+  display the remaining readable records
 - Load older records using the Gateway `beforeId` cursor
 - Reveal all sensitive content for 30 seconds, with automatic hiding
 - Message cards with:
@@ -282,7 +295,9 @@ This ensures:
   - Received time
   - Notification title (hidden by default)
   - Notification body (hidden by default)
-  - Channel and category
+- Channel and category
+- Feishu settings show pending, retrying, sent, skipped, and permanently failed
+  delivery counts; retryable failures are bounded instead of retrying forever
 
 ### Remote SMS (`/admin/` - Remote SMS tab)
 

@@ -5,6 +5,16 @@ export interface NotificationTransport {
   sendText(text: string): Promise<void>;
 }
 
+export class NotificationTransportError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+    this.name = 'NotificationTransportError';
+  }
+}
+
 export function createFeishuSignature(secret: string, timestampSeconds: number): string {
   const key = `${timestampSeconds}\n${secret}`;
   return createHmac('sha256', key).update('').digest('base64');
@@ -40,15 +50,27 @@ export class FeishuWebhookClient implements NotificationTransport {
         signal: AbortSignal.timeout(8_000),
       });
     } catch {
-      throw new Error('Feishu webhook request failed');
+      throw new NotificationTransportError(
+        'Feishu webhook request failed',
+        true,
+      );
     }
     if (!response.ok) {
-      throw new Error('Feishu webhook request failed');
+      throw new NotificationTransportError(
+        'Feishu webhook request failed',
+        response.status === 408
+          || response.status === 425
+          || response.status === 429
+          || response.status >= 500,
+      );
     }
 
     const contentLength = Number(response.headers.get('content-length') ?? '0');
     if (Number.isFinite(contentLength) && contentLength > 65_536) {
-      throw new Error('Feishu webhook response is too large');
+      throw new NotificationTransportError(
+        'Feishu webhook response is too large',
+        false,
+      );
     }
     let result: unknown;
     try {
@@ -58,14 +80,23 @@ export class FeishuWebhookClient implements NotificationTransport {
       }
       result = JSON.parse(text);
     } catch {
-      throw new Error('Feishu webhook returned invalid JSON');
+      throw new NotificationTransportError(
+        'Feishu webhook returned invalid JSON',
+        false,
+      );
     }
     if (!isRecord(result)) {
-      throw new Error('Feishu webhook returned invalid JSON');
+      throw new NotificationTransportError(
+        'Feishu webhook returned invalid JSON',
+        false,
+      );
     }
     const code = result.code ?? result.StatusCode;
     if (code !== 0) {
-      throw new Error('Feishu webhook rejected the message');
+      throw new NotificationTransportError(
+        'Feishu webhook rejected the message',
+        false,
+      );
     }
   }
 }

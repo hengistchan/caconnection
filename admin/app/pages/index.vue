@@ -301,6 +301,19 @@
           </div>
 
           <div class="partial-alerts">
+            <div
+              v-if="messageUnreadableRecords + notificationUnreadableRecords + callUnreadableRecords > 0"
+              class="inline-alert inline-alert-warning"
+              role="status"
+            >
+              <span>
+                {{ t('messages.unreadableRecords', {
+                  count: messageUnreadableRecords
+                    + notificationUnreadableRecords
+                    + callUnreadableRecords,
+                }) }}
+              </span>
+            </div>
             <div v-if="messageError" class="inline-alert inline-alert-warning" role="alert">
               <span>{{ t('messages.smsLoadFailed') }}</span>
               <button class="btn btn-ghost btn-sm" @click="retryMessages">
@@ -620,6 +633,9 @@
             <div class="refresh-summary push-summary">
               <span>{{ t('push.pending') }}: {{ notificationSettings.pendingCount }}</span>
               <span>{{ t('push.retrying') }}: {{ notificationSettings.retryCount }}</span>
+              <span :class="{ 'text-danger': notificationSettings.failedCount > 0 }">
+                {{ t('push.failed') }}: {{ notificationSettings.failedCount }}
+              </span>
               <span>{{ t('push.lastSuccess') }}: {{ formatOptionalTime(notificationSettings.lastSuccessAt) }}</span>
               <span>{{ t('push.lastAttempt') }}: {{ formatOptionalTime(notificationSettings.lastAttemptAt) }}</span>
             </div>
@@ -1125,6 +1141,9 @@ const {
   messages,
   notifications,
   calls,
+  messageUnreadableRecords,
+  notificationUnreadableRecords,
+  callUnreadableRecords,
   outboundMessages,
   messageLoading,
   notificationLoading,

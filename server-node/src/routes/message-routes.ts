@@ -78,7 +78,7 @@ export async function messageRoutes(app: FastifyInstance) {
       }
     }
 
-    const messages = app.eventRepo.getMessages(secrets, limit, {
+    const result = app.eventRepo.getMessagesResult(secrets, limit, {
       afterId,
       beforeId,
       slotIndex,
@@ -86,7 +86,13 @@ export async function messageRoutes(app: FastifyInstance) {
       deviceIds,
     });
 
-    return reply.send({ messages });
+    if (result.unreadableRecords > 0) {
+      request.log.warn({
+        unreadableRecords: result.unreadableRecords,
+        resource: 'messages',
+      }, 'unreadable encrypted records skipped');
+    }
+    return reply.send(result);
   });
 
   /**
@@ -146,14 +152,20 @@ export async function messageRoutes(app: FastifyInstance) {
       }
     }
 
-    const notifications = app.eventRepo.getNotifications(secrets, limit, {
+    const result = app.eventRepo.getNotificationsResult(secrets, limit, {
       afterId,
       beforeId,
       deviceId,
       deviceIds,
     });
 
-    return reply.send({ notifications });
+    if (result.unreadableRecords > 0) {
+      request.log.warn({
+        unreadableRecords: result.unreadableRecords,
+        resource: 'notifications',
+      }, 'unreadable encrypted records skipped');
+    }
+    return reply.send(result);
   });
 
   /**
@@ -218,13 +230,19 @@ export async function messageRoutes(app: FastifyInstance) {
       if (allowed !== null) deviceIds = allowed;
     }
 
-    const calls = callRepo.list(app.getClientSecrets(clientId), limit, {
+    const result = callRepo.listResult(app.getClientSecrets(clientId), limit, {
       afterId,
       beforeId,
       slotIndex,
       deviceId,
       deviceIds,
     });
-    return reply.send({ calls });
+    if (result.unreadableRecords > 0) {
+      request.log.warn({
+        unreadableRecords: result.unreadableRecords,
+        resource: 'calls',
+      }, 'unreadable encrypted records skipped');
+    }
+    return reply.send(result);
   });
 }

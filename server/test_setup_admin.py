@@ -163,6 +163,9 @@ class TestSetupAdminCredentials(unittest.TestCase):
             self.assertTrue(
                 (runtime_dir / "admin-totp-state" / "totp-state.json").exists()
             )
+            self.assertTrue(
+                (runtime_dir / "admin-totp-state" / "session-state.json").exists()
+            )
             self.assertEqual(
                 (runtime_dir / "admin-ui-totp-secret.txt").read_text(),
                 "\n",
@@ -260,15 +263,42 @@ class TestSetupAdminCredentials(unittest.TestCase):
             setup_admin_credentials(runtime_dir)
             token1 = (runtime_dir / "admin-ui-api-token.txt").read_text()
             password1 = (runtime_dir / "admin-ui-password.txt").read_text()
+            session_state_path = (
+                runtime_dir / "admin-totp-state" / "session-state.json"
+            )
+            session_state1 = json.loads(session_state_path.read_text())
 
             # Second run (no rotation)
             setup_admin_credentials(runtime_dir)
             token2 = (runtime_dir / "admin-ui-api-token.txt").read_text()
             password2 = (runtime_dir / "admin-ui-password.txt").read_text()
+            session_state2 = json.loads(session_state_path.read_text())
 
             # Credentials should be preserved
             self.assertEqual(token1, token2)
             self.assertEqual(password1, password2)
+            self.assertEqual(session_state1, session_state2)
+
+    def test_rejects_malformed_session_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runtime_dir = Path(tmpdir) / "runtime"
+            self._create_valid_config(runtime_dir)
+            setup_admin_credentials(runtime_dir)
+            session_state_path = (
+                runtime_dir / "admin-totp-state" / "session-state.json"
+            )
+            session_state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "generation": 1,
+                        "revokedSessions": {"invalid-session-id": -1},
+                    }
+                )
+            )
+
+            with self.assertRaises(SystemExit):
+                setup_admin_credentials(runtime_dir)
 
     def test_rotate_api_token(self):
         """API token rotation should change the token."""
@@ -310,6 +340,18 @@ class TestSetupAdminCredentials(unittest.TestCase):
             config1 = json.loads(
                 (runtime_dir / "admin-config.json").read_text()
             )
+            session_state_path = (
+                runtime_dir / "admin-totp-state" / "session-state.json"
+            )
+            session_state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "generation": 4,
+                        "revokedSessions": {"a" * 64: 9_999_999_999_999},
+                    }
+                )
+            )
 
             # Rotate password
             setup_admin_credentials(runtime_dir, rotate_password=True)
@@ -317,6 +359,7 @@ class TestSetupAdminCredentials(unittest.TestCase):
             config2 = json.loads(
                 (runtime_dir / "admin-config.json").read_text()
             )
+            session_state = json.loads(session_state_path.read_text())
 
             # Password should change
             self.assertNotEqual(password1, password2)
@@ -325,6 +368,8 @@ class TestSetupAdminCredentials(unittest.TestCase):
                 config1.get("session_secret"),
                 config2.get("session_secret"),
             )
+            self.assertEqual(session_state["generation"], 5)
+            self.assertEqual(session_state["revokedSessions"], {})
 
     def test_rotate_session_secret(self):
         """Session secret rotation should change the secret."""
@@ -337,18 +382,33 @@ class TestSetupAdminCredentials(unittest.TestCase):
             config1 = json.loads(
                 (runtime_dir / "admin-config.json").read_text()
             )
+            session_state_path = (
+                runtime_dir / "admin-totp-state" / "session-state.json"
+            )
+            session_state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "generation": 7,
+                        "revokedSessions": {"b" * 64: 9_999_999_999_999},
+                    }
+                )
+            )
 
             # Rotate session secret
             setup_admin_credentials(runtime_dir, rotate_session_secret=True)
             config2 = json.loads(
                 (runtime_dir / "admin-config.json").read_text()
             )
+            session_state = json.loads(session_state_path.read_text())
 
             # Session secret should change
             self.assertNotEqual(
                 config1["session_secret"],
                 config2["session_secret"],
             )
+            self.assertEqual(session_state["generation"], 8)
+            self.assertEqual(session_state["revokedSessions"], {})
 
     def test_enable_rotate_and_disable_totp(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -452,6 +512,13 @@ class TestSetupAdminCredentials(unittest.TestCase):
                 )
             state_path = runtime_dir / "admin-totp-state" / "totp-state.json"
             self.assertEqual(state_path.stat().st_mode & 0o777, 0o600)
+            session_state_path = (
+                runtime_dir / "admin-totp-state" / "session-state.json"
+            )
+            self.assertEqual(
+                session_state_path.stat().st_mode & 0o777,
+                0o600,
+            )
             self.assertEqual(state_path.parent.stat().st_mode & 0o777, 0o700)
 
             # Runtime directory should be 0700

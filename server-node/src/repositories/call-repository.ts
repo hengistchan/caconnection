@@ -43,6 +43,11 @@ export interface CallRecord {
   decision: string | null;
 }
 
+export interface CallQueryResult {
+  calls: CallRecord[];
+  unreadableRecords: number;
+}
+
 interface MutableCallRecord extends CallRecord {
   identityObservedAt: number | null;
 }
@@ -61,6 +66,20 @@ export class CallRepository {
       deviceIds?: Set<string>;
     } = {},
   ): CallRecord[] {
+    return this.listResult(secrets, limit, options).calls;
+  }
+
+  listResult(
+    secrets: Map<string, Buffer>,
+    limit: number,
+    options: {
+      afterId?: number;
+      beforeId?: number;
+      slotIndex?: number;
+      deviceId?: string;
+      deviceIds?: Set<string>;
+    } = {},
+  ): CallQueryResult {
     const clauses = ["event_type IN ('CALL_STATE', 'CALL_IDENTITY')"];
     const params: (string | number)[] = [];
 
@@ -69,7 +88,9 @@ export class CallRepository {
     if (options.slotIndex !== undefined) { clauses.push('slot_index = ?'); params.push(options.slotIndex); }
     if (options.deviceId !== undefined) { clauses.push('device_id = ?'); params.push(options.deviceId); }
     if (options.deviceIds !== undefined) {
-      if (options.deviceIds.size === 0) return [];
+      if (options.deviceIds.size === 0) {
+        return { calls: [], unreadableRecords: 0 };
+      }
       const ids = [...options.deviceIds].sort();
       clauses.push(`device_id IN (${ids.map(() => '?').join(',')})`);
       params.push(...ids);
@@ -91,15 +112,22 @@ export class CallRepository {
       row: CallEventRow;
       payload: Record<string, unknown>;
     }> = [];
+    let unreadableRecords = 0;
 
     for (const row of rows) {
       const secret = secrets.get(row.device_id);
       if (!secret) continue;
-      const envelope = decryptPayload(
-        JSON.parse(row.envelope_json),
-        row.device_id,
-        secret,
-      );
+      let envelope;
+      try {
+        envelope = decryptPayload(
+          JSON.parse(row.envelope_json),
+          row.device_id,
+          secret,
+        );
+      } catch {
+        unreadableRecords += 1;
+        continue;
+      }
       const payload = envelope.payload as Record<string, unknown>;
       if (row.event_type === 'CALL_IDENTITY') {
         identities.push({ row, payload });
@@ -156,10 +184,11 @@ export class CallRepository {
       }
     }
 
-    return [...calls.values()]
+    const result = [...calls.values()]
       .sort((left, right) => right.id - left.id)
       .slice(0, boundedLimit)
       .map(({ identityObservedAt: _identityObservedAt, ...call }) => call);
+    return { calls: result, unreadableRecords };
   }
 }
 
