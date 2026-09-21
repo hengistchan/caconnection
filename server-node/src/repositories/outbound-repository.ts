@@ -14,6 +14,7 @@ import {
   OUTBOUND_COMMAND_LEASE_MS,
   OUTBOUND_COMMAND_STATUSES,
 } from '../config/constants.js';
+import { InvalidEventPayloadError } from '../http/operational-errors.js';
 
 export interface OutboundCommandRow {
   id: number;
@@ -182,7 +183,7 @@ export class OutboundRepository {
       || (resultCode != null && (typeof resultCode !== 'number' || !Number.isInteger(resultCode)))
       || (errorDetail != null && typeof errorDetail !== 'string')
     ) {
-      throw new Error('invalid outbound status');
+      throw new InvalidEventPayloadError('invalid outbound status');
     }
 
     const row = queryOne<{ status: string }>(this.db, 'SELECT status FROM outbound_commands WHERE command_id = ? AND device_id = ?', commandId, deviceId);

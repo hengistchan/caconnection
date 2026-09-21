@@ -6,6 +6,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../../src/app.js';
+import {
+  CALL_NOTIFICATION_IDENTITY_WAIT_MS,
+  MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
+} from '../../src/config/constants.js';
 import { parseRuntimeConfig } from '../../src/config/runtime-config.js';
 import { initializeDatabase } from '../../src/database/database.js';
 import { encryptPayload } from '../../src/crypto/payload-crypto.js';
@@ -93,6 +97,139 @@ describe('Feishu notification delivery', () => {
     expect(JSON.stringify(outbox)).not.toContain('+8613812345678');
   });
 
+  it('queues only the first ringing state for a call session', () => {
+    notificationRepo.updateSettings(true, 'REDACTED', 1_000);
+    const states = ['RINGING', 'OFFHOOK', 'IDLE'];
+    for (const [index, state] of states.entries()) {
+      const payload = {
+        sessionId: 'call-session-1',
+        state,
+        observedAt: 2_000 + index * 1_000,
+      };
+      expect(ingestion.accept(
+        deviceId,
+        `call-state-${state}`,
+        `call-nonce-${state}`,
+        encryptedEnvelope('CALL_STATE', payload),
+        payload,
+        2_000 + index * 1_000,
+      )).toBe(true);
+    }
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
+      .toMatchObject({ count: 1 });
+    expect(db.prepare('SELECT next_attempt_at FROM notification_outbox').get())
+      .toMatchObject({ next_attempt_at: 2_000 + CALL_NOTIFICATION_IDENTITY_WAIT_MS });
+  });
+
+  it('does not queue duplicate ringing states for the same call session', () => {
+    notificationRepo.updateSettings(true, 'REDACTED', 1_000);
+    const payload = {
+      sessionId: 'call-session-duplicate',
+      state: 'RINGING',
+      observedAt: 2_000,
+    };
+
+    expect(ingestion.accept(
+      deviceId,
+      'duplicate-call-state-1',
+      'duplicate-call-nonce-1',
+      encryptedEnvelope('CALL_STATE', payload),
+      payload,
+      2_000,
+    )).toBe(true);
+    expect(ingestion.accept(
+      deviceId,
+      'duplicate-call-state-2',
+      'duplicate-call-nonce-2',
+      encryptedEnvelope('CALL_STATE', payload),
+      payload,
+      2_001,
+    )).toBe(true);
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
+      .toMatchObject({ count: 1 });
+  });
+
+  it('renders a redacted incoming call notification', () => {
+    const rendered = renderFeishuNotification({
+      id: 1,
+      eventId: 1,
+      kind: 'EVENT',
+      attemptCount: 1,
+      createdAt: 1_000,
+      deviceId,
+      eventType: 'CALL_STATE',
+      receivedAt: 2_000,
+      slotIndex: 0,
+      envelopeJson: '{}',
+      contentMode: 'REDACTED',
+      payload: {
+        sessionId: 'call-session-1',
+        state: 'RINGING',
+        callerAddress: '+8613812345678',
+        callerDisplayName: 'Example caller',
+      },
+    });
+
+    expect(rendered).toContain('CAConnection 来电提醒');
+    expect(rendered).toContain('+86*******5678');
+    expect(rendered).not.toContain('+8613812345678');
+    expect(rendered).toContain('SIM1');
+    expect(rendered).toContain('\n设备：');
+    expect(rendered).not.toContain('\\n');
+  });
+
+  it('waits for and merges the related call identity before delivery', async () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const ringing = {
+      sessionId: 'call-session-with-identity',
+      state: 'RINGING',
+      observedAt: 2_000,
+    };
+    ingestion.accept(
+      deviceId,
+      'call-ringing-with-identity',
+      'call-ringing-nonce-with-identity',
+      encryptedEnvelopeAt('CALL_STATE', ringing, 2_000, 0),
+      ringing,
+      2_000,
+    );
+    const identity = {
+      callerAddress: '+8613812345678',
+      callerDisplayName: 'Example caller',
+      observedAt: 2_300,
+    };
+    ingestion.accept(
+      deviceId,
+      'call-identity',
+      'call-identity-nonce',
+      encryptedEnvelopeAt('CALL_IDENTITY', identity, 2_300, 0),
+      identity,
+      2_300,
+    );
+    expect(db.prepare('SELECT next_attempt_at FROM notification_outbox').get())
+      .toMatchObject({ next_attempt_at: 2_300 });
+    const transport = new RecordingTransport();
+    const dispatcher = new NotificationDispatcher(
+      notificationRepo,
+      transport,
+      deviceRepo.loadSecrets(),
+    );
+
+    expect(await dispatcher.deliverOnce(
+      2_299,
+    )).toBe(false);
+    expect(await dispatcher.deliverOnce(
+      2_300,
+    )).toBe(true);
+    expect(transport.texts).toHaveLength(1);
+    expect(transport.texts[0]).toContain('来电号码：+8613812345678');
+    expect(transport.texts[0]).toContain('联系人：Example caller');
+    expect(transport.texts[0]).toContain('\n设备：');
+    expect(transport.texts[0]).not.toContain('\\n');
+  });
+
   it('renders redacted and full messages with distinct privacy boundaries', () => {
     const base = {
       id: 1,
@@ -168,6 +305,67 @@ describe('Feishu notification delivery', () => {
       .toMatchObject({ status: 'SENT', attempt_count: 2 });
   });
 
+  it('moves unreadable encrypted notifications to failed without retrying forever', async () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const payload = { originatingAddress: '10086', body: 'hello' };
+    ingestion.accept(
+      deviceId,
+      'poison-event-key',
+      'poison-event-nonce',
+      encryptedEnvelope('INCOMING_SMS', payload),
+      payload,
+      2_000,
+    );
+    db.prepare('UPDATE events SET envelope_json = ?').run('{invalid');
+    const dispatcher = new NotificationDispatcher(
+      notificationRepo,
+      new RecordingTransport(),
+      deviceRepo.loadSecrets(),
+    );
+
+    expect(await dispatcher.deliverOnce(2_000)).toBe(true);
+    expect(db.prepare(`
+      SELECT status, attempt_count, last_error FROM notification_outbox
+    `).get()).toMatchObject({
+      status: 'FAILED',
+      attempt_count: 1,
+      last_error: 'invalid encrypted payload',
+    });
+    expect(notificationRepo.getSettings(true, false).failedCount).toBe(1);
+  });
+
+  it('stops retrying after the configured delivery attempt limit', async () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const payload = { originatingAddress: '10086', body: 'hello' };
+    ingestion.accept(
+      deviceId,
+      'exhausted-event-key',
+      'exhausted-event-nonce',
+      encryptedEnvelope('INCOMING_SMS', payload),
+      payload,
+      2_000,
+    );
+    db.prepare(`
+      UPDATE notification_outbox
+      SET attempt_count = ?, next_attempt_at = 0
+    `).run(MAX_NOTIFICATION_DELIVERY_ATTEMPTS - 1);
+    const transport = new RecordingTransport();
+    transport.failures = 1;
+    const dispatcher = new NotificationDispatcher(
+      notificationRepo,
+      transport,
+      deviceRepo.loadSecrets(),
+    );
+
+    expect(await dispatcher.deliverOnce(2_000)).toBe(true);
+    expect(db.prepare(`
+      SELECT status, attempt_count FROM notification_outbox
+    `).get()).toMatchObject({
+      status: 'FAILED',
+      attempt_count: MAX_NOTIFICATION_DELIVERY_ATTEMPTS,
+    });
+  });
+
   it('skips removed app-notification events', async () => {
     notificationRepo.updateSettings(true, 'FULL', 1_000);
     const payload = {
@@ -188,15 +386,52 @@ describe('Feishu notification delivery', () => {
       .toMatchObject({ count: 0 });
   });
 
+  it.each([
+    'com.ss.android.lark',
+    'com.ss.android.lark.kami',
+    'com.ss.android.lark.saxmsa667',
+  ])('stores but never forwards Feishu loop-source notifications from %s', sourcePackage => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    const payload = {
+      eventType: 'POSTED',
+      sourcePackage,
+      title: 'CAConnection notification',
+      body: 'Would otherwise loop back into the Feishu webhook',
+    };
+
+    expect(ingestion.accept(
+      deviceId,
+      `feishu-loop-${sourcePackage}`,
+      `feishu-loop-nonce-${sourcePackage}`,
+      encryptedEnvelope('NOTIFICATION', payload),
+      payload,
+      2_000,
+    )).toBe(true);
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM events').get())
+      .toMatchObject({ count: 1 });
+    expect(db.prepare('SELECT COUNT(*) AS count FROM notification_outbox').get())
+      .toMatchObject({ count: 0 });
+  });
+
   function encryptedEnvelope(eventType: string, payload: Record<string, unknown>) {
+    return encryptedEnvelopeAt(eventType, payload, 1_500, 1);
+  }
+
+  function encryptedEnvelopeAt(
+    eventType: string,
+    payload: Record<string, unknown>,
+    createdAt: number,
+    slotIndex: number,
+  ) {
     return encryptPayload({
       schemaVersion: 1,
       deliveryId: `delivery-${eventType}`,
       sourceEventId: `source-${eventType}`,
       eventType,
-      createdAt: 1_500,
+      createdAt,
       subscriptionId: 1,
-      slotIndex: 1,
+      slotIndex,
       payload,
     }, deviceId, secret);
   }

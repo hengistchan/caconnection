@@ -6,7 +6,7 @@
   "nav": {
     "main": "Main navigation",
     "dashboard": "Dashboard",
-    "messages": "Messages & Notifications",
+    "messages": "Communication Events",
     "logout": "Logout",
     "language": "Language",
     "devices": "Devices",
@@ -23,8 +23,15 @@
     "show": "Show",
     "hide": "Hide",
     "submit": "Login",
+    "verifyTotp": "Verify",
     "submitting": "Logging in...",
     "error": "Login failed. Please check your password.",
+    "totpSubtitle": "Enter your authenticator code or a recovery code",
+    "totpCode": "Authentication code",
+    "totpPlaceholder": "6-digit code or recovery code",
+    "totpHint": "Recovery codes may be used once if your authenticator is unavailable.",
+    "totpError": "The authentication code, recovery code, or challenge is invalid or expired.",
+    "backToPassword": "Back to password",
     "rateLimit": "Too many login attempts. Please try again later.",
     "securityNotice": "Security notice: the admin can send SMS only through an explicitly selected gateway and SIM. Pairing codes are short-lived and single-use."
   },
@@ -54,10 +61,11 @@
     "notificationStats": "Notification Statistics",
     "loadedNotifications": "Loaded notifications",
     "notificationSources": "Source apps",
-    "latestNotification": "Latest notification"
+    "latestNotification": "Latest notification",
+    "callsUpdated": "Calls updated"
   },
   "messages": {
-    "title": "Messages and Notifications",
+    "title": "Communication Events",
     "filter": {
       "all": "All",
       "sms": "SMS",
@@ -70,17 +78,18 @@
       "sourceApp": "Source app",
       "allApps": "All apps",
       "search": "Search",
-      "searchPlaceholder": "Sender, content, app, or device",
+      "searchPlaceholder": "Sender, content, app, caller, or device",
       "dateRange": "Date range",
       "dateAll": "All dates",
       "today": "Today",
       "last7Days": "Last 7 days",
       "last30Days": "Last 30 days",
-      "reset": "Clear filters"
+      "reset": "Clear filters",
+      "calls": "Calls"
     },
     "refresh": "Refresh",
     "refreshing": "Refreshing...",
-    "empty": "No matching messages or notifications",
+    "empty": "No matching communication events",
     "error": "Failed to load messages or notifications",
     "retry": "Retry",
     "eventId": "Event ID",
@@ -142,8 +151,11 @@
     "loadMore": "Load older items",
     "smsLoadFailed": "SMS could not be refreshed. Available notification data is still shown.",
     "notificationLoadFailed": "Notifications could not be refreshed. Available SMS data is still shown.",
+    "unreadableRecords": "{count} encrypted record could not be decoded and was skipped. | {count} encrypted records could not be decoded and were skipped.",
     "emptySmsForSim": "No SMS messages are available for SIM{sim}.",
-    "emptyNotificationsForSource": "No notifications are available from {source}."
+    "emptyNotificationsForSource": "No notifications are available from {source}.",
+    "callLoadFailed": "Calls could not be refreshed. Available SMS and notification data is still shown.",
+    "emptyCallsForSim": "No calls are available for SIM{sim}."
   },
   "pairing": {
     "title": "Pair Android device",
@@ -312,6 +324,7 @@
     "test": "Send test notification",
     "pending": "Pending",
     "retrying": "Retrying",
+    "failed": "Failed",
     "lastSuccess": "Last success",
     "lastAttempt": "Last attempt",
     "loadError": "Could not load Feishu push settings.",
@@ -354,5 +367,31 @@
     "saveError": "Unable to save group",
     "deleteError": "Unable to delete group",
     "deleteConfirm": "Delete group {name}? Its devices will not be deleted."
+  },
+  "calls": {
+    "badge": "Call",
+    "sim": "SIM{sim}",
+    "caller": "Caller",
+    "callerName": "Caller name",
+    "unknownCaller": "Unknown caller",
+    "result": "Result",
+    "answered": "Answered",
+    "notAnswered": "Not answered or unknown",
+    "stateHistory": "Call state timeline",
+    "sessionId": "Call session ID",
+    "resolutionMethod": "Identity resolution",
+    "confidence": "Resolution confidence",
+    "durationSeconds": "{seconds}s",
+    "durationMinutesSeconds": "{minutes}m {seconds}s",
+    "direction": {
+      "INCOMING": "Incoming",
+      "UNKNOWN": "Unknown direction"
+    },
+    "state": {
+      "RINGING": "Ringing",
+      "OFFHOOK": "In call",
+      "IDLE": "Ended",
+      "UNKNOWN": "Unknown"
+    }
   }
 }

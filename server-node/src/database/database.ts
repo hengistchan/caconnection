@@ -99,6 +99,15 @@ export function initializeDatabase(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS index_events_type_received
       ON events(event_type, received_at DESC);
 
+    CREATE TABLE IF NOT EXISTS call_ringing_sessions (
+      device_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      first_event_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY(device_id, session_id),
+      FOREIGN KEY(first_event_id) REFERENCES events(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS index_pairing_sessions_expiry
       ON pairing_sessions(expires_at);
 

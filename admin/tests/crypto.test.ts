@@ -7,6 +7,14 @@ import {
   safeCompare,
   verifyPassword,
 } from '../server/utils/crypto'
+import {
+  generateRecoveryCodes,
+  generateTotpSecret,
+  hashRecoveryCode,
+  isValidTotpSecret,
+  verifyRecoveryCodeHash,
+  verifyTotpCode,
+} from '../server/utils/totp'
 
 describe('crypto utilities', () => {
   it('hashes and verifies passwords using the production implementation', async () => {
@@ -64,5 +72,25 @@ describe('crypto utilities', () => {
     expect(safeCompare('hello', 'hello')).toBe(true)
     expect(safeCompare('hello', 'world')).toBe(false)
     expect(safeCompare('hello', 'hell')).toBe(false)
+  })
+
+  it('generates and verifies RFC 6238 compatible TOTP codes', () => {
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+    expect(generateTotpSecret()).toMatch(/^[A-Z2-7]{32}$/)
+    expect(isValidTotpSecret(secret)).toBe(true)
+    expect(isValidTotpSecret('A')).toBe(false)
+    expect(verifyTotpCode(secret, '287082', 59_000)).toBe(true)
+    expect(verifyTotpCode(secret, '287083', 59_000)).toBe(false)
+  })
+
+  it('generates high-entropy recovery codes and verifies their hashes', () => {
+    const codes = generateRecoveryCodes(3)
+    expect(codes).toHaveLength(3)
+    expect(new Set(codes).size).toBe(3)
+    expect(codes.every(code => /^[A-F0-9]{20}$/.test(code))).toBe(true)
+    const hash = hashRecoveryCode(codes[0])
+    expect(hash).toMatch(/^[0-9a-f]{64}$/)
+    expect(verifyRecoveryCodeHash(codes[0], hash!)).toBe(true)
+    expect(verifyRecoveryCodeHash(codes[1], hash!)).toBe(false)
   })
 })

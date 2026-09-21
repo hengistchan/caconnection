@@ -1,4 +1,4 @@
-export const SERVICE_VERSION = '0.6.0';
+export const SERVICE_VERSION = '0.6.2';
 
 // API and protocol versions — must remain identical to Python
 export const API_VERSION = 1;
@@ -22,7 +22,10 @@ export const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
 export const DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300;
 export const DEFAULT_NOTIFICATION_RETRY_SECONDS = 5;
 export const MAX_NOTIFICATION_RETRY_SECONDS = 15 * 60;
+export const MAX_NOTIFICATION_DELIVERY_ATTEMPTS = 12;
 export const NOTIFICATION_DELIVERY_LEASE_MS = 60_000;
+export const CALL_NOTIFICATION_IDENTITY_WAIT_MS = 30_000;
+export const CALL_IDENTITY_CORRELATION_WINDOW_MS = 10_000;
 
 // Device health windows
 export const DEVICE_ONLINE_WINDOW_MS = 3 * 60 * 1000;

@@ -41,6 +41,33 @@ export interface GatewayNotification {
   body: string | null
 }
 
+export interface GatewayCall {
+  id: number
+  deviceId: string
+  sessionId: string | null
+  createdAt: number
+  receivedAt: number
+  startedAt: number
+  endedAt: number | null
+  durationMillis: number | null
+  subscriptionId: number | null
+  slotIndex: number | null
+  direction: 'INCOMING' | 'UNKNOWN'
+  state: 'RINGING' | 'OFFHOOK' | 'IDLE' | null
+  answered: boolean
+  states: Array<{
+    state: 'RINGING' | 'OFFHOOK' | 'IDLE'
+    observedAt: number
+    initialSnapshot: boolean
+  }>
+  callerAddress: string | null
+  callerDisplayName: string | null
+  resolutionMethod: string | null
+  resolutionConfidence: string | null
+  verificationStatus: number | null
+  decision: string | null
+}
+
 export interface OtpClaimResult {
   otp: {
     eventId: number
@@ -152,6 +179,7 @@ export interface GatewayNotificationSettings {
   updatedAt: number
   pendingCount: number
   retryCount: number
+  failedCount: number
   lastSuccessAt: number | null
   lastAttemptAt: number | null
 }
@@ -172,6 +200,19 @@ export function useGateway() {
     'gateway-notifications',
     () => [],
   )
+  const calls = useState<GatewayCall[]>('gateway-calls', () => [])
+  const messageUnreadableRecords = useState<number>(
+    'gateway-message-unreadable-records',
+    () => 0,
+  )
+  const notificationUnreadableRecords = useState<number>(
+    'gateway-notification-unreadable-records',
+    () => 0,
+  )
+  const callUnreadableRecords = useState<number>(
+    'gateway-call-unreadable-records',
+    () => 0,
+  )
   const outboundMessages = useState<GatewayOutboundMessage[]>(
     'gateway-outbound-messages',
     () => [],
@@ -182,6 +223,7 @@ export function useGateway() {
     'gateway-notification-loading',
     () => false,
   )
+  const callLoading = useState<boolean>('gateway-call-loading', () => false)
   const outboundLoading = useState<boolean>(
     'gateway-outbound-loading',
     () => false,
@@ -199,6 +241,7 @@ export function useGateway() {
     'gateway-notification-has-more',
     () => true,
   )
+  const callHasMore = useState<boolean>('gateway-call-has-more', () => true)
   const statusLastSuccessAt = useState<number | null>(
     'gateway-status-last-success-at',
     () => null,
@@ -211,12 +254,17 @@ export function useGateway() {
     'gateway-notification-last-success-at',
     () => null,
   )
+  const callLastSuccessAt = useState<number | null>(
+    'gateway-call-last-success-at',
+    () => null,
+  )
   const statusError = useState<string | null>('gateway-status-error', () => null)
   const messageError = useState<string | null>('gateway-message-error', () => null)
   const notificationError = useState<string | null>(
     'gateway-notification-error',
     () => null,
   )
+  const callError = useState<string | null>('gateway-call-error', () => null)
 
   /**
    * Fetch gateway status
@@ -273,7 +321,10 @@ export function useGateway() {
       const query = params.toString()
       const url = `/admin/api/gateway/messages${query ? `?${query}` : ''}`
 
-      const data = await $fetch<{ messages: GatewayMessage[] }>(url, {
+      const data = await $fetch<{
+        messages: GatewayMessage[]
+        unreadableRecords?: number
+      }>(url, {
         credentials: 'include',
       })
 
@@ -285,6 +336,7 @@ export function useGateway() {
         messages.value = data.messages
       }
       messageHasMore.value = data.messages.length === (options.limit ?? 50)
+      messageUnreadableRecords.value = data.unreadableRecords ?? 0
       messageError.value = null
       messageLastSuccessAt.value = Date.now()
       return true
@@ -321,7 +373,10 @@ export function useGateway() {
       if (options.groupId) params.set('groupId', options.groupId)
       const query = params.toString()
       const url = `/admin/api/gateway/notifications${query ? `?${query}` : ''}`
-      const data = await $fetch<{ notifications: GatewayNotification[] }>(url, {
+      const data = await $fetch<{
+        notifications: GatewayNotification[]
+        unreadableRecords?: number
+      }>(url, {
         credentials: 'include',
       })
 
@@ -338,6 +393,7 @@ export function useGateway() {
       }
       notificationHasMore.value
         = data.notifications.length === (options.limit ?? 50)
+      notificationUnreadableRecords.value = data.unreadableRecords ?? 0
       notificationError.value = null
       notificationLastSuccessAt.value = Date.now()
       return true
@@ -351,6 +407,56 @@ export function useGateway() {
       return false
     } finally {
       notificationLoading.value = false
+    }
+  }
+
+  async function fetchCalls(options: {
+    limit?: number
+    slotIndex?: number | null
+    beforeId?: number | null
+    append?: boolean
+    deviceId?: string
+    groupId?: string
+  } = {}): Promise<boolean> {
+    callLoading.value = true
+    try {
+      const params = new URLSearchParams()
+      if (options.limit) params.set('limit', options.limit.toString())
+      if (options.slotIndex !== undefined && options.slotIndex !== null) {
+        params.set('slotIndex', options.slotIndex.toString())
+      }
+      if (options.beforeId !== undefined && options.beforeId !== null) {
+        params.set('beforeId', options.beforeId.toString())
+      }
+      if (options.deviceId) params.set('deviceId', options.deviceId)
+      if (options.groupId) params.set('groupId', options.groupId)
+      const query = params.toString()
+      const data = await $fetch<{
+        calls: GatewayCall[]
+        unreadableRecords?: number
+      }>(
+        `/admin/api/gateway/calls${query ? `?${query}` : ''}`,
+        { credentials: 'include' },
+      )
+      if (options.append) {
+        const merged = new Map(calls.value.map(call => [call.id, call]))
+        data.calls.forEach(call => merged.set(call.id, call))
+        calls.value = [...merged.values()].sort((left, right) => right.id - left.id)
+      } else {
+        calls.value = data.calls
+      }
+      callHasMore.value = data.calls.length === (options.limit ?? 50)
+      callUnreadableRecords.value = data.unreadableRecords ?? 0
+      callError.value = null
+      callLastSuccessAt.value = Date.now()
+      return true
+    } catch (err: unknown) {
+      const fetchError = err as { statusCode?: number; data?: { message?: string } }
+      if (fetchError.statusCode === 401) navigateTo('/login')
+      callError.value = fetchError.data?.message || 'Failed to fetch calls'
+      return false
+    } finally {
+      callLoading.value = false
     }
   }
 
@@ -694,30 +800,39 @@ export function useGateway() {
     status: readonly(status),
     messages: readonly(messages),
     notifications: readonly(notifications),
+    calls: readonly(calls),
+    messageUnreadableRecords: readonly(messageUnreadableRecords),
+    notificationUnreadableRecords: readonly(notificationUnreadableRecords),
+    callUnreadableRecords: readonly(callUnreadableRecords),
     outboundMessages: readonly(outboundMessages),
     isLoading: computed(() =>
       messageLoading.value || notificationLoading.value),
     statusLoading: readonly(statusLoading),
     messageLoading: readonly(messageLoading),
     notificationLoading: readonly(notificationLoading),
+    callLoading: readonly(callLoading),
     outboundLoading: readonly(outboundLoading),
     messageHasMore: readonly(messageHasMore),
     notificationHasMore: readonly(notificationHasMore),
+    callHasMore: readonly(callHasMore),
     outboundHasMore: readonly(outboundHasMore),
     statusLastSuccessAt: readonly(statusLastSuccessAt),
     messageLastSuccessAt: readonly(messageLastSuccessAt),
     notificationLastSuccessAt: readonly(notificationLastSuccessAt),
+    callLastSuccessAt: readonly(callLastSuccessAt),
     error: computed(() =>
       statusError.value || messageError.value || notificationError.value),
     statusError: readonly(statusError),
     messageError: readonly(messageError),
     notificationError: readonly(notificationError),
+    callError: readonly(callError),
     outboundError: readonly(outboundError),
     simCounts,
     latestMessageTime,
     fetchStatus,
     fetchMessages,
     fetchNotifications,
+    fetchCalls,
     fetchOutboundMessages,
     sendOutboundMessage,
     claimOtp,

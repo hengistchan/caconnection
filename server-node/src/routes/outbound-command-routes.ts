@@ -97,7 +97,7 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
       if (error.message === 'idempotency key conflict') {
         return reply.status(409).send({ error: 'idempotency conflict' });
       }
-      return reply.status(400).send({ error: error.message || 'invalid request' });
+      throw error;
     }
   });
 }

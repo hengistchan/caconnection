@@ -275,6 +275,10 @@ This creates:
   `notifications:manage` scopes)
 - `admin-ui-password.txt` - Admin password (show once, then securely store)
 - `admin-config.json` - Admin configuration (password hash, session secret)
+- `admin-ui-totp-secret.txt` - Empty unless TOTP is explicitly enabled
+- `admin-totp-state/totp-state.json` - Writable hashed recovery-code state
+- `admin-totp-state/session-state.json` - Writable session generation and
+  logout-revocation state
 
 The Gateway `config.json` is updated with only the token SHA-256 hash.
 
@@ -327,11 +331,39 @@ python3 ../setup_admin.py --runtime-dir runtime --rotate-password
 
 # Rotate session secret
 python3 ../setup_admin.py --runtime-dir runtime --rotate-session-secret
+
+# Enable TOTP
+python3 ../setup_admin.py --runtime-dir runtime --enable-totp
+
+# Replace the TOTP secret and all recovery codes
+python3 ../setup_admin.py --runtime-dir runtime --rotate-totp
+
+# Disable TOTP and invalidate all recovery codes
+python3 ../setup_admin.py --runtime-dir runtime --disable-totp
 ```
 
-After rotation, restart the admin container:
+When TOTP is enabled, securely import `runtime/admin-ui-totp-uri.txt` into an
+authenticator and store `runtime/admin-ui-totp-recovery-codes.txt` separately.
+Only the TOTP secret and hashed recovery state are mounted into the Admin
+container. Include the TOTP secret, current hashed recovery state, setup URI,
+and plaintext recovery codes in protected off-host backups. A restored recovery
+state must not re-enable codes that were consumed after the backup.
+
+Rotating the Admin password or session secret increments the persistent session
+generation and invalidates all previously issued Admin cookies. Logout
+revocations survive Admin process and container restarts.
+
+TOTP challenges and login rate limits are process-local, so the current
+deployment supports exactly one Admin replica.
+
+After a credential change, run the permission preparation step and restart the
+admin container:
 
 ```bash
+python3 ../prepare_runtime_permissions.py \
+  --runtime-dir runtime \
+  --deployment-mode cloudflare-tunnel \
+  --enable-admin
 docker compose -f compose.cloudflare.yaml restart admin
 ```
 
@@ -339,8 +371,11 @@ docker compose -f compose.cloudflare.yaml restart admin
 
 - API token never reaches the browser (server-side proxy only)
 - scrypt-hashed passwords with random salt
+- Optional TOTP with single-use client-bound challenges
+- Persistent recovery codes stored only as hashes and atomically consumed
 - Rate-limited login (5 attempts / 15 minutes per IP)
 - HMAC-signed HttpOnly session cookies
+- Persistent logout revocation and credential-rotation invalidation
 - All sensitive responses marked `Cache-Control: no-store`
 - Content hidden by default (sender, message body)
 - OTP codes auto-clear after 30 seconds

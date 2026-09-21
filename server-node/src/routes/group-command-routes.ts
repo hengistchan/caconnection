@@ -59,7 +59,15 @@ export async function groupCommandRoutes(app: FastifyInstance) {
       if (error.message === 'group already exists') {
         return reply.status(409).send({ error: error.message });
       }
-      return reply.status(400).send({ error: error.message || 'invalid request' });
+      if ([
+        'invalid groupId',
+        'invalid group name',
+        'duplicate deviceId',
+        'unknown deviceId',
+      ].includes(error.message)) {
+        return reply.status(400).send({ error: error.message });
+      }
+      throw error;
     }
   });
 
@@ -113,7 +121,14 @@ export async function groupCommandRoutes(app: FastifyInstance) {
       app.auditRepo.record(clientId, 'DEVICE_GROUP_UPDATE', null, 'SUCCESS', { groupId });
       return reply.send({ group });
     } catch (error: any) {
-      return reply.status(400).send({ error: error.message || 'invalid request' });
+      if ([
+        'invalid group name',
+        'duplicate deviceId',
+        'unknown deviceId',
+      ].includes(error.message)) {
+        return reply.status(400).send({ error: error.message });
+      }
+      throw error;
     }
   });
 

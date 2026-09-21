@@ -8,23 +8,30 @@ This script:
 2. Stores only the token SHA-256 hash in Gateway config.json
 3. Generates a random admin password with scrypt/PBKDF2 hash
 4. Creates a random session secret
-5. Writes credentials to permission-restricted files
+5. Optionally provisions TOTP with hashed, persistent recovery-code state
+6. Writes credentials to permission-restricted files
 
 Usage:
     python3 server/setup_admin.py --runtime-dir server/deploy/runtime
     python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-api-token
     python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-password
     python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-session-secret
+    python3 server/setup_admin.py --runtime-dir server/deploy/runtime --enable-totp
+    python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-totp
+    python3 server/setup_admin.py --runtime-dir server/deploy/runtime --disable-totp
 """
 
 import argparse
+import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 
 ADMIN_CLIENT_ID = "admin-ui"
@@ -39,6 +46,10 @@ ADMIN_SCOPES = [
 
 # Required fields in existing Gateway config
 REQUIRED_CONFIG_SECTIONS = ["devices", "api_clients", "server"]
+TOTP_STATE_VERSION = 1
+TOTP_RECOVERY_CODE_COUNT = 10
+SESSION_STATE_VERSION = 1
+MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 def generate_scrypt_hash(password: str) -> str:
@@ -71,6 +82,45 @@ def generate_scrypt_hash(password: str) -> str:
             dklen=64,
         )
         return f"pbkdf2:{salt}:{key.hex()}"
+
+
+def generate_totp_secret() -> str:
+    """Generate a 160-bit RFC 6238 Base32 secret without padding."""
+    return base64.b32encode(secrets.token_bytes(20)).decode("ascii").rstrip("=")
+
+
+def generate_recovery_codes(
+    count: int = TOTP_RECOVERY_CODE_COUNT,
+) -> list[str]:
+    """Generate high-entropy recovery codes shown only during setup."""
+    if count < 1 or count > 100:
+        raise ValueError("invalid recovery-code count")
+    return [secrets.token_hex(10).upper() for _ in range(count)]
+
+
+def recovery_code_hash(code: str) -> str:
+    """Hash a normalized recovery code for the writable Admin state file."""
+    normalized = "".join(code.split()).replace("-", "").upper()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def validate_totp_runtime(secret_path: Path, state_path: Path) -> None:
+    """Fail closed when enabled TOTP runtime files are malformed."""
+    secret = secret_path.read_text(encoding="utf-8").strip()
+    if not re.fullmatch(r"[A-Z2-7]{32}", secret):
+        raise ValueError("invalid TOTP secret file")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    hashes = state.get("recoveryCodeHashes")
+    if (
+        state.get("version") != TOTP_STATE_VERSION
+        or not isinstance(hashes, list)
+        or any(
+            not isinstance(value, str)
+            or re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in hashes
+        )
+    ):
+        raise ValueError("invalid TOTP state file")
 
 
 def write_private_file(path: Path, content: str, mode: int = 0o600) -> None:
@@ -133,6 +183,9 @@ def setup_admin_credentials(
     rotate_api_token: bool = False,
     rotate_password: bool = False,
     rotate_session_secret: bool = False,
+    enable_totp: bool = False,
+    rotate_totp: bool = False,
+    disable_totp: bool = False,
 ) -> None:
     """Set up admin UI credentials."""
     runtime = runtime_dir.resolve()
@@ -146,6 +199,14 @@ def setup_admin_credentials(
     password_file_path = runtime / "admin-ui-password.txt"
     password_hash_path = runtime / "admin-ui-password-hash.txt"
     session_secret_path = runtime / "admin-ui-session-secret.txt"
+    totp_secret_path = runtime / "admin-ui-totp-secret.txt"
+    totp_state_dir = runtime / "admin-totp-state"
+    totp_state_path = totp_state_dir / "totp-state.json"
+    session_state_path = totp_state_dir / "session-state.json"
+    totp_recovery_path = runtime / "admin-ui-totp-recovery-codes.txt"
+    totp_uri_path = runtime / "admin-ui-totp-uri.txt"
+    totp_state_dir.mkdir(parents=True, exist_ok=True)
+    totp_state_dir.chmod(0o700)
 
     # Load existing config - MUST exist for production safety
     if not config_path.exists():
@@ -174,6 +235,39 @@ def setup_admin_credentials(
     admin_config = {}
     if admin_config_path.exists():
         admin_config = json.loads(admin_config_path.read_text(encoding="utf-8"))
+
+    if session_state_path.exists():
+        try:
+            session_state = json.loads(
+                session_state_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            print("ERROR: Invalid Admin session state file.", file=sys.stderr)
+            sys.exit(1)
+        generation = session_state.get("generation")
+        revoked_sessions = session_state.get("revokedSessions")
+        if (
+            session_state.get("version") != SESSION_STATE_VERSION
+            or type(generation) is not int
+            or generation < 1
+            or generation > MAX_SAFE_INTEGER
+            or not isinstance(revoked_sessions, dict)
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", session_id) is None
+                or type(expires_at) is not int
+                or expires_at < 0
+                or expires_at > MAX_SAFE_INTEGER
+                for session_id, expires_at in revoked_sessions.items()
+            )
+        ):
+            print("ERROR: Invalid Admin session state file.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        session_state = {
+            "version": SESSION_STATE_VERSION,
+            "generation": 1,
+            "revokedSessions": {},
+        }
 
     # Track changes
     changes = []
@@ -214,6 +308,9 @@ def setup_admin_credentials(
         # Write password hash to separate file for Docker secret mounting
         write_private_file(password_hash_path, password_hash + "\n")
         changes.append("admin password")
+        if rotate_password:
+            session_state["generation"] += 1
+            session_state["revokedSessions"] = {}
     elif not password_file_path.is_file():
         print("WARNING: Password file missing but hash exists. Password file will not be regenerated.", file=sys.stderr)
 
@@ -224,6 +321,107 @@ def setup_admin_credentials(
         # Write session secret to separate file for Docker secret mounting
         write_private_file(session_secret_path, session_secret + "\n")
         changes.append("session secret")
+        if rotate_session_secret:
+            session_state["generation"] += 1
+            session_state["revokedSessions"] = {}
+
+    # 4. Optional TOTP setup. Empty secret/state files are always created so
+    # Compose remains backwards-compatible when TOTP is disabled.
+    totp_enabled = admin_config.get("totp_enabled") is True
+    if disable_totp:
+        write_private_file(totp_secret_path, "\n")
+        write_private_file(
+            totp_state_path,
+            json.dumps(
+                {
+                    "version": TOTP_STATE_VERSION,
+                    "recoveryCodeHashes": [],
+                },
+                indent=2,
+            ) + "\n",
+        )
+        totp_recovery_path.unlink(missing_ok=True)
+        totp_uri_path.unlink(missing_ok=True)
+        admin_config["totp_enabled"] = False
+        changes.append("TOTP disabled")
+        totp_enabled = False
+    elif rotate_totp or (enable_totp and not totp_enabled):
+        totp_secret = generate_totp_secret()
+        recovery_codes = generate_recovery_codes()
+        state = {
+            "version": TOTP_STATE_VERSION,
+            "recoveryCodeHashes": [
+                recovery_code_hash(code) for code in recovery_codes
+            ],
+        }
+        issuer = "CAConnection"
+        account = "CAConnection Admin"
+        totp_uri = (
+            f"otpauth://totp/{quote(account)}"
+            f"?secret={totp_secret}"
+            f"&issuer={quote(issuer)}"
+            "&algorithm=SHA1&digits=6&period=30"
+        )
+        write_private_file(totp_secret_path, totp_secret + "\n")
+        write_private_file(
+            totp_state_path,
+            json.dumps(state, indent=2) + "\n",
+        )
+        write_private_file(
+            totp_recovery_path,
+            "\n".join(recovery_codes) + "\n",
+        )
+        write_private_file(totp_uri_path, totp_uri + "\n")
+        admin_config["totp_enabled"] = True
+        changes.append("TOTP credentials")
+        totp_enabled = True
+    elif totp_enabled:
+        if not totp_secret_path.is_file() or not totp_state_path.is_file():
+            print(
+                "ERROR: TOTP is enabled but runtime files are missing. "
+                "Use --rotate-totp or --disable-totp.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        try:
+            validate_totp_runtime(totp_secret_path, totp_state_path)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(
+                f"ERROR: Invalid TOTP runtime configuration: {error}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        admin_config["totp_enabled"] = False
+        if (
+            totp_secret_path.exists()
+            and totp_secret_path.read_text(encoding="utf-8").strip()
+        ):
+            print(
+                "ERROR: A TOTP secret exists but admin-config.json does not "
+                "mark it enabled. Use --enable-totp, --rotate-totp, or "
+                "--disable-totp explicitly.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not totp_secret_path.exists():
+            write_private_file(totp_secret_path, "\n")
+        if not totp_state_path.exists():
+            write_private_file(
+                totp_state_path,
+                json.dumps(
+                    {
+                        "version": TOTP_STATE_VERSION,
+                        "recoveryCodeHashes": [],
+                    },
+                    indent=2,
+                ) + "\n",
+            )
+
+    write_private_file(
+        session_state_path,
+        json.dumps(session_state, indent=2) + "\n",
+    )
 
     # Write admin config (reference file, not used by Docker secrets)
     write_private_file(
@@ -250,6 +448,18 @@ def setup_admin_credentials(
     print(f"  - {password_file_path.name} (admin password - secret)")
     print(f"  - {password_hash_path.name} (password hash for Docker)")
     print(f"  - {session_secret_path.name} (session secret for Docker)")
+    print(f"  - {totp_secret_path.name} (TOTP secret for Docker, empty when disabled)")
+    print(
+        f"  - {totp_state_dir.name}/{totp_state_path.name} "
+        "(writable hashed recovery-code state)"
+    )
+    print(
+        f"  - {totp_state_dir.name}/{session_state_path.name} "
+        "(writable session revocation state)"
+    )
+    if totp_enabled:
+        print(f"  - {totp_recovery_path.name} (protected recovery codes)")
+        print(f"  - {totp_uri_path.name} (protected authenticator setup URI)")
     print()
     print("IMPORTANT: No credential values were printed.")
 
@@ -279,6 +489,22 @@ def main() -> None:
         action="store_true",
         help="Rotate the session signing secret",
     )
+    totp_group = parser.add_mutually_exclusive_group()
+    totp_group.add_argument(
+        "--enable-totp",
+        action="store_true",
+        help="Enable TOTP if it is currently disabled",
+    )
+    totp_group.add_argument(
+        "--rotate-totp",
+        action="store_true",
+        help="Replace the TOTP secret and all recovery codes",
+    )
+    totp_group.add_argument(
+        "--disable-totp",
+        action="store_true",
+        help="Disable TOTP and invalidate recovery codes",
+    )
 
     args = parser.parse_args()
 
@@ -287,6 +513,9 @@ def main() -> None:
         rotate_api_token=args.rotate_api_token,
         rotate_password=args.rotate_password,
         rotate_session_secret=args.rotate_session_secret,
+        enable_totp=args.enable_totp,
+        rotate_totp=args.rotate_totp,
+        disable_totp=args.disable_totp,
     )
 
 

@@ -8,8 +8,11 @@ actions.
 ## Features
 
 - **Multi-language Support**: Simplified Chinese (default) and English
-- **Secure Authentication**: scrypt-hashed passwords with rate-limited login
-- **Session Management**: Stateless HMAC-signed HttpOnly cookies with bounded expiry
+- **Secure Authentication**: scrypt-hashed passwords, optional TOTP, persistent
+  one-time recovery codes, and rate-limited login
+- **Session Management**: HMAC-signed HttpOnly cookies with bounded expiry,
+  persistent logout revocation, and generation-based invalidation after
+  password or session-secret rotation
 - **Request Protection**: Per-session CSRF tokens on every authenticated mutation
 - **Gateway Status**: Real-time health and readiness monitoring
 - **Communication Workspace**: Browse SMS and captured notifications with type,
@@ -45,13 +48,20 @@ The token is stored as a Docker secret and only accessible server-side.
 ### Authentication Flow
 
 1. Admin password stored as scrypt hash (random salt)
-2. Login attempts rate-limited per IP (5 attempts / 15 minutes)
-3. Sessions use HMAC-SHA256 signed, stateless HttpOnly cookies
-4. Cookie restricted to `/admin` path with `SameSite=Strict`
-5. Remote SMS, OTP, pairing, device mutations, and logout requests require a
+2. Optional TOTP uses a client-bound, single-use password challenge
+3. Recovery codes are stored only as SHA-256 hashes in a writable private
+   state file and are atomically removed after use
+4. Login attempts rate-limited per IP (5 attempts / 15 minutes)
+5. Sessions use HMAC-SHA256 signed HttpOnly cookies plus a private persistent
+   state file for logout revocation and credential-rotation invalidation
+6. Cookie restricted to `/admin` path with `SameSite=Strict`
+7. Remote SMS, OTP, pairing, device mutations, and logout requests require a
    signed-session CSRF token
-6. Proxy IP headers are accepted only when `TRUST_PROXY_HEADERS=true` and the
+8. Proxy IP headers are accepted only when `TRUST_PROXY_HEADERS=true` and the
    direct peer is a loopback/private reverse proxy
+
+TOTP challenges and login rate limits are process-local. Run exactly one Admin
+replica unless these stores are moved to shared infrastructure.
 
 ### Security Headers
 
@@ -125,6 +135,10 @@ This creates:
 - `admin-ui-password.txt` - Admin password (secret, show once)
 - `admin-ui-password-hash.txt` - Admin password hash
 - `admin-ui-session-secret.txt` - Session signing secret
+- `admin-ui-totp-secret.txt` - TOTP secret; empty when TOTP is disabled
+- `admin-totp-state/totp-state.json` - Writable hashed recovery-code state
+- `admin-totp-state/session-state.json` - Writable session generation and
+  logout-revocation state
 - `admin-config.json` - Setup metadata; it is not mounted into the container
 - Updates `config.json` with token hash only
 
@@ -142,7 +156,8 @@ python3 server/setup_feishu.py \
 ```bash
 python3 server/prepare_runtime_permissions.py \
   --runtime-dir server/deploy/runtime \
-  --deployment-mode cloudflare-tunnel
+  --deployment-mode cloudflare-tunnel \
+  --enable-admin
 ```
 
 ### 3. Deploy
@@ -165,7 +180,27 @@ python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-passw
 
 # Rotate session secret only
 python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-session-secret
+
+# Enable TOTP and generate a protected setup URI and recovery-code file
+python3 server/setup_admin.py --runtime-dir server/deploy/runtime --enable-totp
+
+# Replace the TOTP secret and invalidate all old recovery codes
+python3 server/setup_admin.py --runtime-dir server/deploy/runtime --rotate-totp
+
+# Disable TOTP and invalidate all recovery codes
+python3 server/setup_admin.py --runtime-dir server/deploy/runtime --disable-totp
 ```
+
+Rotating either the Admin password or session signing secret increments the
+persistent session generation, clears expired/redundant revocation entries, and
+invalidates every previously issued Admin cookie.
+
+When TOTP is enabled, import the protected URI from
+`admin-ui-totp-uri.txt` into an authenticator and securely store the codes in
+`admin-ui-totp-recovery-codes.txt`. Neither file is mounted into the container.
+Back up the TOTP secret, writable recovery-code state, setup URI, and plaintext
+recovery codes to protected off-host storage. Treat the recovery-state copy as
+time-sensitive because codes consumed after a backup must remain invalid.
 
 ## Docker Container
 
@@ -186,6 +221,10 @@ The container reads credentials from:
 - `/run/secrets/admin_api_token` - Gateway API token
 - `/run/secrets/admin_password_hash` - Admin password hash
 - `/run/secrets/admin_session_secret` - Session signing secret
+- `/run/secrets/admin_totp_secret` - TOTP secret; empty when disabled
+- `/var/lib/caconnection-admin/totp-state.json` - Writable hashed recovery state
+- `/var/lib/caconnection-admin/session-state.json` - Writable session
+  generation and logout-revocation state
 
 ## Cloudflare Tunnel Integration
 
@@ -212,6 +251,7 @@ This ensures:
 ### Login (`/admin/login`)
 
 - Password input with show/hide toggle
+- Optional second step for an authenticator code or one-time recovery code
 - Rate-limited login attempts
 - Language switcher
 - Security notice
@@ -238,6 +278,8 @@ This ensures:
 - Preserve active filters in the page URL
 - Apply the current Gateway or group context before cursor pagination
 - Keep successful data visible when only one upstream source fails
+- Warn when individual encrypted records are unreadable while continuing to
+  display the remaining readable records
 - Load older records using the Gateway `beforeId` cursor
 - Reveal all sensitive content for 30 seconds, with automatic hiding
 - Message cards with:
@@ -253,7 +295,9 @@ This ensures:
   - Received time
   - Notification title (hidden by default)
   - Notification body (hidden by default)
-  - Channel and category
+- Channel and category
+- Feishu settings show pending, retrying, sent, skipped, and permanently failed
+  delivery counts; retryable failures are bounded instead of retrying forever
 
 ### Remote SMS (`/admin/` - Remote SMS tab)
 

@@ -30,6 +30,12 @@ function isNullableNonNegativeInteger(value: unknown): value is number | null {
     )
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number'
+    && Number.isSafeInteger(value)
+    && value >= 0
+}
+
 function invalidGatewayResponse(): never {
   throw createError({
     statusCode: 502,
@@ -196,6 +202,7 @@ export interface GatewayMessage {
 
 export interface GatewayMessagesResponse {
   messages: GatewayMessage[]
+  unreadableRecords: number
 }
 
 export interface GatewayNotification {
@@ -216,6 +223,39 @@ export interface GatewayNotification {
 
 export interface GatewayNotificationsResponse {
   notifications: GatewayNotification[]
+  unreadableRecords: number
+}
+
+export interface GatewayCall {
+  id: number
+  deviceId: string
+  sessionId: string | null
+  createdAt: number
+  receivedAt: number
+  startedAt: number
+  endedAt: number | null
+  durationMillis: number | null
+  subscriptionId: number | null
+  slotIndex: number | null
+  direction: 'INCOMING' | 'UNKNOWN'
+  state: 'RINGING' | 'OFFHOOK' | 'IDLE' | null
+  answered: boolean
+  states: Array<{
+    state: 'RINGING' | 'OFFHOOK' | 'IDLE'
+    observedAt: number
+    initialSnapshot: boolean
+  }>
+  callerAddress: string | null
+  callerDisplayName: string | null
+  resolutionMethod: string | null
+  resolutionConfidence: string | null
+  verificationStatus: number | null
+  decision: string | null
+}
+
+export interface GatewayCallsResponse {
+  calls: GatewayCall[]
+  unreadableRecords: number
 }
 
 export interface GatewayOtpClaimResponse {
@@ -307,6 +347,7 @@ export interface GatewayNotificationSettings {
   updatedAt: number
   pendingCount: number
   retryCount: number
+  failedCount: number
   lastSuccessAt: number | null
   lastAttemptAt: number | null
 }
@@ -408,10 +449,20 @@ function parseMessage(value: unknown): GatewayMessage {
 }
 
 function parseMessagesResponse(value: unknown): GatewayMessagesResponse {
-  if (!isRecord(value) || !Array.isArray(value.messages)) {
+  const unreadableRecords = isRecord(value)
+    ? value.unreadableRecords ?? 0
+    : undefined
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.messages)
+    || !isNonNegativeInteger(unreadableRecords)
+  ) {
     return invalidGatewayResponse()
   }
-  return { messages: value.messages.map(parseMessage) }
+  return {
+    messages: value.messages.map(parseMessage),
+    unreadableRecords,
+  }
 }
 
 function parseNotification(value: unknown): GatewayNotification {
@@ -440,10 +491,71 @@ function parseNotification(value: unknown): GatewayNotification {
 }
 
 function parseNotificationsResponse(value: unknown): GatewayNotificationsResponse {
-  if (!isRecord(value) || !Array.isArray(value.notifications)) {
+  const unreadableRecords = isRecord(value)
+    ? value.unreadableRecords ?? 0
+    : undefined
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.notifications)
+    || !isNonNegativeInteger(unreadableRecords)
+  ) {
     return invalidGatewayResponse()
   }
-  return { notifications: value.notifications.map(parseNotification) }
+  return {
+    notifications: value.notifications.map(parseNotification),
+    unreadableRecords,
+  }
+}
+
+function parseCall(value: unknown): GatewayCall {
+  if (
+    !isRecord(value)
+    || !Number.isSafeInteger(value.id)
+    || typeof value.deviceId !== 'string'
+    || !(value.sessionId === null || typeof value.sessionId === 'string')
+    || !Number.isSafeInteger(value.createdAt)
+    || !Number.isSafeInteger(value.receivedAt)
+    || !Number.isSafeInteger(value.startedAt)
+    || !isNullableInteger(value.endedAt)
+    || !isNullableNonNegativeInteger(value.durationMillis)
+    || !isNullableInteger(value.subscriptionId)
+    || !isNullableInteger(value.slotIndex)
+    || !['INCOMING', 'UNKNOWN'].includes(String(value.direction))
+    || !(value.state === null || ['RINGING', 'OFFHOOK', 'IDLE'].includes(String(value.state)))
+    || typeof value.answered !== 'boolean'
+    || !Array.isArray(value.states)
+    || !value.states.every(entry =>
+      isRecord(entry)
+      && ['RINGING', 'OFFHOOK', 'IDLE'].includes(String(entry.state))
+      && Number.isSafeInteger(entry.observedAt)
+      && typeof entry.initialSnapshot === 'boolean')
+    || !(value.callerAddress === null || typeof value.callerAddress === 'string')
+    || !(value.callerDisplayName === null || typeof value.callerDisplayName === 'string')
+    || !(value.resolutionMethod === null || typeof value.resolutionMethod === 'string')
+    || !(value.resolutionConfidence === null || typeof value.resolutionConfidence === 'string')
+    || !isNullableInteger(value.verificationStatus)
+    || !(value.decision === null || typeof value.decision === 'string')
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayCall
+}
+
+function parseCallsResponse(value: unknown): GatewayCallsResponse {
+  const unreadableRecords = isRecord(value)
+    ? value.unreadableRecords ?? 0
+    : undefined
+  if (
+    !isRecord(value)
+    || !Array.isArray(value.calls)
+    || !isNonNegativeInteger(unreadableRecords)
+  ) {
+    return invalidGatewayResponse()
+  }
+  return {
+    calls: value.calls.map(parseCall),
+    unreadableRecords,
+  }
 }
 
 function parseOutboundMessage(value: unknown): GatewayOutboundMessage {
@@ -612,6 +724,33 @@ export async function getGatewayNotifications(options: {
   const query = params.toString()
   return parseNotificationsResponse(
     await gatewayFetch(`/v1/notifications${query ? `?${query}` : ''}`),
+  )
+}
+
+export async function getGatewayCalls(options: {
+  limit?: number
+  slotIndex?: number | null
+  afterId?: number | null
+  beforeId?: number | null
+  deviceId?: string
+  groupId?: string
+} = {}): Promise<GatewayCallsResponse> {
+  const params = new URLSearchParams()
+  if (options.limit) params.set('limit', options.limit.toString())
+  if (options.slotIndex !== undefined && options.slotIndex !== null) {
+    params.set('slotIndex', options.slotIndex.toString())
+  }
+  if (options.afterId !== undefined && options.afterId !== null) {
+    params.set('afterId', options.afterId.toString())
+  }
+  if (options.beforeId !== undefined && options.beforeId !== null) {
+    params.set('beforeId', options.beforeId.toString())
+  }
+  if (options.deviceId) params.set('deviceId', options.deviceId)
+  if (options.groupId) params.set('groupId', options.groupId)
+  const query = params.toString()
+  return parseCallsResponse(
+    await gatewayFetch(`/v1/calls${query ? `?${query}` : ''}`),
   )
 }
 
@@ -818,6 +957,7 @@ export async function getGatewayAuditLog(): Promise<{
 }
 
 function parseNotificationSettings(value: unknown): GatewayNotificationSettings {
+  const failedCount = isRecord(value) ? value.failedCount ?? 0 : undefined
   if (
     !isRecord(value)
     || value.channel !== 'FEISHU'
@@ -828,12 +968,16 @@ function parseNotificationSettings(value: unknown): GatewayNotificationSettings 
     || !Number.isSafeInteger(value.updatedAt)
     || !Number.isSafeInteger(value.pendingCount)
     || !Number.isSafeInteger(value.retryCount)
+    || !isNonNegativeInteger(failedCount)
     || !isNullableInteger(value.lastSuccessAt)
     || !isNullableInteger(value.lastAttemptAt)
   ) {
     return invalidGatewayResponse()
   }
-  return value as unknown as GatewayNotificationSettings
+  return {
+    ...value,
+    failedCount,
+  } as unknown as GatewayNotificationSettings
 }
 
 function parseNotificationSettingsResponse(value: unknown): {

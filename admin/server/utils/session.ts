@@ -13,6 +13,11 @@ import {
 } from 'h3'
 import { getSessionMaxAge } from './crypto'
 import { loadAdminConfig } from './config'
+import {
+  getSessionGeneration,
+  isSessionRevoked,
+  revokeSession,
+} from './session-state'
 
 const SESSION_COOKIE_NAME = 'ca_admin_session'
 const COOKIE_PATH = '/admin'
@@ -24,6 +29,7 @@ export interface AdminSession {
   issuedAt: number
   expiresAt: number
   csrfToken: string
+  generation: number
 }
 
 function getSessionSecret(): Buffer {
@@ -83,6 +89,15 @@ export function parseSession(
       || parsed.expiresAt <= parsed.issuedAt
       || parsed.issuedAt > now + 60_000
       || parsed.expiresAt <= now
+      || !Number.isSafeInteger(parsed.generation)
+      || parsed.generation !== getSessionGeneration(
+        loadAdminConfig().sessionStatePath,
+      )
+      || isSessionRevoked(
+        loadAdminConfig().sessionStatePath,
+        parsed.id,
+        now,
+      )
     ) {
       return null
     }
@@ -99,6 +114,7 @@ export function createSession(now = Date.now()): AdminSession {
     issuedAt: now,
     expiresAt: now + getSessionMaxAge() * 1000,
     csrfToken: randomBytes(32).toString('hex'),
+    generation: getSessionGeneration(loadAdminConfig().sessionStatePath),
   }
 }
 
@@ -126,6 +142,18 @@ export function clearSessionCookie(event: H3Event): void {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict',
   })
+}
+
+export function revokeAdminSession(
+  session: AdminSession,
+  now = Date.now(),
+): void {
+  revokeSession(
+    loadAdminConfig().sessionStatePath,
+    session.id,
+    session.expiresAt,
+    now,
+  )
 }
 
 export function requireAuth(event: H3Event): AdminSession {

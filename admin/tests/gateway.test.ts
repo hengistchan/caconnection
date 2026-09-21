@@ -118,6 +118,7 @@ describe('Gateway BFF client', () => {
     ))
     await expect(getGatewayMessages()).resolves.toEqual({
       messages: [messageFixture],
+      unreadableRecords: 0,
     })
   })
 
@@ -130,6 +131,20 @@ describe('Gateway BFF client', () => {
     ))
     await expect(getGatewayNotifications()).resolves.toEqual({
       notifications: [notificationFixture],
+      unreadableRecords: 0,
+    })
+  })
+
+  it('preserves unreadable encrypted record counts', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        messages: [messageFixture],
+        unreadableRecords: 2,
+      }), { status: 200 }),
+    ))
+
+    await expect(getGatewayMessages()).resolves.toMatchObject({
+      unreadableRecords: 2,
     })
   })
 

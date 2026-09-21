@@ -21,8 +21,8 @@ android {
         applicationId = "com.caconnection"
         minSdk = 31
         targetSdk = 37
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 8
+        versionName = "0.2.6"
         buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
         manifestPlaceholders = [appLabel: "CA Connection"]
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -112,4 +112,8 @@ dependencies {
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3'
+    androidTestImplementation 'androidx.room:room-testing:2.8.5'
+    androidTestImplementation 'androidx.test:core:1.7.0'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
 }

@@ -7,6 +7,10 @@
 
 import type { FastifyInstance } from 'fastify';
 import { decryptPayload } from '../crypto/payload-crypto.js';
+import {
+  InvalidEventPayloadError,
+  rethrowOperationalError,
+} from '../http/operational-errors.js';
 import { validateEnvelope } from '../protocol/envelope.js';
 
 export async function ingestRoutes(app: FastifyInstance) {
@@ -44,7 +48,13 @@ export async function ingestRoutes(app: FastifyInstance) {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'invalid request';
-      return reply.status(message === 'replayed nonce' ? 409 : 400).send({ error: message });
+      if (message === 'replayed nonce') {
+        return reply.status(409).send({ error: message });
+      }
+      if (error instanceof InvalidEventPayloadError) {
+        throw error;
+      }
+      rethrowOperationalError(error);
     }
   });
 
@@ -82,7 +92,10 @@ export async function ingestRoutes(app: FastifyInstance) {
       return reply.send({ commands });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'invalid request';
-      return reply.status(message === 'replayed nonce' ? 409 : 400).send({ error: message });
+      if (message === 'replayed nonce') {
+        return reply.status(409).send({ error: message });
+      }
+      rethrowOperationalError(error);
     }
   });
 }

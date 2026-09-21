@@ -28,8 +28,9 @@ WORKDIR /app
 # Nitro's .output contains all runtime dependencies
 COPY --from=builder --chown=admin:admin /app/.output ./.output
 
-# Create tmp directory for tmpfs
-RUN mkdir -p /tmp && chown admin:admin /tmp
+# Create tmp and writable TOTP state mount points.
+RUN mkdir -p /tmp /var/lib/caconnection-admin && \
+    chown -R admin:admin /tmp /var/lib/caconnection-admin
 
 # Switch to non-root user
 USER 10002:10002

@@ -59,35 +59,31 @@ export async function pairingRoutes(app: FastifyInstance) {
       return reply.status(503).send({ error: 'pairing unavailable' });
     }
 
-    try {
-      const token = randomBytes(24).toString('base64url');
-      const nowMs = Date.now();
-      const expiresAt = app.pairingRepo.create(token, deviceId, nowMs, expiresInSeconds);
+    const token = randomBytes(24).toString('base64url');
+    const nowMs = Date.now();
+    const expiresAt = app.pairingRepo.create(token, deviceId, nowMs, expiresInSeconds);
 
-      const document: Record<string, unknown> = {
-        schemaVersion: 1,
-        type: 'ca-connection-pairing',
-        endpoint: pairingEndpoint,
-        pairingToken: token,
-      };
+    const document: Record<string, unknown> = {
+      schemaVersion: 1,
+      type: 'ca-connection-pairing',
+      endpoint: pairingEndpoint,
+      pairingToken: token,
+    };
 
-      const certPin = app.runtimeConfig.server.pairingCertificatePinSha256Base64;
-      if (certPin) {
-        document.certificatePinSha256Base64 = certPin;
-      }
-
-      app.auditRepo.record(clientId, 'PAIRING_CREATE', deviceId, 'SUCCESS', { expiresInSeconds });
-
-      return reply.status(201).send({
-        pairing: {
-          deviceId,
-          expiresAt,
-          payload: JSON.stringify(document),
-        },
-      });
-    } catch (error: any) {
-      return reply.status(400).send({ error: error.message || 'invalid request' });
+    const certPin = app.runtimeConfig.server.pairingCertificatePinSha256Base64;
+    if (certPin) {
+      document.certificatePinSha256Base64 = certPin;
     }
+
+    app.auditRepo.record(clientId, 'PAIRING_CREATE', deviceId, 'SUCCESS', { expiresInSeconds });
+
+    return reply.status(201).send({
+      pairing: {
+        deviceId,
+        expiresAt,
+        payload: JSON.stringify(document),
+      },
+    });
   });
 
   /**

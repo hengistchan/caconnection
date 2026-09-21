@@ -52,7 +52,8 @@
     <string name="queue_empty">No pending items</string>
     <string name="queue_count">%1$d pending · %2$d retrying</string>
     <string name="messages_count">Messages</string>
-    <string name="signals_count">Signals</string>
+    <string name="notifications_count">Notifications</string>
+    <string name="calls_count">Calls</string>
     <string name="pending">Pending</string>
     <string name="sim_cards">SIM cards</string>
     <string name="no_sim_cards">No active SIM is visible. Grant phone permission and check the SIM state.</string>
@@ -72,7 +73,7 @@
     <string name="phone_state_permission">Read phone state</string>
     <string name="notification_permission">Post notifications</string>
     <string name="default_sms_role">Default SMS role</string>
-    <string name="default_sms_role_detail">Optional; required only for authoritative SMS delivery</string>
+    <string name="default_sms_role_detail">Optional; CA Connection operates as a non-default SMS observer</string>
     <string name="notification_access">Notification access</string>
     <string name="call_screening_role">Incoming caller ID role</string>
     <string name="call_monitor">Per-SIM call monitor</string>

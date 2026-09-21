@@ -1,5 +1,9 @@
 import { decryptPayload } from '../crypto/payload-crypto.js';
-import type { NotificationTransport } from '../notifications/feishu-client.js';
+import { MAX_NOTIFICATION_DELIVERY_ATTEMPTS } from '../config/constants.js';
+import {
+  NotificationTransportError,
+  type NotificationTransport,
+} from '../notifications/feishu-client.js';
 import {
   renderFeishuNotification,
   type RenderableDelivery,
@@ -57,12 +61,29 @@ export class NotificationDispatcher {
         }
         const secret = this.deviceSecrets.get(delivery.deviceId);
         if (!secret) throw new Error('device secret unavailable');
-        const envelope = decryptPayload(
-          JSON.parse(delivery.envelopeJson),
+        const envelope = decryptDeliveryEnvelope(
+          delivery.envelopeJson,
           delivery.deviceId,
           secret,
         );
-        renderable.payload = envelope.payload as Record<string, unknown>;
+        let payload = envelope.payload as Record<string, unknown>;
+        if (delivery.eventType === 'CALL_STATE' && delivery.eventId !== null) {
+          const identityEnvelopeJson = this.repository.findCallIdentityEnvelope(
+            delivery.eventId,
+          );
+          if (identityEnvelopeJson) {
+            const identityEnvelope = decryptDeliveryEnvelope(
+              identityEnvelopeJson,
+              delivery.deviceId,
+              secret,
+            );
+            payload = {
+              ...payload,
+              ...(identityEnvelope.payload as Record<string, unknown>),
+            };
+          }
+        }
+        renderable.payload = payload;
       }
       const text = renderFeishuNotification(renderable);
       if (text === null) {
@@ -75,12 +96,26 @@ export class NotificationDispatcher {
       const message = error instanceof Error && SAFE_DELIVERY_ERRORS.has(error.message)
         ? error.message
         : 'notification delivery failed';
-      this.repository.retry(
-        delivery.id,
-        delivery.attemptCount,
-        Date.now(),
-        message,
-      );
+      const retryable = error instanceof NotificationTransportError
+        ? error.retryable
+        : ![
+          'device secret unavailable',
+          'invalid encrypted payload',
+          'notification event is unavailable',
+        ].includes(message);
+      if (
+        !retryable
+        || delivery.attemptCount >= MAX_NOTIFICATION_DELIVERY_ATTEMPTS
+      ) {
+        this.repository.fail(delivery.id, Date.now(), message);
+      } else {
+        this.repository.retry(
+          delivery.id,
+          delivery.attemptCount,
+          Date.now(),
+          message,
+        );
+      }
     }
     return true;
   }
@@ -101,5 +136,17 @@ export class NotificationDispatcher {
     for (let index = 0; index < 20 && !this.stopped; index += 1) {
       if (!await this.deliverOnce()) return;
     }
+  }
+}
+
+function decryptDeliveryEnvelope(
+  envelopeJson: string,
+  deviceId: string,
+  secret: Buffer,
+): ReturnType<typeof decryptPayload> {
+  try {
+    return decryptPayload(JSON.parse(envelopeJson), deviceId, secret);
+  } catch {
+    throw new Error('invalid encrypted payload');
   }
 }

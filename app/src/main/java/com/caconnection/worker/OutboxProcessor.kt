@@ -56,7 +56,7 @@ class OutboxProcessor(
     suspend fun process(
         event: OutboxEventEntity,
         persist: (OutboxEventEntity) -> Unit
-    ) {
+    ): OutboxStatus {
         event.status = OutboxStatus.IN_PROGRESS.name
         event.updatedAt = now()
         persist(event)
@@ -64,7 +64,7 @@ class OutboxProcessor(
         val payload = event.payloadData
         if (payload == null) {
             markPermanentFailure(event, "Missing payload", null, persist)
-            return
+            return OutboxStatus.FAILED
         }
 
         val transportEvent = TransportEvent(
@@ -85,13 +85,14 @@ class OutboxProcessor(
             TransportResult.RetryableFailure(error.message ?: error.javaClass.simpleName)
         }
 
-        when (result) {
+        return when (result) {
             TransportResult.Success -> {
                 event.status = OutboxStatus.SUCCESS.name
                 event.lastError = null
                 event.lastResultCode = null
                 event.updatedAt = now()
                 persist(event)
+                OutboxStatus.SUCCESS
             }
 
             is TransportResult.RetryableFailure -> {
@@ -107,10 +108,13 @@ class OutboxProcessor(
                 event.lastError = decision.lastError
                 event.updatedAt = now()
                 persist(event)
+                OutboxStatus.RETRY
             }
 
-            is TransportResult.PermanentFailure ->
+            is TransportResult.PermanentFailure -> {
                 markPermanentFailure(event, result.error, result.errorCode, persist)
+                OutboxStatus.FAILED
+            }
         }
     }
 

@@ -61,7 +61,14 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
       if (error.message?.includes('already exists')) {
         return reply.status(409).send({ error: error.message });
       }
-      return reply.status(400).send({ error: error.message || 'invalid request' });
+      if (
+        error.message === 'Invalid device ID format'
+        || error.message === 'Secret must be valid Base64'
+        || error.message === 'Secret must be at least 32 bytes'
+      ) {
+        return reply.status(400).send({ error: error.message });
+      }
+      throw error;
     }
   });
 
@@ -121,7 +128,13 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
 
       return reply.send({ device });
     } catch (error: any) {
-      return reply.status(400).send({ error: error.message || 'invalid request' });
+      if (
+        error.message === 'Secret must be valid Base64'
+        || error.message === 'Secret must be at least 32 bytes'
+      ) {
+        return reply.status(400).send({ error: error.message });
+      }
+      throw error;
     }
   });
 

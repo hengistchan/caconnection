@@ -8,7 +8,9 @@ import com.caconnection.data.poc.PocEventStore
 class SmsDeliveryReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val eventId = intent.getStringExtra(SmsGatewaySender.EXTRA_EVENT_ID) ?: return
-        PocEventStore.get(context).recordDeliveryCallback(eventId, resultCode)
+        val partIndex = intent.getIntExtra(SmsGatewaySender.EXTRA_PART_INDEX, -1)
+        if (partIndex < 0) return
+        PocEventStore.get(context).recordDeliveryCallback(eventId, partIndex, resultCode)
     }
 
     companion object {

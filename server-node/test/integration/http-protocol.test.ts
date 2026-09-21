@@ -87,6 +87,62 @@ describe('HTTP protocol integration', () => {
     expect(app.db.prepare('SELECT COUNT(*) AS count FROM events').get()).toMatchObject({ count: 0 });
   });
 
+  it('returns a retryable service error for transient SQLite failures', async () => {
+    app.eventIngestionService.accept = () => {
+      throw Object.assign(new Error('database is busy'), { code: 'SQLITE_BUSY' });
+    };
+    const response = await signedPost(
+      '/v1/events',
+      JSON.stringify(encryptedEvent('LOCAL_SELF_TEST', { ok: true })),
+      'nonce-sqlite-busy',
+    );
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['retry-after']).toBe('5');
+    expect(response.json()).toEqual({ error: 'service temporarily unavailable' });
+  });
+
+  it('does not misclassify unknown ingestion failures as client errors', async () => {
+    app.eventIngestionService.accept = () => {
+      throw new Error('unexpected internal failure');
+    };
+    const response = await signedPost(
+      '/v1/events',
+      JSON.stringify(encryptedEvent('LOCAL_SELF_TEST', { ok: true })),
+      'nonce-internal-error',
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ error: 'internal server error' });
+  });
+
+  it('returns 503 when an Admin command hits a transient SQLite failure', async () => {
+    app.outboundRepo.create = () => {
+      throw Object.assign(new Error('database is locked'), {
+        code: 'SQLITE_LOCKED',
+      });
+    };
+    const response = await app.inject({
+      method: 'POST',
+      url: '/v1/outbound-messages',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      payload: JSON.stringify({
+        deviceId,
+        slotIndex: 0,
+        recipient: '10086',
+        body: 'hello',
+        idempotencyKey: 'outbound-command-key',
+      }),
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers['retry-after']).toBe('5');
+    expect(response.json()).toEqual({ error: 'service temporarily unavailable' });
+  });
+
   it('verifies command claims over raw pretty-printed JSON', async () => {
     const rawBody = JSON.stringify({ limit: 5 }, null, 2);
     const response = await signedPost('/v1/device-commands/claim', rawBody, 'nonce-claim');
@@ -220,6 +276,94 @@ describe('HTTP protocol integration', () => {
     );
     expect(fresh.statusCode).toBe(201);
     expect(app.db.prepare('SELECT COUNT(*) AS count FROM events WHERE idempotency_key = ?').get('old-otp-event')).toMatchObject({ count: 0 });
+  });
+
+  it('returns session-aggregated call events to authorized clients', async () => {
+    const sessionId = 'session-http-call';
+    const events = [
+      encryptedEvent('CALL_STATE', {
+        sessionId,
+        state: 'RINGING',
+        observedAt: 1_000,
+        initialSnapshot: false,
+      }, 1_000),
+      encryptedEvent('CALL_IDENTITY', {
+        callerAddress: '10086',
+        callerDisplayName: 'Carrier',
+        observedAt: 1_050,
+        respondedAt: 1_060,
+        resolutionMethod: 'ACTIVE_CALL_STATE_CORRELATION',
+        resolutionConfidence: 'MEDIUM',
+        verificationStatus: 1,
+        decision: 'ALLOW',
+      }, 1_050),
+      encryptedEvent('CALL_STATE', {
+        sessionId,
+        state: 'IDLE',
+        observedAt: 2_000,
+        initialSnapshot: false,
+      }, 2_000),
+    ];
+    for (const [index, envelope] of events.entries()) {
+      const response = await signedPost(
+        '/v1/events',
+        JSON.stringify(envelope),
+        `call-${index}`,
+      );
+      expect(response.statusCode).toBe(201);
+    }
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/calls?limit=10&slotIndex=0',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().calls).toHaveLength(1);
+    expect(response.json().calls[0]).toMatchObject({
+      sessionId,
+      direction: 'INCOMING',
+      state: 'IDLE',
+      callerAddress: '10086',
+      slotIndex: 0,
+    });
+  });
+
+  it('reports and skips unreadable encrypted records', async () => {
+    const first = await signedPost(
+      '/v1/events',
+      JSON.stringify(encryptedEvent('INCOMING_SMS', {
+        originatingAddress: '+1000',
+        body: 'readable',
+      })),
+      'readable-message',
+    );
+    const second = await signedPost(
+      '/v1/events',
+      JSON.stringify(encryptedEvent('INCOMING_SMS', {
+        originatingAddress: '+1001',
+        body: 'will be corrupted',
+      })),
+      'corrupted-message',
+    );
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(201);
+    app.db.prepare(`
+      UPDATE events SET envelope_json = ? WHERE idempotency_key = ?
+    `).run('{not-json', 'idem-corrupted-message');
+
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/messages',
+      headers: { authorization: `Bearer ${token}` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      unreadableRecords: 1,
+      messages: [{ body: 'readable' }],
+    });
   });
 
   it('enforces the configured concurrent request ceiling', async () => {

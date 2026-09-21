@@ -32,6 +32,8 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 - Explicit per-subscription sending through
   `SmsManager.createForSubscriptionId`.
 - Multipart sending with per-part sent and delivery callbacks.
+- Transactional per-part callback deduplication, so duplicate Android sent or
+  delivery broadcasts cannot over-count multipart SMS progress.
 - Authenticated remote SMS commands created in Admin, polled by the gateway
   device, and routed through the requested active SIM slot.
 - Read-only outgoing status history in the Android app; composing and sending
@@ -47,6 +49,8 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 - WorkManager scheduling, retry state, exponential backoff, stale-attempt
   recovery, process-start recovery, and indefinite retry for temporary
   network/server failures with a five-minute maximum interval.
+- Boot-completed and package-replaced recovery that reconciles background
+  transport after a device restart or app upgrade.
 - A no-network Mock Transport and local Outbox self-test.
 - User-granted `NotificationListenerService` capture behind an explicit source
   package allowlist.
@@ -93,6 +97,9 @@ public HTTPS server; the Mac is no longer part of the runtime architecture.
 - Thirty-day configurable retention, encrypted SQLite storage, verified
   backup/export and atomic restore tooling, liveness/readiness/version probes,
   and an encrypted signed deployment smoke test.
+- Retry-aware Gateway operational errors, bounded Feishu delivery attempts,
+  permanent failed-delivery visibility, and record-level isolation when one
+  encrypted historical row is unreadable.
 
 ## Data and safety boundaries
 
@@ -397,7 +404,8 @@ https://caconnection-gatway.hengistchan.online/admin/
 - **OTP Claim**: One-time verification code extraction with confirmation
 - **Privacy Protection**: SMS and notification content hidden by default
 - **Feishu Push**: Durable asynchronous Webhook delivery with selectable
-  redacted or full-content mode
+  redacted or full-content mode, bounded retries, and visible failed-delivery
+  counts
 
 Secret rotation atomically re-encrypts historical event payloads so existing
 content remains readable. Normal removal retires a device and preserves
@@ -412,7 +420,8 @@ routing, isolation, lifecycle, group, OTP, and real-device acceptance contract.
 - Gateway API token never reaches the browser (server-side Nitro proxy)
 - scrypt-hashed admin password with random salt
 - Rate-limited login (5 attempts / 15 minutes per IP)
-- HMAC-signed HttpOnly session cookies
+- HMAC-signed HttpOnly session cookies with persistent logout revocation;
+  password or session-secret rotation invalidates earlier sessions
 - Security headers: HSTS, CSP, X-Frame-Options, no-referrer
 - All sensitive responses: `Cache-Control: no-store`
 

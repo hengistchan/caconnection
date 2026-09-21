@@ -5,7 +5,9 @@ interface SessionResponse {
 
 interface LoginResponse {
   success: boolean
-  csrfToken: string
+  csrfToken?: string
+  requiresTotp?: boolean
+  challenge?: string
 }
 
 export function useAuth() {
@@ -35,7 +37,7 @@ export function useAuth() {
 
   async function login(
     password: string,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; requiresTotp?: boolean; challenge?: string; error?: string }> {
     isLoading.value = true
     try {
       const response = await $fetch<LoginResponse>('/admin/api/auth/login', {
@@ -43,6 +45,9 @@ export function useAuth() {
         body: { password },
         credentials: 'include',
       })
+      if (response.requiresTotp && response.challenge) {
+        return { success: false, requiresTotp: true, challenge: response.challenge }
+      }
       if (!response.success || !response.csrfToken) {
         return { success: false, error: 'invalid' }
       }
@@ -55,6 +60,29 @@ export function useAuth() {
         success: false,
         error: err.statusCode === 429 ? 'rateLimit' : 'invalid',
       }
+    } finally {
+      isLoading.value = false
+    }
+  }
+
+  async function verifyTotp(
+    challenge: string,
+    code: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    isLoading.value = true
+    try {
+      const response = await $fetch<LoginResponse>('/admin/api/auth/login', {
+        method: 'POST',
+        body: { challenge, code },
+        credentials: 'include',
+      })
+      if (!response.success || !response.csrfToken) return { success: false, error: 'invalid' }
+      isAuthenticated.value = true
+      csrfToken.value = response.csrfToken
+      return { success: true }
+    } catch (error: unknown) {
+      const err = error as { statusCode?: number }
+      return { success: false, error: err.statusCode === 429 ? 'rateLimit' : 'invalid' }
     } finally {
       isLoading.value = false
     }
@@ -84,6 +112,7 @@ export function useAuth() {
     csrfToken: readonly(csrfToken),
     checkSession,
     login,
+    verifyTotp,
     logout,
   }
 }

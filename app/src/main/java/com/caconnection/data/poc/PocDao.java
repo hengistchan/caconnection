@@ -31,6 +31,9 @@ public interface PocDao {
     @Update
     void updateOutgoing(OutgoingSmsEventEntity event);
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    long insertOutgoingPartResult(OutgoingSmsPartResultEntity result);
+
     @Query("SELECT * FROM outgoing_sms_events WHERE eventId = :eventId LIMIT 1")
     OutgoingSmsEventEntity findOutgoing(String eventId);
 
