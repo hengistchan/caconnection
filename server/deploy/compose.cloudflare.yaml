@@ -2,7 +2,7 @@ name: caconnection-gateway
 
 services:
   gateway:
-    image: caconnection-gateway:0.6.2
+    image: caconnection-gateway:0.7.0
     build:
       context: ../../server-node
       dockerfile: Dockerfile
@@ -44,7 +44,7 @@ services:
       start_period: 10s
 
   admin:
-    image: caconnection-admin:1.1.1
+    image: caconnection-admin:1.2.0
     build:
       context: ../../admin
       dockerfile: Dockerfile
@@ -134,7 +134,7 @@ services:
         max-file: "5"
 
   smoke:
-    image: caconnection-gateway:0.6.2
+    image: caconnection-gateway:0.7.0
     profiles:
       - tools
     entrypoint:
