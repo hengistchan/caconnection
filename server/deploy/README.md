@@ -282,7 +282,7 @@ This creates:
 
 The Gateway `config.json` is updated with only the token SHA-256 hash.
 
-### Configure Feishu Push
+### Configure Notification Connections
 
 Create a private file containing only the custom-bot Webhook URL, then run:
 
@@ -299,9 +299,11 @@ If the Feishu bot has signature verification enabled, also pass:
 ```
 
 The values are stored only inside the protected Gateway `config.json`; the
-setup command and Admin API never print or return them. After deployment, use
-the Admin **Feishu Push** tab to choose redacted/full-content mode, enable
-delivery, and queue a test notification.
+setup command and Admin API never print or return them. The same protected
+`notifications.channels` section can define Bark and Generic Webhook
+connections. After deployment, use the Admin **Notification Connections** tab
+to choose redacted/full-content mode, select events, enable delivery, and queue
+a test notification.
 
 ### Set Permissions
 

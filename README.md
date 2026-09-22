@@ -403,9 +403,9 @@ https://caconnection-gatway.hengistchan.online/admin/
   SIM line; no automatic rerouting or cross-Gateway fallback
 - **OTP Claim**: One-time verification code extraction with confirmation
 - **Privacy Protection**: SMS and notification content hidden by default
-- **Feishu Push**: Durable asynchronous Webhook delivery with selectable
-  redacted or full-content mode, bounded retries, and visible failed-delivery
-  counts
+- **Notification Connections**: Durable asynchronous Feishu, Generic Webhook,
+  and Bark delivery with per-channel event subscriptions, selectable redacted
+  or full-content mode, bounded retries, and visible failed-delivery counts
 
 Secret rotation atomically re-encrypts historical event payloads so existing
 content remains readable. Normal removal retires a device and preserves
@@ -446,5 +446,22 @@ python3 server/prepare_runtime_permissions.py \
 cd server/deploy
 docker compose -f compose.cloudflare.yaml up -d
 ```
+
+The protected Gateway `config.json` can additionally define
+`notifications.channels` entries for `BARK` and `WEBHOOK`. Credentials remain
+server-side and are never returned by the Admin API. The Admin
+**Notification Connections** tab controls enablement, privacy mode, event
+subscriptions, tests, and delivery status.
+
+Generic Webhook templates support `{{event.id}}`, `{{event.type}}`,
+`{{event.timestamp}}`, `{{device.id}}`, `{{device.name}}`,
+`{{data.from}}`, `{{data.contactName}}`, and `{{data.body}}`. Missing values
+render as an empty string. Requests include `X-CA-Event-ID` and
+`X-CA-Event-Type`.
+
+Bark uses JSON `POST` to `<server>/push`, supports official or self-hosted Bark
+servers, and can optionally enable sustained ringing for incoming calls.
+Retryable deliveries use the bounded schedule 5 seconds, 30 seconds, and
+2 minutes, then stop after the fourth failed attempt.
 
 See [admin/README.md](admin/README.md) for detailed documentation.

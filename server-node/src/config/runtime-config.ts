@@ -33,13 +33,52 @@ export interface RuntimeConfig {
   configuredDevices: Map<string, Buffer>;
   server: ServerSettings;
   notifications: {
+    channels: NotificationChannelConfig[];
     feishu: FeishuConfig | null;
   };
+}
+
+export type NotificationChannelConfig =
+  | FeishuChannelConfig
+  | GenericWebhookChannelConfig
+  | BarkChannelConfig;
+
+interface BaseNotificationChannelConfig {
+  id: string;
+  name: string;
+  type: 'FEISHU' | 'WEBHOOK' | 'BARK';
+}
+
+export interface FeishuChannelConfig extends BaseNotificationChannelConfig {
+  type: 'FEISHU';
+  webhookUrl: string;
+  signingSecret: string | null;
 }
 
 export interface FeishuConfig {
   webhookUrl: string;
   signingSecret: string | null;
+}
+
+export interface GenericWebhookChannelConfig extends BaseNotificationChannelConfig {
+  type: 'WEBHOOK';
+  url: string;
+  method: 'POST' | 'PUT' | 'PATCH';
+  headers: Record<string, string>;
+  query: Record<string, string>;
+  contentType: string;
+  bodyTemplate: string;
+  timeoutMs: number;
+}
+
+export interface BarkChannelConfig extends BaseNotificationChannelConfig {
+  type: 'BARK';
+  server: string;
+  deviceKey: string;
+  group: string;
+  sound: string | null;
+  level: 'active' | 'timeSensitive' | 'passive' | 'critical';
+  call: boolean;
 }
 
 const DEFAULT_SERVER_SETTINGS: ServerSettings = {
@@ -62,7 +101,7 @@ export function emptyRuntimeConfig(): RuntimeConfig {
     apiClients: new Map(),
     configuredDevices: new Map(),
     server: { ...DEFAULT_SERVER_SETTINGS },
-    notifications: { feishu: null },
+    notifications: { channels: [], feishu: null },
   };
 }
 
@@ -101,7 +140,10 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfig {
 
 function parseNotificationSettings(value: unknown): RuntimeConfig['notifications'] {
   const settings = requireRecord(value, 'notifications');
-  if (settings.feishu === undefined) return { feishu: null };
+  const channels = settings.channels === undefined
+    ? []
+    : parseNotificationChannels(settings.channels);
+  if (settings.feishu === undefined) return { channels, feishu: null };
   const feishu = requireRecord(settings.feishu, 'notifications.feishu');
   const webhookUrl = optionalString(feishu, 'webhook_url', '').trim();
   if (!webhookUrl) {
@@ -112,12 +154,137 @@ function parseNotificationSettings(value: unknown): RuntimeConfig['notifications
   if (signingSecret.length > 256) {
     throw new Error('notifications.feishu.signing_secret is too long');
   }
+  const legacyChannel = {
+    id: 'feishu',
+    name: 'Feishu',
+    type: 'FEISHU' as const,
+    webhookUrl,
+    signingSecret: signingSecret || null,
+  };
+  if (channels.some(channel => channel.id === legacyChannel.id)) {
+    throw new Error('notification channel IDs must be unique');
+  }
   return {
+    channels: [legacyChannel, ...channels],
     feishu: {
       webhookUrl,
       signingSecret: signingSecret || null,
     },
   };
+}
+
+function parseNotificationChannels(value: unknown): NotificationChannelConfig[] {
+  if (!Array.isArray(value)) throw new Error('notifications.channels must be an array');
+  const seen = new Set<string>();
+  return value.map((raw, index) => {
+    const channel = requireRecord(raw, `notifications.channels[${index}]`);
+    const id = optionalString(channel, 'id', '').trim();
+    const name = optionalString(channel, 'name', '').trim();
+    const type = optionalString(channel, 'type', '').trim().toUpperCase();
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) {
+      throw new Error(`notifications.channels[${index}].id is invalid`);
+    }
+    if (seen.has(id)) throw new Error('notification channel IDs must be unique');
+    seen.add(id);
+    if (!name || name.length > 128) {
+      throw new Error(`notifications.channels[${index}].name is invalid`);
+    }
+    if (type === 'FEISHU') {
+      const webhookUrl = optionalString(channel, 'webhook_url', '').trim();
+      validateFeishuWebhookUrl(webhookUrl);
+      const signingSecret = optionalString(channel, 'signing_secret', '').trim();
+      if (signingSecret.length > 256) throw new Error('notification signing secret is too long');
+      return { id, name, type, webhookUrl, signingSecret: signingSecret || null };
+    }
+    if (type === 'WEBHOOK') {
+      const url = validateHttpEndpoint(
+        optionalString(channel, 'url', '').trim(),
+        `notifications.channels[${index}].url`,
+      );
+      const method = optionalString(channel, 'method', 'POST').trim().toUpperCase();
+      if (!['POST', 'PUT', 'PATCH'].includes(method)) {
+        throw new Error(`notifications.channels[${index}].method is invalid`);
+      }
+      const headers = stringRecord(channel.headers ?? {}, `notifications.channels[${index}].headers`);
+      const query = stringRecord(channel.query ?? {}, `notifications.channels[${index}].query`);
+      const contentType = optionalString(channel, 'content_type', 'application/json').trim();
+      const bodyTemplate = optionalString(channel, 'body_template', '').trim();
+      if (!bodyTemplate || bodyTemplate.length > 64_000) {
+        throw new Error(`notifications.channels[${index}].body_template is invalid`);
+      }
+      return {
+        id,
+        name,
+        type,
+        url,
+        method: method as 'POST' | 'PUT' | 'PATCH',
+        headers,
+        query,
+        contentType,
+        bodyTemplate,
+        timeoutMs: integerSetting(channel, 'timeout_ms', 10_000, 1_000, 30_000),
+      };
+    }
+    if (type === 'BARK') {
+      const server = validateHttpEndpoint(
+        optionalString(channel, 'server', 'https://api.day.app').trim().replace(/\/+$/, ''),
+        `notifications.channels[${index}].server`,
+      ).replace(/\/+$/, '');
+      const deviceKey = optionalString(channel, 'device_key', '').trim();
+      if (!deviceKey || deviceKey.length > 512) {
+        throw new Error(`notifications.channels[${index}].device_key is invalid`);
+      }
+      const level = optionalString(channel, 'level', 'active').trim();
+      if (!['active', 'timeSensitive', 'passive', 'critical'].includes(level)) {
+        throw new Error(`notifications.channels[${index}].level is invalid`);
+      }
+      const call = channel.call ?? false;
+      if (typeof call !== 'boolean') {
+        throw new Error(`notifications.channels[${index}].call must be a boolean`);
+      }
+      return {
+        id,
+        name,
+        type,
+        server,
+        deviceKey,
+        group: optionalString(channel, 'group', 'CA Connection').trim().slice(0, 128),
+        sound: optionalString(channel, 'sound', '').trim() || null,
+        level: level as BarkChannelConfig['level'],
+        call,
+      };
+    }
+    throw new Error(`notifications.channels[${index}].type is invalid`);
+  });
+}
+
+function validateHttpEndpoint(value: string, name: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${name} is invalid`);
+  }
+  if (
+    !['http:', 'https:'].includes(url.protocol)
+    || !url.hostname
+    || url.username
+    || url.password
+    || url.hash
+  ) {
+    throw new Error(`${name} is invalid`);
+  }
+  return url.toString();
+}
+
+function stringRecord(value: unknown, name: string): Record<string, string> {
+  const record = requireRecord(value, name);
+  const result: Record<string, string> = {};
+  for (const [key, item] of Object.entries(record)) {
+    if (!key.trim() || typeof item !== 'string') throw new Error(`${name} must contain strings`);
+    result[key] = item;
+  }
+  return result;
 }
 
 export function validateFeishuWebhookUrl(value: string): void {

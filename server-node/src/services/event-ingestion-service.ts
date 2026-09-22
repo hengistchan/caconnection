@@ -40,6 +40,10 @@ export class EventIngestionService {
         nowMs,
       );
       const inserted = insertion.inserted;
+      const callSessionId = envelope.eventType === 'CALL_STATE'
+        && typeof decryptedPayload.sessionId === 'string'
+        ? decryptedPayload.sessionId
+        : null;
 
       if (
         inserted
@@ -52,7 +56,38 @@ export class EventIngestionService {
         );
       }
 
-      const notificationMode = this.notificationRepo.getActiveMode();
+      if (inserted && callSessionId && decryptedPayload.state === 'OFFHOOK') {
+        this.eventRepo.markCallSessionAnswered(deviceId, callSessionId, nowMs);
+      }
+      const claimedCallEndType = inserted
+        && callSessionId
+        && decryptedPayload.state === 'IDLE'
+        && insertion.eventId !== null
+        ? this.eventRepo.claimCallSessionEnded(
+          deviceId,
+          callSessionId,
+          insertion.eventId,
+          nowMs,
+        )
+        : null;
+      if (claimedCallEndType) {
+        decryptedPayload = {
+          ...decryptedPayload,
+          notificationEventType: claimedCallEndType,
+        };
+      }
+      const notificationEventType = claimedCallEndType ?? toNotificationEventType(
+        envelope.eventType,
+        decryptedPayload,
+      );
+      const notificationChannels = notificationEventType === null
+        ? []
+        : this.notificationRepo.getActiveChannels(
+          notificationEventType,
+          isFeishuWebhookLoopSourcePayload(envelope.eventType, decryptedPayload)
+            ? ['FEISHU']
+            : [],
+        );
       const shouldNotifyCallRinging = isCallRinging
         && insertion.eventId !== null
         && this.eventRepo.claimCallSessionRinging(
@@ -64,13 +99,14 @@ export class EventIngestionService {
       if (
         inserted
         && insertion.eventId !== null
-        && notificationMode !== null
-        && shouldEnqueueNotification(envelope.eventType, decryptedPayload)
+        && notificationEventType !== null
+        && notificationChannels.length > 0
         && (!isCallRinging || shouldNotifyCallRinging)
       ) {
         this.notificationRepo.enqueueEvent(
           insertion.eventId,
-          notificationMode,
+          notificationChannels,
+          notificationEventType,
           nowMs,
           isCallRinging
             && this.notificationRepo.findCallIdentityEnvelope(insertion.eventId) === null
@@ -96,21 +132,30 @@ export class EventIngestionService {
   }
 }
 
-function shouldEnqueueNotification(
+function toNotificationEventType(
+  eventType: string,
+  payload: Record<string, unknown>,
+): 'sms.received' | 'call.ringing' | 'notification.received' | null {
+  if (eventType === 'INCOMING_SMS') return 'sms.received';
+  if (eventType === 'NOTIFICATION') {
+    if (payload.eventType === 'REMOVED') return null;
+    return 'notification.received';
+  }
+  if (eventType === 'CALL_STATE' && payload.state === 'RINGING') return 'call.ringing';
+  return null;
+}
+
+function isFeishuWebhookLoopSourcePayload(
   eventType: string,
   payload: Record<string, unknown>,
 ): boolean {
-  if (eventType === 'INCOMING_SMS') return true;
-  if (eventType === 'NOTIFICATION') {
-    if (payload.eventType === 'REMOVED') return false;
-    const sourcePackage = typeof payload.sourcePackage === 'string'
-      ? payload.sourcePackage
-      : typeof payload.packageName === 'string'
-        ? payload.packageName
-        : null;
-    return sourcePackage === null || !isFeishuWebhookLoopSource(sourcePackage);
-  }
-  return eventType === 'CALL_STATE' && payload.state === 'RINGING';
+  if (eventType !== 'NOTIFICATION') return false;
+  const sourcePackage = typeof payload.sourcePackage === 'string'
+    ? payload.sourcePackage
+    : typeof payload.packageName === 'string'
+      ? payload.packageName
+      : null;
+  return sourcePackage !== null && isFeishuWebhookLoopSource(sourcePackage);
 }
 
 function isFeishuWebhookLoopSource(packageName: string): boolean {

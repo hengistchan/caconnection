@@ -1,18 +1,17 @@
 import { createHmac } from 'node:crypto';
-import type { FeishuConfig } from '../config/runtime-config.js';
+import type {
+  FeishuChannelConfig,
+  FeishuConfig,
+  NotificationChannelConfig,
+} from '../config/runtime-config.js';
+import type { GatewayNotificationEvent } from './gateway-event.js';
+import {
+  NotificationTransportError,
+  type NotificationProvider,
+} from './provider.js';
 
 export interface NotificationTransport {
   sendText(text: string): Promise<void>;
-}
-
-export class NotificationTransportError extends Error {
-  constructor(
-    message: string,
-    readonly retryable: boolean,
-  ) {
-    super(message);
-    this.name = 'NotificationTransportError';
-  }
 }
 
 export function createFeishuSignature(secret: string, timestampSeconds: number): string {
@@ -20,11 +19,19 @@ export function createFeishuSignature(secret: string, timestampSeconds: number):
   return createHmac('sha256', key).update('').digest('base64');
 }
 
-export class FeishuWebhookClient implements NotificationTransport {
+export class FeishuWebhookClient implements NotificationTransport, NotificationProvider {
   constructor(
     private readonly config: FeishuConfig,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
+
+  async send(channel: NotificationChannelConfig, event: GatewayNotificationEvent): Promise<void> {
+    if (channel.type !== 'FEISHU') throw new Error('invalid Feishu channel');
+    const client = sameFeishuConfig(channel, this.config)
+      ? this
+      : new FeishuWebhookClient(channel, this.fetchImpl);
+    await client.sendText(event.legacyText ?? [event.title, event.body].filter(Boolean).join('\n'));
+  }
 
   async sendText(text: string): Promise<void> {
     const payload: Record<string, unknown> = {
@@ -99,6 +106,14 @@ export class FeishuWebhookClient implements NotificationTransport {
       );
     }
   }
+}
+
+function sameFeishuConfig(
+  channel: FeishuChannelConfig,
+  config: FeishuConfig,
+): boolean {
+  return channel.webhookUrl === config.webhookUrl
+    && channel.signingSecret === config.signingSecret;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

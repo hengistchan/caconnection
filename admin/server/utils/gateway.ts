@@ -352,6 +352,30 @@ export interface GatewayNotificationSettings {
   lastAttemptAt: number | null
 }
 
+export type GatewayNotificationChannelEvent =
+  | 'sms.received'
+  | 'call.ringing'
+  | 'call.missed'
+  | 'call.ended'
+  | 'notification.received'
+
+export interface GatewayNotificationChannel {
+  id: string
+  name: string
+  type: 'FEISHU' | 'WEBHOOK' | 'BARK'
+  configured: boolean
+  signingEnabled: boolean
+  enabled: boolean
+  contentMode: 'REDACTED' | 'FULL'
+  eventTypes: GatewayNotificationChannelEvent[]
+  updatedAt: number
+  pendingCount: number
+  retryCount: number
+  failedCount: number
+  lastSuccessAt: number | null
+  lastAttemptAt: number | null
+}
+
 export interface GatewayDeviceGroup {
   groupId: string
   name: string
@@ -1028,6 +1052,83 @@ export async function testGatewayNotification(): Promise<{
     queued: true,
     deliveryId: value.deliveryId as number,
   }
+}
+
+function parseNotificationChannel(value: unknown): GatewayNotificationChannel {
+  const allowedEvents = new Set([
+    'sms.received',
+    'call.ringing',
+    'call.missed',
+    'call.ended',
+    'notification.received',
+  ])
+  if (
+    !isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.name !== 'string'
+    || !['FEISHU', 'WEBHOOK', 'BARK'].includes(String(value.type))
+    || typeof value.configured !== 'boolean'
+    || typeof value.signingEnabled !== 'boolean'
+    || typeof value.enabled !== 'boolean'
+    || !['REDACTED', 'FULL'].includes(String(value.contentMode))
+    || !Array.isArray(value.eventTypes)
+    || value.eventTypes.some(item => typeof item !== 'string' || !allowedEvents.has(item))
+    || !isNonNegativeInteger(value.updatedAt)
+    || !isNonNegativeInteger(value.pendingCount)
+    || !isNonNegativeInteger(value.retryCount)
+    || !isNonNegativeInteger(value.failedCount)
+    || !isNullableInteger(value.lastSuccessAt)
+    || !isNullableInteger(value.lastAttemptAt)
+  ) {
+    return invalidGatewayResponse()
+  }
+  return value as unknown as GatewayNotificationChannel
+}
+
+export async function getGatewayNotificationChannels(): Promise<{
+  channels: GatewayNotificationChannel[]
+}> {
+  const value = await gatewayFetch('/v1/notification-channels')
+  if (!isRecord(value) || !Array.isArray(value.channels)) {
+    return invalidGatewayResponse()
+  }
+  return { channels: value.channels.map(parseNotificationChannel) }
+}
+
+export async function updateGatewayNotificationChannel(
+  channelId: string,
+  options: {
+    enabled: boolean
+    contentMode: 'REDACTED' | 'FULL'
+    eventTypes: GatewayNotificationChannelEvent[]
+  },
+): Promise<{ channel: GatewayNotificationChannel }> {
+  const value = await gatewayFetch(
+    `/v1/notification-channels/${encodeURIComponent(channelId)}`,
+    { method: 'PUT', body: options },
+  )
+  if (!isRecord(value) || !isRecord(value.channel)) {
+    return invalidGatewayResponse()
+  }
+  return { channel: parseNotificationChannel(value.channel) }
+}
+
+export async function testGatewayNotificationChannel(channelId: string): Promise<{
+  queued: boolean
+  deliveryId: number
+}> {
+  const value = await gatewayFetch(
+    `/v1/notification-channels/${encodeURIComponent(channelId)}/test`,
+    { method: 'POST', body: {} },
+  )
+  if (
+    !isRecord(value)
+    || value.queued !== true
+    || !Number.isSafeInteger(value.deliveryId)
+  ) {
+    return invalidGatewayResponse()
+  }
+  return { queued: true, deliveryId: value.deliveryId as number }
 }
 
 function parseDeviceGroup(value: unknown): GatewayDeviceGroup {

@@ -11,7 +11,7 @@
     "language": "Language",
     "devices": "Devices",
     "outbound": "Send SMS",
-    "push": "Feishu Push"
+    "push": "Connections"
   },
   "login": {
     "title": "Admin Login",
@@ -301,10 +301,11 @@
     "deviceHealthWarning": "The selected gateway is {health}. The command will not be rerouted to another device."
   },
   "push": {
-    "title": "Feishu Webhook Push",
-    "description": "Asynchronously deliver new SMS and allowlisted app notifications through a durable Feishu queue.",
+    "title": "Notification Connections",
+    "description": "Route gateway events through durable, independently configurable notification channels.",
     "refresh": "Refresh status",
     "channel": "Channel",
+    "type": "Provider",
     "feishu": "Feishu custom bot",
     "configured": "Webhook configuration",
     "signing": "Signature verification",
@@ -320,6 +321,14 @@
     "redactedHelp": "Hide SMS bodies, OTP values, notification titles and bodies, and mask sender identifiers.",
     "full": "Full-content mode",
     "fullHelp": "Send sender identifiers, SMS bodies, OTP candidates, notification titles and bodies to Feishu. The third-party platform will receive sensitive data.",
+    "fullChannelHelp": "Send readable event content to this provider. The destination will receive sensitive data.",
+    "events": "Subscribed events",
+    "eventSms": "SMS received",
+    "eventCallRinging": "Incoming call",
+    "eventCallMissed": "Missed call",
+    "eventCallEnded": "Call ended",
+    "eventNotification": "Allowed app notification",
+    "noChannels": "No notification channels are configured. Add Bark, Webhook, or Feishu in the protected Gateway configuration.",
     "save": "Save push settings",
     "test": "Send test notification",
     "pending": "Pending",
@@ -327,9 +336,9 @@
     "failed": "Failed",
     "lastSuccess": "Last success",
     "lastAttempt": "Last attempt",
-    "loadError": "Could not load Feishu push settings.",
-    "saveSuccess": "Feishu push settings saved",
-    "saveError": "Could not save Feishu push settings",
+    "loadError": "Could not load notification channels.",
+    "saveSuccess": "Notification channel saved",
+    "saveError": "Could not save notification channel",
     "testQueued": "Test notification queued",
     "testError": "Could not queue a test notification"
   },

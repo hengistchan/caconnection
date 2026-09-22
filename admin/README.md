@@ -143,7 +143,7 @@ This creates:
 - Updates `config.json` with token hash only
 
 The Admin API token includes the `notifications:manage` scope used by the
-Feishu Push settings tab. Configure the protected Webhook separately:
+Notification Connections tab. Configure legacy Feishu separately:
 
 ```bash
 python3 server/setup_feishu.py \
@@ -296,7 +296,7 @@ This ensures:
   - Notification title (hidden by default)
   - Notification body (hidden by default)
 - Channel and category
-- Feishu settings show pending, retrying, sent, skipped, and permanently failed
+- Notification channel cards show pending, retrying, sent, skipped, and permanently failed
   delivery counts; retryable failures are bounded instead of retrying forever
 
 ### Remote SMS (`/admin/` - Remote SMS tab)

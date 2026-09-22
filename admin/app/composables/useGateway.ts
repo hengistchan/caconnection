@@ -184,6 +184,30 @@ export interface GatewayNotificationSettings {
   lastAttemptAt: number | null
 }
 
+export type GatewayNotificationChannelEvent =
+  | 'sms.received'
+  | 'call.ringing'
+  | 'call.missed'
+  | 'call.ended'
+  | 'notification.received'
+
+export interface GatewayNotificationChannel {
+  id: string
+  name: string
+  type: 'FEISHU' | 'WEBHOOK' | 'BARK'
+  configured: boolean
+  signingEnabled: boolean
+  enabled: boolean
+  contentMode: 'REDACTED' | 'FULL'
+  eventTypes: GatewayNotificationChannelEvent[]
+  updatedAt: number
+  pendingCount: number
+  retryCount: number
+  failedCount: number
+  lastSuccessAt: number | null
+  lastAttemptAt: number | null
+}
+
 export interface GatewayDeviceGroup {
   groupId: string
   name: string
@@ -723,6 +747,50 @@ export function useGateway() {
     })
   }
 
+  async function fetchNotificationChannels(): Promise<GatewayNotificationChannel[]> {
+    const data = await $fetch<{ channels: GatewayNotificationChannel[] }>(
+      '/admin/api/gateway/notification-channels',
+      { credentials: 'include' },
+    )
+    return data.channels
+  }
+
+  async function updateNotificationChannel(
+    channelId: string,
+    options: {
+      enabled: boolean
+      contentMode: 'REDACTED' | 'FULL'
+      eventTypes: GatewayNotificationChannelEvent[]
+    },
+  ): Promise<GatewayNotificationChannel> {
+    const data = await $fetch<{ channel: GatewayNotificationChannel }>(
+      `/admin/api/gateway/notification-channels/${encodeURIComponent(channelId)}`,
+      {
+        method: 'PUT',
+        body: options,
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+    return data.channel
+  }
+
+  async function testNotificationChannel(channelId: string): Promise<void> {
+    await $fetch(
+      `/admin/api/gateway/notification-channels/${encodeURIComponent(channelId)}/test`,
+      {
+        method: 'POST',
+        body: {},
+        headers: csrfToken.value
+          ? { 'X-CSRF-Token': csrfToken.value }
+          : undefined,
+        credentials: 'include',
+      },
+    )
+  }
+
   async function fetchDeviceGroups(): Promise<GatewayDeviceGroup[]> {
     const data = await $fetch<{ groups: GatewayDeviceGroup[] }>(
       '/admin/api/gateway/device-groups',
@@ -848,6 +916,9 @@ export function useGateway() {
     fetchNotificationSettings,
     updateNotificationSettings,
     testNotification,
+    fetchNotificationChannels,
+    updateNotificationChannel,
+    testNotificationChannel,
     fetchDeviceGroups,
     createDeviceGroup,
     updateDeviceGroup,

@@ -24,7 +24,35 @@
       ]
     }
   },
-  "notifications": {},
+  "notifications": {
+    "channels": [
+      {
+        "id": "iphone-bark",
+        "name": "Bark",
+        "type": "BARK",
+        "server": "https://api.day.app",
+        "device_key": "REPLACE_WITH_BARK_DEVICE_KEY",
+        "group": "CA Connection",
+        "sound": "",
+        "level": "active",
+        "call": false
+      },
+      {
+        "id": "home-webhook",
+        "name": "Home Webhook",
+        "type": "WEBHOOK",
+        "method": "POST",
+        "url": "https://example.com/hooks/caconnection",
+        "headers": {
+          "Authorization": "Bearer REPLACE_WITH_TOKEN"
+        },
+        "query": {},
+        "content_type": "application/json",
+        "body_template": "{\"event\":\"{{event.type}}\",\"eventId\":\"{{event.id}}\",\"device\":\"{{device.id}}\",\"sender\":\"{{data.from}}\",\"name\":\"{{data.contactName}}\",\"message\":\"{{data.body}}\",\"timestamp\":\"{{event.timestamp}}\"}",
+        "timeout_ms": 10000
+      }
+    ]
+  },
   "server": {
     "retention_days": 30,
     "otp_max_age_seconds": 600,

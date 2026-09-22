@@ -213,11 +213,24 @@ export function initializeDatabase(db: DatabaseSync): void {
       id, enabled, content_mode, updated_at
     ) VALUES (1, 0, 'REDACTED', 0);
 
+    CREATE TABLE IF NOT EXISTS notification_channels (
+      channel_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      enabled INTEGER NOT NULL,
+      content_mode TEXT NOT NULL,
+      event_types_json TEXT NOT NULL,
+      configured INTEGER NOT NULL,
+      signing_enabled INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS notification_outbox (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       channel TEXT NOT NULL,
       event_id INTEGER,
       kind TEXT NOT NULL,
+      notification_event_type TEXT,
       content_mode TEXT NOT NULL,
       status TEXT NOT NULL,
       attempt_count INTEGER NOT NULL,
@@ -255,5 +268,25 @@ export function initializeDatabase(db: DatabaseSync): void {
     if (!statusColumns.has(col)) {
       db.exec(`ALTER TABLE device_status ADD COLUMN ${col} ${type}`);
     }
+  }
+
+  const callSessionColumns = new Set(
+    db.prepare('PRAGMA table_info(call_ringing_sessions)').all().map((row: any) => row.name)
+  );
+  if (!callSessionColumns.has('answered_at')) {
+    db.exec('ALTER TABLE call_ringing_sessions ADD COLUMN answered_at INTEGER');
+  }
+  if (!callSessionColumns.has('ended_at')) {
+    db.exec('ALTER TABLE call_ringing_sessions ADD COLUMN ended_at INTEGER');
+  }
+  if (!callSessionColumns.has('ended_event_id')) {
+    db.exec('ALTER TABLE call_ringing_sessions ADD COLUMN ended_event_id INTEGER');
+  }
+
+  const notificationOutboxColumns = new Set(
+    db.prepare('PRAGMA table_info(notification_outbox)').all().map((row: any) => row.name)
+  );
+  if (!notificationOutboxColumns.has('notification_event_type')) {
+    db.exec('ALTER TABLE notification_outbox ADD COLUMN notification_event_type TEXT');
   }
 }

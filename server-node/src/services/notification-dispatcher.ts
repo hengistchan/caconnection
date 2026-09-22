@@ -1,23 +1,24 @@
 import { decryptPayload } from '../crypto/payload-crypto.js';
 import { MAX_NOTIFICATION_DELIVERY_ATTEMPTS } from '../config/constants.js';
+import type { NotificationChannelConfig } from '../config/runtime-config.js';
+import { normalizeGatewayEvent } from '../notifications/gateway-event.js';
 import {
+  NotificationProviderRegistry,
   NotificationTransportError,
-  type NotificationTransport,
-} from '../notifications/feishu-client.js';
+} from '../notifications/provider.js';
+import type { NotificationTransport } from '../notifications/feishu-client.js';
 import {
   renderFeishuNotification,
   type RenderableDelivery,
 } from '../notifications/renderer.js';
 import type { NotificationRepository } from '../repositories/notification-repository.js';
 
-const SAFE_DELIVERY_ERRORS = new Set([
+const NON_RETRYABLE_LOCAL_ERRORS = new Set([
   'device secret unavailable',
   'invalid encrypted payload',
   'notification event is unavailable',
-  'Feishu webhook request failed',
-  'Feishu webhook response is too large',
-  'Feishu webhook returned invalid JSON',
-  'Feishu webhook rejected the message',
+  'notification channel unavailable',
+  'notification provider unavailable',
 ]);
 
 export class NotificationDispatcher {
@@ -25,11 +26,42 @@ export class NotificationDispatcher {
   private stopped = true;
   private processing: Promise<void> | undefined;
 
+  private readonly providers: NotificationProviderRegistry;
+  private readonly channels: Map<string, NotificationChannelConfig>;
+  private readonly deviceSecrets: Map<string, Buffer>;
+
   constructor(
     private readonly repository: NotificationRepository,
-    private readonly transport: NotificationTransport,
-    private readonly deviceSecrets: Map<string, Buffer>,
-  ) {}
+    providersOrTransport: NotificationProviderRegistry | NotificationTransport,
+    channelsOrSecrets: Map<string, NotificationChannelConfig> | Map<string, Buffer>,
+    deviceSecrets?: Map<string, Buffer>,
+  ) {
+    if ('sendText' in providersOrTransport) {
+      this.providers = new NotificationProviderRegistry();
+      this.providers.register('FEISHU', {
+        send: async (_channel, event) => {
+          await providersOrTransport.sendText(
+            event.legacyText ?? [event.title, event.body].join('\n'),
+          );
+        },
+      });
+      this.channels = new Map([[
+        'feishu',
+        {
+          id: 'feishu',
+          name: 'Feishu',
+          type: 'FEISHU',
+          webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/compatibility',
+          signingSecret: null,
+        },
+      ]]);
+      this.deviceSecrets = channelsOrSecrets as Map<string, Buffer>;
+    } else {
+      this.providers = providersOrTransport;
+      this.channels = channelsOrSecrets as Map<string, NotificationChannelConfig>;
+      this.deviceSecrets = deviceSecrets ?? new Map();
+    }
+  }
 
   start(): void {
     if (!this.stopped) return;
@@ -54,6 +86,8 @@ export class NotificationDispatcher {
     const delivery = this.repository.claimDue(nowMs);
     if (!delivery) return false;
     try {
+      const channel = this.channels.get(delivery.channelId ?? 'feishu');
+      if (!channel) throw new Error('notification channel unavailable');
       const renderable: RenderableDelivery = { ...delivery };
       if (delivery.kind === 'EVENT') {
         if (!delivery.deviceId || !delivery.envelopeJson) {
@@ -67,7 +101,11 @@ export class NotificationDispatcher {
           secret,
         );
         let payload = envelope.payload as Record<string, unknown>;
-        if (delivery.eventType === 'CALL_STATE' && delivery.eventId !== null) {
+        if (
+          delivery.eventType === 'CALL_STATE'
+          && delivery.eventId !== null
+          && (payload.state === 'RINGING' || payload.state === 'IDLE')
+        ) {
           const identityEnvelopeJson = this.repository.findCallIdentityEnvelope(
             delivery.eventId,
           );
@@ -85,36 +123,23 @@ export class NotificationDispatcher {
         }
         renderable.payload = payload;
       }
-      const text = renderFeishuNotification(renderable);
-      if (text === null) {
+      const event = normalizeGatewayEvent(renderable);
+      if (event === null) {
         this.repository.finish(delivery.id, Date.now(), true);
       } else {
-        await this.transport.sendText(text);
+        event.legacyText = renderFeishuNotification(renderable) ?? undefined;
+        await this.providers.get(channel.type).send(channel, event);
         this.repository.finish(delivery.id, Date.now());
       }
     } catch (error) {
-      const message = error instanceof Error && SAFE_DELIVERY_ERRORS.has(error.message)
-        ? error.message
-        : 'notification delivery failed';
+      const message = safeErrorMessage(error);
       const retryable = error instanceof NotificationTransportError
         ? error.retryable
-        : ![
-          'device secret unavailable',
-          'invalid encrypted payload',
-          'notification event is unavailable',
-        ].includes(message);
-      if (
-        !retryable
-        || delivery.attemptCount >= MAX_NOTIFICATION_DELIVERY_ATTEMPTS
-      ) {
+        : !NON_RETRYABLE_LOCAL_ERRORS.has(message);
+      if (!retryable || delivery.attemptCount >= MAX_NOTIFICATION_DELIVERY_ATTEMPTS) {
         this.repository.fail(delivery.id, Date.now(), message);
       } else {
-        this.repository.retry(
-          delivery.id,
-          delivery.attemptCount,
-          Date.now(),
-          message,
-        );
+        this.repository.retry(delivery.id, delivery.attemptCount, Date.now(), message);
       }
     }
     return true;
@@ -149,4 +174,12 @@ function decryptDeliveryEnvelope(
   } catch {
     throw new Error('invalid encrypted payload');
   }
+}
+
+function safeErrorMessage(error: unknown): string {
+  if (error instanceof NotificationTransportError) return error.message.slice(0, 128);
+  if (error instanceof Error && NON_RETRYABLE_LOCAL_ERRORS.has(error.message)) {
+    return error.message;
+  }
+  return 'notification delivery failed';
 }

@@ -77,4 +77,49 @@ describe('runtime config', () => {
       },
     })).toThrow('webhook_url is invalid');
   });
+
+  it('parses generic Webhook and Bark notification channels', () => {
+    const parsed = parseRuntimeConfig({
+      ...validConfig(),
+      notifications: {
+        channels: [
+          {
+            id: 'home',
+            name: 'Home Webhook',
+            type: 'webhook',
+            url: 'https://example.test/hooks',
+            headers: { Authorization: 'Bearer token' },
+            query: { source: '{{event.type}}' },
+            content_type: 'application/json',
+            body_template: '{"event":"{{event.type}}"}',
+          },
+          {
+            id: 'iphone',
+            name: 'Bark',
+            type: 'bark',
+            server: 'https://api.day.app',
+            device_key: 'device-key',
+            group: 'CA Connection',
+            level: 'active',
+            call: true,
+          },
+        ],
+      },
+    });
+
+    expect(parsed.notifications.channels).toMatchObject([
+      {
+        id: 'home',
+        type: 'WEBHOOK',
+        method: 'POST',
+        timeoutMs: 10_000,
+      },
+      {
+        id: 'iphone',
+        type: 'BARK',
+        server: 'https://api.day.app',
+        call: true,
+      },
+    ]);
+  });
 });

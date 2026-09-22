@@ -556,38 +556,39 @@
             {{ pushError }}
           </p>
 
-          <div v-if="notificationSettings" class="card push-settings-card">
-            <div class="status-items">
-              <div class="status-item">
-                <span class="status-label">{{ t('push.channel') }}</span>
-                <strong>{{ t('push.feishu') }}</strong>
-              </div>
-              <div class="status-item">
-                <span class="status-label">{{ t('push.configured') }}</span>
-                <span :class="notificationSettings.configured ? 'text-success' : 'text-danger'">
-                  {{ notificationSettings.configured ? t('push.yes') : t('push.no') }}
-                </span>
-              </div>
-              <div class="status-item">
-                <span class="status-label">{{ t('push.signing') }}</span>
-                <span>{{ notificationSettings.signingEnabled ? t('push.enabled') : t('push.disabled') }}</span>
-              </div>
-            </div>
+          <p v-if="!pushLoading && notificationChannels.length === 0" class="empty-state">
+            {{ t('push.noChannels') }}
+          </p>
 
-            <p
-              v-if="!notificationSettings.configured"
-              class="inline-alert inline-alert-warning"
-              role="status"
+          <div class="notification-channel-grid">
+            <form
+              v-for="channel in notificationChannels"
+              :key="channel.id"
+              class="card push-settings-card"
+              @submit.prevent="saveNotificationChannel(channel)"
             >
-              {{ t('push.notConfigured') }}
-            </p>
+              <div class="status-items">
+                <div class="status-item">
+                  <span class="status-label">{{ t('push.channel') }}</span>
+                  <strong>{{ channel.name }}</strong>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">{{ t('push.type') }}</span>
+                  <span>{{ channelTypeLabel(channel.type) }}</span>
+                </div>
+                <div class="status-item">
+                  <span class="status-label">{{ t('push.configured') }}</span>
+                  <span :class="channel.configured ? 'text-success' : 'text-danger'">
+                    {{ channel.configured ? t('push.yes') : t('push.no') }}
+                  </span>
+                </div>
+              </div>
 
-            <form class="push-settings-form" @submit.prevent="saveNotificationSettings">
               <label class="push-toggle">
                 <input
-                  v-model="pushEnabled"
+                  v-model="channel.enabled"
                   type="checkbox"
-                  :disabled="pushSaving || !notificationSettings.configured"
+                  :disabled="pushSavingId === channel.id || !channel.configured"
                 >
                 <span>
                   <strong>{{ t('push.enableDelivery') }}</strong>
@@ -598,47 +599,64 @@
               <fieldset class="form-field form-field-wide push-mode-field">
                 <legend>{{ t('push.contentMode') }}</legend>
                 <label class="push-mode-option">
-                  <input v-model="pushContentMode" type="radio" value="REDACTED" :disabled="pushSaving">
+                  <input v-model="channel.contentMode" type="radio" value="REDACTED" :disabled="pushSavingId === channel.id">
                   <span>
                     <strong>{{ t('push.redacted') }}</strong>
                     <small>{{ t('push.redactedHelp') }}</small>
                   </span>
                 </label>
                 <label class="push-mode-option push-mode-danger">
-                  <input v-model="pushContentMode" type="radio" value="FULL" :disabled="pushSaving">
+                  <input v-model="channel.contentMode" type="radio" value="FULL" :disabled="pushSavingId === channel.id">
                   <span>
                     <strong>{{ t('push.full') }}</strong>
-                    <small>{{ t('push.fullHelp') }}</small>
+                    <small>{{ t('push.fullChannelHelp') }}</small>
                   </span>
                 </label>
               </fieldset>
 
+              <fieldset class="form-field form-field-wide push-mode-field">
+                <legend>{{ t('push.events') }}</legend>
+                <label v-for="eventOption in notificationEventOptions" :key="eventOption.value" class="push-toggle">
+                  <input
+                    v-model="channel.eventTypes"
+                    type="checkbox"
+                    :value="eventOption.value"
+                    :disabled="pushSavingId === channel.id"
+                  >
+                  <span>{{ t(eventOption.label) }}</span>
+                </label>
+              </fieldset>
+
               <div class="form-actions">
-                <button class="btn btn-primary" type="submit" :disabled="pushSaving">
-                  <span v-if="pushSaving" class="spinner" aria-hidden="true" />
+                <button
+                  class="btn btn-primary"
+                  type="submit"
+                  :disabled="pushSavingId === channel.id || channel.eventTypes.length === 0"
+                >
+                  <span v-if="pushSavingId === channel.id" class="spinner" aria-hidden="true" />
                   {{ t('push.save') }}
                 </button>
                 <button
                   class="btn btn-secondary"
                   type="button"
-                  :disabled="pushTesting || !notificationSettings.configured"
-                  @click="sendNotificationTest"
+                  :disabled="pushTestingId === channel.id || !channel.configured"
+                  @click="sendNotificationChannelTest(channel.id)"
                 >
-                  <span v-if="pushTesting" class="spinner" aria-hidden="true" />
+                  <span v-if="pushTestingId === channel.id" class="spinner" aria-hidden="true" />
                   {{ t('push.test') }}
                 </button>
               </div>
-            </form>
 
-            <div class="refresh-summary push-summary">
-              <span>{{ t('push.pending') }}: {{ notificationSettings.pendingCount }}</span>
-              <span>{{ t('push.retrying') }}: {{ notificationSettings.retryCount }}</span>
-              <span :class="{ 'text-danger': notificationSettings.failedCount > 0 }">
-                {{ t('push.failed') }}: {{ notificationSettings.failedCount }}
-              </span>
-              <span>{{ t('push.lastSuccess') }}: {{ formatOptionalTime(notificationSettings.lastSuccessAt) }}</span>
-              <span>{{ t('push.lastAttempt') }}: {{ formatOptionalTime(notificationSettings.lastAttemptAt) }}</span>
-            </div>
+              <div class="refresh-summary push-summary">
+                <span>{{ t('push.pending') }}: {{ channel.pendingCount }}</span>
+                <span>{{ t('push.retrying') }}: {{ channel.retryCount }}</span>
+                <span :class="{ 'text-danger': channel.failedCount > 0 }">
+                  {{ t('push.failed') }}: {{ channel.failedCount }}
+                </span>
+                <span>{{ t('push.lastSuccess') }}: {{ formatOptionalTime(channel.lastSuccessAt) }}</span>
+                <span>{{ t('push.lastAttempt') }}: {{ formatOptionalTime(channel.lastAttemptAt) }}</span>
+              </div>
+            </form>
           </div>
         </section>
 
@@ -1115,7 +1133,8 @@ import type {
   GatewayDeviceDetail,
   GatewayMessage,
   GatewayNotification,
-  GatewayNotificationSettings,
+  GatewayNotificationChannel,
+  GatewayNotificationChannelEvent,
 } from '~/composables/useGateway'
 import {
   generateDeviceSecret,
@@ -1177,9 +1196,9 @@ const {
   restoreDevice,
   purgeDevice,
   fetchAuditLog,
-  fetchNotificationSettings,
-  updateNotificationSettings,
-  testNotification,
+  fetchNotificationChannels,
+  updateNotificationChannel,
+  testNotificationChannel,
   fetchDeviceGroups,
   createDeviceGroup,
   updateDeviceGroup,
@@ -1248,13 +1267,21 @@ const groupMutationLoading = ref<string | null>(null)
 const deviceLoading = ref(false)
 const deviceError = ref('')
 const dashboardRefreshing = ref(false)
-const notificationSettings = ref<GatewayNotificationSettings | null>(null)
-const pushEnabled = ref(false)
-const pushContentMode = ref<'REDACTED' | 'FULL'>('REDACTED')
+const notificationChannels = ref<GatewayNotificationChannel[]>([])
 const pushLoading = ref(false)
-const pushSaving = ref(false)
-const pushTesting = ref(false)
+const pushSavingId = ref<string | null>(null)
+const pushTestingId = ref<string | null>(null)
 const pushError = ref('')
+const notificationEventOptions: Array<{
+  value: GatewayNotificationChannelEvent
+  label: string
+}> = [
+  { value: 'sms.received', label: 'push.eventSms' },
+  { value: 'call.ringing', label: 'push.eventCallRinging' },
+  { value: 'call.missed', label: 'push.eventCallMissed' },
+  { value: 'call.ended', label: 'push.eventCallEnded' },
+  { value: 'notification.received', label: 'push.eventNotification' },
+]
 
 const outboundDeviceId = ref('')
 const outboundSlotIndex = ref(0)
@@ -1524,7 +1551,7 @@ watch(selectedDeviceId, async () => {
 })
 watch(activeTab, (tab) => {
   if (tab !== 'messages') hideAllSensitive()
-  if (tab === 'push' && notificationSettings.value === null) {
+  if (tab === 'push' && notificationChannels.value.length === 0) {
     void loadNotificationSettings()
   }
 })
@@ -1801,10 +1828,7 @@ async function loadNotificationSettings(): Promise<void> {
   pushLoading.value = true
   pushError.value = ''
   try {
-    const settings = await fetchNotificationSettings()
-    notificationSettings.value = settings
-    pushEnabled.value = settings.enabled
-    pushContentMode.value = settings.contentMode
+    notificationChannels.value = await fetchNotificationChannels()
   } catch (error) {
     pushError.value = gatewayErrorText(error, t('push.loadError'))
   } finally {
@@ -1812,37 +1836,45 @@ async function loadNotificationSettings(): Promise<void> {
   }
 }
 
-async function saveNotificationSettings(): Promise<void> {
-  pushSaving.value = true
+async function saveNotificationChannel(channel: GatewayNotificationChannel): Promise<void> {
+  pushSavingId.value = channel.id
   pushError.value = ''
   try {
-    const settings = await updateNotificationSettings({
-      enabled: pushEnabled.value,
-      contentMode: pushContentMode.value,
+    const updated = await updateNotificationChannel(channel.id, {
+      enabled: channel.enabled,
+      contentMode: channel.contentMode,
+      eventTypes: channel.eventTypes,
     })
-    notificationSettings.value = settings
+    notificationChannels.value = notificationChannels.value.map(item =>
+      item.id === updated.id ? updated : item)
     showToast(t('push.saveSuccess'), 'success')
   } catch (error) {
     pushError.value = gatewayErrorText(error, t('push.saveError'))
     showToast(pushError.value, 'error')
   } finally {
-    pushSaving.value = false
+    pushSavingId.value = null
   }
 }
 
-async function sendNotificationTest(): Promise<void> {
-  pushTesting.value = true
+async function sendNotificationChannelTest(channelId: string): Promise<void> {
+  pushTestingId.value = channelId
   pushError.value = ''
   try {
-    await testNotification()
+    await testNotificationChannel(channelId)
     showToast(t('push.testQueued'), 'success')
     window.setTimeout(() => void loadNotificationSettings(), 1_500)
   } catch (error) {
     pushError.value = gatewayErrorText(error, t('push.testError'))
     showToast(pushError.value, 'error')
   } finally {
-    pushTesting.value = false
+    pushTestingId.value = null
   }
+}
+
+function channelTypeLabel(type: GatewayNotificationChannel['type']): string {
+  if (type === 'BARK') return 'Bark'
+  if (type === 'WEBHOOK') return 'Webhook'
+  return 'Feishu'
 }
 
 async function loadDevices(): Promise<boolean> {
@@ -2195,6 +2227,7 @@ async function handleLogout(): Promise<void> {
 .messages-list, .device-list { display: grid; gap: var(--space-md); }
 .load-more-row { display: flex; justify-content: center; padding: var(--space-lg) 0; }
 .device-form, .outbound-form { margin-bottom: var(--space-lg); }
+.notification-channel-grid { display: grid; gap: var(--space-lg); }
 .push-settings-card { display: grid; gap: var(--space-lg); max-width: 52rem; }
 .push-settings-form { display: grid; gap: var(--space-lg); padding-top: var(--space-md); border-top: 1px solid var(--color-border); }
 .push-toggle, .push-mode-option { display: flex; align-items: flex-start; gap: var(--space-sm); padding: var(--space-md); background: var(--color-bg-subtle); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; }

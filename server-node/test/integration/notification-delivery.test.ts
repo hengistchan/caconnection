@@ -151,6 +151,66 @@ describe('Feishu notification delivery', () => {
       .toMatchObject({ count: 1 });
   });
 
+  it('classifies an unanswered ringing session as a missed call', () => {
+    notificationRepo.updateSettings(true, 'FULL', 1_000);
+    notificationRepo.updateChannel(
+      'feishu',
+      true,
+      'FULL',
+      ['call.ringing', 'call.missed', 'call.ended'],
+      1_000,
+    );
+    const ringing = {
+      sessionId: 'missed-call-session',
+      state: 'RINGING',
+      observedAt: 2_000,
+    };
+    const idle = {
+      sessionId: 'missed-call-session',
+      state: 'IDLE',
+      observedAt: 4_000,
+    };
+    ingestion.accept(
+      deviceId,
+      'missed-call-ringing',
+      'missed-call-ringing-nonce',
+      encryptedEnvelopeAt('CALL_STATE', ringing, 2_000, 0),
+      ringing,
+      2_000,
+    );
+    const identity = {
+      callerAddress: '+8613812345678',
+      callerDisplayName: 'Example caller',
+      observedAt: 2_300,
+    };
+    ingestion.accept(
+      deviceId,
+      'missed-call-identity',
+      'missed-call-identity-nonce',
+      encryptedEnvelopeAt('CALL_IDENTITY', identity, 2_300, 0),
+      identity,
+      2_300,
+    );
+    ingestion.accept(
+      deviceId,
+      'missed-call-idle',
+      'missed-call-idle-nonce',
+      encryptedEnvelopeAt('CALL_STATE', idle, 4_000, 0),
+      idle,
+      4_000,
+    );
+
+    expect(db.prepare(`
+      SELECT notification_event_type
+      FROM notification_outbox
+      ORDER BY id
+    `).all()).toEqual([
+      { notification_event_type: 'call.ringing' },
+      { notification_event_type: 'call.missed' },
+    ]);
+    expect(notificationRepo.findCallIdentityEnvelope(3)).not.toBeNull();
+  });
+
   it('renders a redacted incoming call notification', () => {
     const rendered = renderFeishuNotification({
       id: 1,
@@ -492,6 +552,38 @@ describe('notification settings API', () => {
       contentMode: 'FULL',
     });
     expect(JSON.stringify(update.json())).not.toContain('open.feishu.cn');
+
+    const channels = await app.inject({
+      method: 'GET',
+      url: '/v1/notification-channels',
+      headers,
+    });
+    expect(channels.statusCode).toBe(200);
+    expect(channels.json().channels).toMatchObject([{
+      id: 'feishu',
+      name: 'Feishu',
+      type: 'FEISHU',
+      enabled: true,
+      contentMode: 'FULL',
+    }]);
+    expect(JSON.stringify(channels.json())).not.toContain('open.feishu.cn');
+
+    const channelUpdate = await app.inject({
+      method: 'PUT',
+      url: '/v1/notification-channels/feishu',
+      headers,
+      payload: JSON.stringify({
+        enabled: true,
+        contentMode: 'REDACTED',
+        eventTypes: ['sms.received', 'call.missed'],
+      }),
+    });
+    expect(channelUpdate.statusCode).toBe(200);
+    expect(channelUpdate.json().channel).toMatchObject({
+      id: 'feishu',
+      contentMode: 'REDACTED',
+      eventTypes: ['sms.received', 'call.missed'],
+    });
 
     const test = await app.inject({
       method: 'POST',

@@ -12,6 +12,9 @@ paths of the Python implementation.
 - AES-256-GCM/HKDF crypto remains cross-language compatible.
 - Event nonce, event row, device state, outbound status, and retention writes
   are committed in one SQLite transaction.
+- Notification events fan out through a durable per-channel outbox to Feishu,
+  Generic Webhook, and Bark providers without exposing provider credentials to
+  the Admin API.
 - Config loading is strict and fail-fast; production settings come from the
   existing `config.json`.
 - Docker, Compose, backup, restore, health checks, and protocol smoke tooling
@@ -52,6 +55,7 @@ src/
 ├── database/                      schema and transaction primitives
 ├── http/                          raw JSON capture and query validation
 ├── operations/                    backup, restore, protocol smoke CLI tools
+├── notifications/                 event normalization and provider adapters
 ├── protocol/                      encrypted envelope validation
 ├── repositories/                  SQLite persistence boundaries, including device state
 ├── routes/                        thin HTTP adapters
@@ -70,6 +74,17 @@ src/
 Proxy trust, retention, OTP age, rate limits, pairing settings, and concurrency
 are read from `config.json.server`; they are not shadowed by ad-hoc environment
 variables.
+
+## Notification channels
+
+`config.json.notifications.channels` accepts `FEISHU`, `WEBHOOK`, and `BARK`
+entries. Operational enablement, `REDACTED`/`FULL` privacy mode, and subscribed
+event types are stored separately in SQLite and managed through
+`/v1/notification-channels`.
+
+Supported event names are `sms.received`, `call.ringing`, `call.missed`,
+`call.ended`, and `notification.received`. Each event/channel pair has its own
+outbox row, retry state, and delivery result.
 
 ## Protocol compatibility tests
 

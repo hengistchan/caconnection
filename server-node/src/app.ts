@@ -42,6 +42,12 @@ import {
   FeishuWebhookClient,
   type NotificationTransport,
 } from './notifications/feishu-client.js';
+import { GenericWebhookProvider } from './notifications/generic-webhook-client.js';
+import { BarkProvider } from './notifications/bark-client.js';
+import {
+  NotificationProviderRegistry,
+  type NotificationProvider,
+} from './notifications/provider.js';
 import { messageRoutes } from './routes/message-routes.js';
 import { outboundRoutes } from './routes/outbound-routes.js';
 import { deviceRoutes } from './routes/device-routes.js';
@@ -127,6 +133,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   const groupRepo = new GroupRepository(db);
   const auditRepo = new AuditRepository(db);
   const notificationRepo = new NotificationRepository(db);
+  notificationRepo.syncConfiguredChannels(runtimeConfig.notifications.channels, Date.now());
   const deviceSecrets = deviceRepo.loadSecrets();
   const rateLimiter = new SlidingWindowRateLimiter();
   const deviceAuthenticator = new DeviceRequestAuthenticator(
@@ -144,14 +151,34 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     notificationRepo,
     runtimeConfig.server.retentionDays,
   );
-  const notificationTransport = config.notificationTransport
-    ?? (runtimeConfig.notifications.feishu
-      ? new FeishuWebhookClient(runtimeConfig.notifications.feishu)
-      : null);
-  const notificationDispatcher = notificationTransport
+  const notificationChannels = new Map(
+    runtimeConfig.notifications.channels.map(channel => [channel.id, channel]),
+  );
+  const providers = new NotificationProviderRegistry();
+  if (runtimeConfig.notifications.channels.some(channel => channel.type === 'FEISHU')) {
+    const injected = config.notificationTransport;
+    const provider: NotificationProvider = injected
+      ? {
+        send: async (_channel, event) => {
+          await injected.sendText(event.legacyText ?? [event.title, event.body].join('\n'));
+        },
+      }
+      : new FeishuWebhookClient(
+        runtimeConfig.notifications.channels.find(channel => channel.type === 'FEISHU')!,
+      );
+    providers.register('FEISHU', provider);
+  }
+  if (runtimeConfig.notifications.channels.some(channel => channel.type === 'WEBHOOK')) {
+    providers.register('WEBHOOK', new GenericWebhookProvider());
+  }
+  if (runtimeConfig.notifications.channels.some(channel => channel.type === 'BARK')) {
+    providers.register('BARK', new BarkProvider());
+  }
+  const notificationDispatcher = notificationChannels.size > 0
     ? new NotificationDispatcher(
       notificationRepo,
-      notificationTransport,
+      providers,
+      notificationChannels,
       deviceSecrets,
     )
     : null;

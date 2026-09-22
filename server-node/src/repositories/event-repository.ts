@@ -128,6 +128,35 @@ export class EventRepository {
     return result.changes > 0;
   }
 
+  markCallSessionAnswered(deviceId: string, sessionId: string, nowMs: number): void {
+    this.db.prepare(`
+      UPDATE call_ringing_sessions
+      SET answered_at = COALESCE(answered_at, ?)
+      WHERE device_id = ? AND session_id = ? AND ended_at IS NULL
+    `).run(nowMs, deviceId, sessionId);
+  }
+
+  claimCallSessionEnded(
+    deviceId: string,
+    sessionId: string,
+    eventId: number,
+    nowMs: number,
+  ): 'call.missed' | 'call.ended' | null {
+    const row = this.db.prepare(`
+      UPDATE call_ringing_sessions
+      SET ended_at = ?, ended_event_id = ?
+      WHERE device_id = ? AND session_id = ? AND ended_at IS NULL
+      RETURNING answered_at
+    `).get(
+      nowMs,
+      eventId,
+      deviceId,
+      sessionId,
+    ) as { answered_at: number | null } | undefined;
+    if (!row) return null;
+    return row.answered_at === null ? 'call.missed' : 'call.ended';
+  }
+
   insertWithId(
     deviceId: string,
     idempotencyKey: string,

@@ -11,7 +11,7 @@
     "language": "语言",
     "devices": "设备",
     "outbound": "远程发短信",
-    "push": "飞书推送"
+    "push": "通知连接"
   },
   "login": {
     "title": "管理后台登录",
@@ -301,10 +301,11 @@
     "deviceHealthWarning": "所选 Gateway 当前状态为：{health}。命令不会自动改投其他设备。"
   },
   "push": {
-    "title": "飞书 Webhook 推送",
-    "description": "网关收到新短信或允许名单应用通知后，通过持久化队列异步推送到飞书。",
+    "title": "通知渠道",
+    "description": "把网关事件通过持久化队列分发到彼此独立配置的通知渠道。",
     "refresh": "刷新状态",
     "channel": "推送渠道",
+    "type": "Provider",
     "feishu": "飞书自定义机器人",
     "configured": "Webhook 配置",
     "signing": "签名校验",
@@ -320,6 +321,14 @@
     "redactedHelp": "隐藏短信正文、验证码、通知标题和正文，并对发送方进行掩码处理。",
     "full": "完整内容模式",
     "fullHelp": "把发送方、短信正文、验证码候选、通知标题和正文发送给飞书。第三方平台将接触敏感数据。",
+    "fullChannelHelp": "向该渠道发送可读事件内容；目标平台将接触敏感数据。",
+    "events": "订阅事件",
+    "eventSms": "收到短信",
+    "eventCallRinging": "来电响铃",
+    "eventCallMissed": "未接来电",
+    "eventCallEnded": "通话结束",
+    "eventNotification": "允许名单应用通知",
+    "noChannels": "尚未配置通知渠道。请在受保护的 Gateway 配置中添加 Bark、Webhook 或飞书。",
     "save": "保存推送设置",
     "test": "发送测试通知",
     "pending": "待发送",
@@ -327,9 +336,9 @@
     "failed": "失败",
     "lastSuccess": "最近成功",
     "lastAttempt": "最近尝试",
-    "loadError": "无法读取飞书推送设置。",
-    "saveSuccess": "飞书推送设置已保存",
-    "saveError": "无法保存飞书推送设置",
+    "loadError": "无法读取通知渠道。",
+    "saveSuccess": "通知渠道设置已保存",
+    "saveError": "无法保存通知渠道",
     "testQueued": "测试通知已加入发送队列",
     "testError": "无法创建测试通知"
   },

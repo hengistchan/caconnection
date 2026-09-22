@@ -2,6 +2,74 @@ import type { FastifyInstance } from 'fastify';
 import { isNotificationContentMode } from '../notifications/renderer.js';
 
 export async function notificationRoutes(app: FastifyInstance) {
+  app.get('/v1/notification-channels', async (request, reply) => {
+    const clientId = app.verifyApi(request, 'notifications:manage');
+    if (app.getAllowedDeviceIds(clientId) !== null) {
+      return reply.status(403).send({ error: 'global device access required' });
+    }
+    return reply.send({ channels: app.notificationRepo.getChannels() });
+  });
+
+  app.put('/v1/notification-channels/:channelId', async (request, reply) => {
+    const clientId = app.verifyApi(request, 'notifications:manage');
+    if (app.getAllowedDeviceIds(clientId) !== null) {
+      return reply.status(403).send({ error: 'global device access required' });
+    }
+    const channelId = readChannelId(request.params);
+    const body = request.body;
+    if (
+      !isRecord(body)
+      || Object.keys(body).some(key => !['enabled', 'contentMode', 'eventTypes'].includes(key))
+      || typeof body.enabled !== 'boolean'
+      || typeof body.contentMode !== 'string'
+      || !isNotificationContentMode(body.contentMode)
+      || !Array.isArray(body.eventTypes)
+      || body.eventTypes.some(value => typeof value !== 'string')
+    ) {
+      return reply.status(400).send({ error: 'invalid notification channel settings' });
+    }
+    if (!app.notificationRepo.updateChannel(
+      channelId,
+      body.enabled,
+      body.contentMode,
+      body.eventTypes as string[],
+      Date.now(),
+    )) {
+      return reply.status(404).send({ error: 'notification channel not found' });
+    }
+    app.auditRepo.record(clientId, 'NOTIFICATION_CHANNEL_UPDATE', null, 'SUCCESS', {
+      channelId,
+      enabled: body.enabled,
+      contentMode: body.contentMode,
+      eventTypes: body.eventTypes,
+    });
+    if (body.enabled) app.notificationDispatcher?.wake();
+    return reply.send({ channel: app.notificationRepo.getChannel(channelId) });
+  });
+
+  app.post('/v1/notification-channels/:channelId/test', async (request, reply) => {
+    const clientId = app.verifyApi(request, 'notifications:manage');
+    if (app.getAllowedDeviceIds(clientId) !== null) {
+      return reply.status(403).send({ error: 'global device access required' });
+    }
+    const channelId = readChannelId(request.params);
+    if (!isRecord(request.body) || Object.keys(request.body).length !== 0) {
+      return reply.status(400).send({ error: 'empty request required' });
+    }
+    if (!app.notificationDispatcher) {
+      return reply.status(409).send({ error: 'notification channels are not configured' });
+    }
+    const deliveryId = app.notificationRepo.enqueueTest(channelId, Date.now());
+    if (deliveryId === null) {
+      return reply.status(404).send({ error: 'notification channel not found' });
+    }
+    app.auditRepo.record(clientId, 'NOTIFICATION_CHANNEL_TEST_QUEUE', null, 'SUCCESS', {
+      channelId,
+    });
+    app.notificationDispatcher.wake();
+    return reply.status(202).send({ queued: true, deliveryId });
+  });
+
   app.get('/v1/notification-settings', async (request, reply) => {
     const clientId = app.verifyApi(request, 'notifications:manage');
     if (app.getAllowedDeviceIds(clientId) !== null) {
@@ -60,11 +128,21 @@ export async function notificationRoutes(app: FastifyInstance) {
     if (!isRecord(request.body) || Object.keys(request.body).length !== 0) {
       return reply.status(400).send({ error: 'empty request required' });
     }
-    const deliveryId = app.notificationRepo.enqueueTest(Date.now());
+    const deliveryId = app.notificationRepo.enqueueTest('feishu', Date.now());
+    if (deliveryId === null) {
+      return reply.status(409).send({ error: 'Feishu webhook is not configured' });
+    }
     app.auditRepo.record(clientId, 'NOTIFICATION_TEST_QUEUE', null, 'SUCCESS');
     app.notificationDispatcher.wake();
     return reply.status(202).send({ queued: true, deliveryId });
   });
+}
+
+function readChannelId(params: unknown): string {
+  if (!isRecord(params) || typeof params.channelId !== 'string') {
+    throw new Error('notification channel not found');
+  }
+  return params.channelId;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
