@@ -232,10 +232,10 @@ The admin UI is served at `/admin/` via Cloudflare Tunnel ingress:
 
 ```yaml
 ingress:
-  - hostname: caconnection-gatway.hengistchan.online
+  - hostname: gateway.example.com
     path: ^/admin(?:/.*)?$
     service: http://admin:3000
-  - hostname: caconnection-gatway.hengistchan.online
+  - hostname: gateway.example.com
     service: http://gateway:8787
   - service: http_status:404
 ```

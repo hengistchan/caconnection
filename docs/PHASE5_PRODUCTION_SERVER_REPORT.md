@@ -33,7 +33,7 @@ Tunnel.
 The deployed production hostname is:
 
 ```text
-caconnection-gatway.hengistchan.online
+gateway.example.com
 ```
 
 The spelling `gatway` is intentional. DNS is managed from the server's

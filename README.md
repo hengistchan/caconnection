@@ -212,7 +212,7 @@ and [`server/openapi.yaml`](server/openapi.yaml) for the API contract.
 
 ## Admin UI
 
-**Live:** https://caconnection-gatway.hengistchan.online/admin/
+**Live:** https://gateway.example.com/admin/
 
 ### Features
 

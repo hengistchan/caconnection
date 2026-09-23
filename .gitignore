@@ -56,6 +56,13 @@ server/deploy/runtime/
 __pycache__/
 *.pyc
 
+# Secrets & credentials (defense in depth)
+*.pem
+*.key
+*.env
+!.env.example
+!.env.*.example
+
 # Admin UI build artifacts
 admin/node_modules/
 admin/.nuxt/

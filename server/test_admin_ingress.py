@@ -31,7 +31,7 @@ class TestCloudflareIngress(unittest.TestCase):
     def test_ingress_has_admin_path(self):
         """Ingress should include admin path rule."""
         prepare_cloudflare_runtime(
-            domain="caconnection-gatway.hengistchan.online",
+            domain="gateway.example.com",
             tunnel_id=self.tunnel_id,
             credentials_source=self.credentials_file,
             runtime_dir=self.runtime_dir,
@@ -47,7 +47,7 @@ class TestCloudflareIngress(unittest.TestCase):
     def test_ingress_admin_before_gateway(self):
         """Admin path rule should come before the general gateway rule."""
         prepare_cloudflare_runtime(
-            domain="caconnection-gatway.hengistchan.online",
+            domain="gateway.example.com",
             tunnel_id=self.tunnel_id,
             credentials_source=self.credentials_file,
             runtime_dir=self.runtime_dir,
@@ -66,7 +66,7 @@ class TestCloudflareIngress(unittest.TestCase):
     def test_ingress_preserves_gateway_service(self):
         """Gateway service should still be present for non-admin paths."""
         prepare_cloudflare_runtime(
-            domain="caconnection-gatway.hengistchan.online",
+            domain="gateway.example.com",
             tunnel_id=self.tunnel_id,
             credentials_source=self.credentials_file,
             runtime_dir=self.runtime_dir,
@@ -81,7 +81,7 @@ class TestCloudflareIngress(unittest.TestCase):
     def test_ingress_has_404_fallback(self):
         """Should have 404 fallback as last rule."""
         prepare_cloudflare_runtime(
-            domain="caconnection-gatway.hengistchan.online",
+            domain="gateway.example.com",
             tunnel_id=self.tunnel_id,
             credentials_source=self.credentials_file,
             runtime_dir=self.runtime_dir,
@@ -103,10 +103,10 @@ class TestCloudflareIngress(unittest.TestCase):
         # The line may start with "- " as it's a YAML list item
         self.assertIn("service: http_status:404", last_service_line)
 
-    def test_domain_preserved_as_gatway(self):
-        """Domain with intentional 'gatway' spelling should be preserved."""
+    def test_domain_preserved_exactly(self):
+        """Domain should be used exactly as provided, without correction."""
         prepare_cloudflare_runtime(
-            domain="caconnection-gatway.hengistchan.online",
+            domain="my-gatway.example.com",
             tunnel_id=self.tunnel_id,
             credentials_source=self.credentials_file,
             runtime_dir=self.runtime_dir,
@@ -115,10 +115,10 @@ class TestCloudflareIngress(unittest.TestCase):
         config_path = self.runtime_dir / "cloudflared-config.yml"
         config_content = config_path.read_text()
 
-        # Should use the exact domain (with gatway, not gateway)
-        self.assertIn("hostname: caconnection-gatway.hengistchan.online", config_content)
-        # Should NOT contain the corrected spelling
-        self.assertNotIn("caconnection-gateway.hengistchan.online", config_content)
+        # Should use the exact domain as provided
+        self.assertIn("hostname: my-gatway.example.com", config_content)
+        # Should NOT auto-correct to a different spelling
+        self.assertNotIn("my-gateway.example.com", config_content)
 
 
 class TestV1EventsNotThroughNuxt(unittest.TestCase):
@@ -139,7 +139,7 @@ class TestV1EventsNotThroughNuxt(unittest.TestCase):
         }))
 
         prepare_cloudflare_runtime(
-            domain="caconnection-gatway.hengistchan.online",
+            domain="gateway.example.com",
             tunnel_id=tunnel_id,
             credentials_source=credentials_file,
             runtime_dir=runtime_dir,

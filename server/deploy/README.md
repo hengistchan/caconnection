@@ -258,7 +258,7 @@ An authenticated admin dashboard for message monitoring, remote SMS commands,
 OTP claims, and short-lived Android pairing is available at:
 
 ```text
-https://caconnection-gatway.hengistchan.online/admin/
+https://gateway.example.com/admin/
 ```
 
 ### Setup Admin Credentials
