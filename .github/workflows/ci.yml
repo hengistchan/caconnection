@@ -60,6 +60,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Generate Nuxt types & configs
+        run: npx nuxt prepare
+
       - name: Lint
         run: npm run lint
 
