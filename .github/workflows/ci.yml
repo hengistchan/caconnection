@@ -57,6 +57,8 @@ jobs:
           cache: npm
           cache-dependency-path: admin/package-lock.json
 
+      # lockfile was generated with npm 11 (overrides resolution differs in npm 10)
+      - run: npm install -g npm@latest
       - run: npm ci
 
       - name: Lint
@@ -72,9 +74,6 @@ jobs:
   python-server:
     name: python-server
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: server
     steps:
       - uses: actions/checkout@v4
 
@@ -83,7 +82,7 @@ jobs:
           python-version: '3.12'
 
       - name: Run tests
-        run: python -m unittest discover -s . -p "test_*.py" -v
+        run: PYTHONPATH=".:server" python -m unittest discover -s server -p "test_*.py" -v
 
   # ── Android app ──────────────────────────────────────────────
   android:
