@@ -7,18 +7,20 @@
 
 ---
 
-## Table of Contents
+## Table of Contents · 目录
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-- [Capabilities](#capabilities)
-- [Security & Privacy](#security--privacy)
-- [Build](#build)
-- [Installation](#installation)
-- [Deployment](#deployment)
-- [Admin UI](#admin-ui)
-- [Testing](#testing)
-- [Project Phases](#project-phases)
+| | Section · 章节 |
+|---|---|
+| 1 | [Overview · 项目概览](#overview) |
+| 2 | [Architecture · 架构](#architecture) |
+| 3 | [Capabilities · 功能](#capabilities) |
+| 4 | [Security & Privacy · 安全与隐私](#security--privacy) |
+| 5 | [Build · 构建](#build) |
+| 6 | [Installation · 安装](#installation) |
+| 7 | [Deployment · 部署](#deployment) |
+| 8 | [Admin UI · 管理界面](#admin-ui) |
+| 9 | [Testing · 测试](#testing) |
+| 10 | [Project Phases · 项目阶段](#project-phases) |
 
 ---
 
