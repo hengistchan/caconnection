@@ -53,12 +53,11 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # nuxt-security@2.6.0 requires >=24; Node 24 ships npm 11 (lockfile compat)
+          node-version: 24
           cache: npm
           cache-dependency-path: admin/package-lock.json
 
-      # lockfile was generated with npm 11 (overrides resolution differs in npm 10)
-      - run: npm install -g npm@latest
       - run: npm ci
 
       - name: Lint
@@ -100,6 +99,10 @@ jobs:
           java-version: 17
 
       - uses: gradle/actions/setup-gradle@v4
+
+      # Aliyun mirrors are unreliable from GitHub runners (502); use official repos in CI
+      - name: Remove Aliyun mirrors for CI
+        run: sed -i '/maven.aliyun.com/d' settings.gradle
 
       - name: Lint
         run: ./gradlew :app:lintDebug
