@@ -17,6 +17,21 @@ import com.caconnection.data.poc.IncomingSmsEventEntity
 
 object NotificationHelper {
     private const val CHANNEL_ID = "incoming_sms_poc"
+    const val FOREGROUND_CHANNEL_ID = "gateway_foreground"
+
+    fun createForegroundChannel(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                FOREGROUND_CHANNEL_ID,
+                context.getString(R.string.foreground_channel_name),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = context.getString(R.string.foreground_channel_description)
+                setShowBadge(false)
+            }
+        )
+    }
 
     fun createChannel(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)

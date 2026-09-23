@@ -204,6 +204,10 @@
     <string name="call_screening_unavailable">The call-screening role is not available on this device.</string>
     <string name="notification_channel_name">Incoming SMS gateway</string>
     <string name="notification_channel_description">Notifications for SMS events captured by CA Connection</string>
+    <string name="foreground_channel_name">Gateway service</string>
+    <string name="foreground_channel_description">Persistent notification that keeps the SMS gateway alive in the background</string>
+    <string name="foreground_notification_title">CA Connection gateway</string>
+    <string name="foreground_notification_text">Running – SMS relay is active</string>
     <string name="dashboard">Dashboard</string>
     <string name="send">Send</string>
     <string name="diagnostics">Diagnostics</string>

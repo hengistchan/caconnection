@@ -14,7 +14,7 @@ import kotlin.math.max
 object RemoteCommandScheduler {
     private const val TAG = "RemoteCommandScheduler"
     private const val UNIQUE_WORK = "remote_sms_command_poll"
-    const val NORMAL_POLL_DELAY_MS = 60_000L
+    const val NORMAL_POLL_DELAY_MS = 15_000L
     const val UNCONFIGURED_POLL_DELAY_MS = 15 * 60_000L
 
     fun enqueueNow(context: Context) = enqueue(context, 0L)
@@ -29,7 +29,7 @@ object RemoteCommandScheduler {
             )
             .setBackoffCriteria(
                 BackoffPolicy.EXPONENTIAL,
-                30,
+                5,
                 TimeUnit.SECONDS
             )
             .build()

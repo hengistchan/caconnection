@@ -204,6 +204,10 @@
     <string name="call_screening_unavailable">此设备不支持来电筛选角色。</string>
     <string name="notification_channel_name">短信网关通知</string>
     <string name="notification_channel_description">CA Connection 采集短信事件时显示的通知</string>
+    <string name="foreground_channel_name">网关服务</string>
+    <string name="foreground_channel_description">常驻通知，防止系统在后台冻结短信网关</string>
+    <string name="foreground_notification_title">CA Connection 网关</string>
+    <string name="foreground_notification_text">运行中 – 短信转发已就绪</string>
     <string name="dashboard">概览</string>
     <string name="send">发送</string>
     <string name="diagnostics">诊断</string>
