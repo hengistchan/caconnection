@@ -554,6 +554,36 @@ class MainActivity : AppCompatActivity() {
             },
             topMarginParams(4)
         )
+        // Direct battery-optimization exemption request — the most effective
+        // lever against HyperOS / MIUI background throttling.
+        val batteryExemptionStatus = secondaryText(
+            getString(
+                if (isIgnoringBatteryOptimizations()) {
+                    R.string.battery_exemption_granted
+                } else {
+                    R.string.battery_exemption_denied
+                }
+            ),
+            13
+        )
+        settingsContent.addView(batteryExemptionStatus, topMarginParams(6))
+        settingsContent.addView(
+            outlinedButton(getString(R.string.request_battery_exemption)).apply {
+                setOnClickListener {
+                    if (!isIgnoringBatteryOptimizations()) {
+                        startActivity(
+                            Intent(
+                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                "package:$packageName".toUri()
+                            )
+                        )
+                    } else {
+                        toast(R.string.battery_exemption_granted)
+                    }
+                }
+            },
+            topMarginParams(6)
+        )
 
         settingsContent.addView(sectionTitle(getString(R.string.notification_capture)))
         val notificationCard = card(radius = 22)
@@ -1947,6 +1977,11 @@ class MainActivity : AppCompatActivity() {
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                 .setData("package:$packageName".toUri())
         )
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
     }
 
     private fun showLanguageDialog() {

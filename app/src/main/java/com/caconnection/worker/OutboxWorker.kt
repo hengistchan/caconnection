@@ -1,6 +1,7 @@
 package com.caconnection.worker
 
 import android.content.Context
+import android.os.PowerManager
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -20,7 +21,7 @@ class OutboxWorker(
         private const val TAG = "OutboxWorker"
         private const val BATCH_SIZE = 10
         private const val MAX_EVENTS_PER_RUN = 100
-        private const val IN_PROGRESS_LEASE_MS = 10 * 60 * 1_000L
+        private const val IN_PROGRESS_LEASE_MS = 2 * 60 * 1_000L
         const val KEY_RETRY_WAKE = "retry_wake"
     }
 
@@ -31,6 +32,16 @@ class OutboxWorker(
             OutboxScheduler.enqueueNow(applicationContext)
             return Result.success()
         }
+
+        // Hold a partial wake lock so HyperOS / Doze cannot suspend the CPU
+        // mid-batch.  Without this, the drain stalls until the device wakes.
+        val powerManager = applicationContext
+            .getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "caconnection:outbox_drain"
+        )
+        wakeLock.acquire(10 * 60 * 1_000L) // hard safety timeout 10 min
 
         val dao = PocDatabase.get(applicationContext).pocDao()
         var recoveredStale = 0
@@ -88,6 +99,7 @@ class OutboxWorker(
             Log.e(TAG, "Outbox drain failed", error)
             Result.retry()
         } finally {
+            runCatching { if (wakeLock.isHeld) wakeLock.release() }
             if (OutboxUiRefreshPolicy.shouldNotify(
                     recoveredStale = recoveredStale,
                     recoveredLegacy = recoveredLegacy,

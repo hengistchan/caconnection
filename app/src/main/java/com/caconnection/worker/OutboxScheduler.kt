@@ -1,6 +1,10 @@
 package com.caconnection.worker
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.util.Log
 import androidx.core.content.edit
 import androidx.work.BackoffPolicy
@@ -8,6 +12,7 @@ import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
@@ -99,6 +104,9 @@ object OutboxScheduler {
                 10,
                 TimeUnit.SECONDS
             )
+            // Expedited work bypasses App Standby bucket throttling and
+            // Doze scheduling deferrals — critical on HyperOS.
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
 
         runCatching {
@@ -112,6 +120,35 @@ object OutboxScheduler {
             // The durable row remains pending. Application startup schedules
             // another drain attempt if WorkManager was temporarily unavailable.
             Log.e(TAG, "Unable to enqueue unique outbox work name=$uniqueName", it)
+        }
+
+        // AlarmManager backup: fires even when JobScheduler is deferred by
+        // Doze or HyperOS power management.
+        if (delayMillis > 0L) {
+            scheduleAlarmWake(context, delayMillis)
+        }
+    }
+
+    private fun scheduleAlarmWake(context: Context, delayMillis: Long) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE)
+            as? AlarmManager ?: return
+        val intent = Intent(context, OutboxAlarmReceiver::class.java)
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        val pending = PendingIntent.getBroadcast(context, 0, intent, flags)
+        val triggerAt = System.currentTimeMillis() + delayMillis
+
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pending
+                )
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pending)
+            }
+        }.onFailure {
+            Log.w(TAG, "Unable to schedule alarm wake", it)
         }
     }
 }

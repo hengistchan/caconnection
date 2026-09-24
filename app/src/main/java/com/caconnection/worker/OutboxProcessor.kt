@@ -1,5 +1,6 @@
 package com.caconnection.worker
 
+import android.util.Log
 import com.caconnection.data.poc.OutboxEventEntity
 import com.caconnection.data.poc.OutboxStatus
 import com.caconnection.transport.Transport
@@ -53,6 +54,10 @@ class OutboxProcessor(
     private val transport: Transport,
     private val now: () -> Long = System::currentTimeMillis
 ) {
+    companion object {
+        private const val TAG = "OutboxProcessor"
+    }
+
     suspend fun process(
         event: OutboxEventEntity,
         persist: (OutboxEventEntity) -> Unit
@@ -82,6 +87,7 @@ class OutboxProcessor(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
+            Log.w(TAG, "Transport exception id=${event.eventId}", error)
             TransportResult.RetryableFailure(error.message ?: error.javaClass.simpleName)
         }
 
@@ -102,6 +108,11 @@ class OutboxProcessor(
                     error = result.error,
                     retryAfterMillis = result.retryAfterMillis
                 )
+                Log.w(
+                    TAG,
+                    "Retryable send failure id=${event.eventId} type=${event.payloadType} " +
+                        "retry=${decision.retryCount} error=${result.error}"
+                )
                 event.status = decision.status.name
                 event.retryCount = decision.retryCount
                 event.nextRetryAt = decision.nextRetryAt
@@ -112,6 +123,11 @@ class OutboxProcessor(
             }
 
             is TransportResult.PermanentFailure -> {
+                Log.e(
+                    TAG,
+                    "Permanent send failure id=${event.eventId} type=${event.payloadType} " +
+                        "code=${result.errorCode} error=${result.error}"
+                )
                 markPermanentFailure(event, result.error, result.errorCode, persist)
                 OutboxStatus.FAILED
             }

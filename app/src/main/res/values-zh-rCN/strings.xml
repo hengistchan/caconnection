@@ -127,6 +127,9 @@
     <string name="grant_permissions">授予必要权限</string>
     <string name="request_sms_role">申请默认短信应用角色</string>
     <string name="open_app_settings">打开应用与电池设置</string>
+    <string name="request_battery_exemption">关闭电池优化（保活）</string>
+    <string name="battery_exemption_granted">电池优化：已关闭 ✅</string>
+    <string name="battery_exemption_denied">电池优化：已开启 ⚠️ — 锁屏后消息可能延迟</string>
     <string name="request_call_screening_role">启用来电号码识别角色</string>
     <string name="notification_capture">通知采集</string>
     <string name="notification_access_enabled">通知读取权限已启用</string>

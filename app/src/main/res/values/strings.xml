@@ -127,6 +127,9 @@
     <string name="grant_permissions">Grant required permissions</string>
     <string name="request_sms_role">Request default SMS role</string>
     <string name="open_app_settings">Open app and battery settings</string>
+    <string name="request_battery_exemption">Disable battery optimization (keep alive)</string>
+    <string name="battery_exemption_granted">Battery optimization: disabled ✅</string>
+    <string name="battery_exemption_denied">Battery optimization: enabled ⚠️ — messages may delay when screen is off</string>
     <string name="request_call_screening_role">Enable incoming caller ID role</string>
     <string name="notification_capture">Notification capture</string>
     <string name="notification_access_enabled">Notification access enabled</string>

@@ -7,6 +7,7 @@ import com.caconnection.telephony.call.CallStateMonitor
 import com.caconnection.telephony.inbound.RuntimeSmsReceiverFallback
 import com.caconnection.transport.DeviceStateReporter
 import com.caconnection.worker.DeviceStateScheduler
+import com.caconnection.worker.NetworkRecoveryMonitor
 import com.caconnection.worker.OutboxScheduler
 import com.caconnection.worker.RemoteCommandScheduler
 
@@ -21,5 +22,6 @@ object GatewayRuntime {
         RemoteCommandScheduler.enqueueNow(applicationContext)
         RuntimeSmsReceiverFallback.start(applicationContext)
         CallStateMonitor.start(applicationContext)
+        NetworkRecoveryMonitor.start(applicationContext)
     }
 }
