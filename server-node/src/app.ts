@@ -38,6 +38,7 @@ import { registerRawJsonParser } from './http/raw-json.js';
 import { DeviceRequestAuthenticator } from './services/device-request-authenticator.js';
 import { EventIngestionService } from './services/event-ingestion-service.js';
 import { NotificationDispatcher } from './services/notification-dispatcher.js';
+import { CommandStreamHub } from './services/command-stream-hub.js';
 import { DeviceLivenessMonitor } from './services/device-liveness-monitor.js';
 import {
   FeishuWebhookClient,
@@ -85,6 +86,7 @@ declare module 'fastify' {
     deviceAuthenticator: DeviceRequestAuthenticator;
     eventIngestionService: EventIngestionService;
     notificationDispatcher: NotificationDispatcher | null;
+    commandStreamHub: CommandStreamHub;
     verifyApi: (request: FastifyRequest, requiredScope: string) => string;
     verifyDeviceAccess: (clientId: string, deviceId: string) => boolean;
     getAllowedDeviceIds: (clientId: string) => Set<string> | null;
@@ -188,6 +190,7 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
     notificationRepo,
     () => notificationDispatcher?.wake(),
   );
+  const commandStreamHub = new CommandStreamHub();
 
   app.decorate('db', db);
   app.decorate('runtimeConfig', runtimeConfig);
@@ -206,6 +209,13 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
   app.decorate('deviceAuthenticator', deviceAuthenticator);
   app.decorate('eventIngestionService', eventIngestionService);
   app.decorate('notificationDispatcher', notificationDispatcher);
+  app.decorate('commandStreamHub', commandStreamHub);
+
+  // Hijacked SSE responses hold their socket open indefinitely; shutdown
+  // must end them explicitly or app.close() waits on every gateway.
+  app.addHook('onClose', async () => {
+    commandStreamHub.closeStreams();
+  });
 
   app.decorate('verifyApi', function verifyApi(request: FastifyRequest, requiredScope: string): string {
     return verifyApiClient(

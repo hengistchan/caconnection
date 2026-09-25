@@ -37,6 +37,23 @@ object OutboxHelper {
         )
     }
 
+    /**
+     * Folds post-resolution facts (SIM attribution, resolution method) into an
+     * INCOMING_SMS outbox row that was committed early by the degraded
+     * synchronous persist. Only call while the row is still PENDING/RETRY:
+     * once it is in flight or delivered, [OutboxEventEntity.payloadData] is
+     * the snapshot the server has and must not change underneath it.
+     */
+    fun applyIncomingEnrichment(
+        outbox: OutboxEventEntity,
+        incomingEvent: IncomingSmsEventEntity
+    ) {
+        outbox.subscriptionId = incomingEvent.resolvedSubscriptionId
+        outbox.slotIndex = incomingEvent.resolvedSlotIndex
+        outbox.payloadData = gson.toJson(IncomingSmsPayload.fromEntity(incomingEvent))
+        outbox.updatedAt = System.currentTimeMillis()
+    }
+
     fun createLocalSelfTest(): OutboxEventEntity {
         val now = System.currentTimeMillis()
         val eventId = UUID.randomUUID().toString()

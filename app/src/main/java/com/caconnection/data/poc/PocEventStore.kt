@@ -42,20 +42,7 @@ class PocEventStore private constructor(private val context: Context) {
     ) {
         executor.execute {
             runCatching {
-                val outboxEvent = OutboxHelper.createOutboxForIncoming(event, idempotencyKey)
-                var inserted = false
-                database.runInTransaction {
-                    // The manifest receiver and the runtime HyperOS fallback can
-                    // observe the same broadcast. The unique idempotencyKey index
-                    // is the single cross-process arbiter: only the transaction
-                    // whose outbox insert actually landed may insert the incoming
-                    // row. A pre-check alone races between :sms_receiver and main.
-                    val outboxRowId = dao.insertOutbox(outboxEvent)
-                    if (outboxRowId != -1L) {
-                        dao.insertIncoming(event)
-                        inserted = true
-                    }
-                }
+                val inserted = insertIncomingWithOutboxNow(event, idempotencyKey)
                 if (scheduleUpload) OutboxScheduler.enqueueNow(context)
                 if (inserted) notifyChanged()
                 inserted
@@ -74,6 +61,94 @@ class PocEventStore private constructor(private val context: Context) {
                     }
             }
         }
+    }
+
+    /**
+     * Synchronous durability fallback for the broadcast thread when the spool
+     * write failed. Runs the same outbox-arbitrated transaction on the calling
+     * thread so the SMS is durable before the receiver returns — a later
+     * process kill must not be able to lose it.
+     *
+     * @return true when this call inserted the rows, false when an equal
+     *   idempotency key was already durable (another receiver path won the
+     *   race — the SMS is safe either way). Throws when nothing durable was
+     *   written; the caller must treat that as unprotected loss risk.
+     */
+    fun persistIncomingWithOutboxBlocking(
+        event: IncomingSmsEventEntity,
+        idempotencyKey: String
+    ): Boolean {
+        val inserted = insertIncomingWithOutboxNow(event, idempotencyKey)
+        // Schedule the upload with the durable write, not after it: the
+        // process may die before the async Phase-2 path ever runs.
+        if (inserted) {
+            OutboxScheduler.enqueueNow(context)
+            notifyChanged()
+        }
+        return inserted
+    }
+
+    /**
+     * Degraded-path follow-up. Phase 1 already committed the durable copy
+     * while the spool was down; Phase 2 later learns SIM resolution and the
+     * provider-write outcome. Fold those into the existing rows instead of
+     * inserting again. An outbox row that already left PENDING/RETRY keeps
+     * its payload — that snapshot is on (or on its way to) the server.
+     */
+    fun enrichIncomingAfterDegradedPersist(
+        event: IncomingSmsEventEntity,
+        idempotencyKey: String,
+        onComplete: (() -> Unit)? = null,
+        onFailure: ((Throwable) -> Unit)? = null
+    ) {
+        executor.execute {
+            runCatching {
+                database.runInTransaction {
+                    dao.insertIncoming(event)
+                    val outbox = dao.findOutboxByIdempotencyKey(idempotencyKey)
+                    val unsent = outbox != null &&
+                        (outbox.status == OutboxStatus.PENDING.name ||
+                            outbox.status == OutboxStatus.RETRY.name)
+                    if (outbox != null && unsent) {
+                        OutboxHelper.applyIncomingEnrichment(outbox, event)
+                        dao.updateOutbox(outbox)
+                    }
+                }
+                notifyChanged()
+            }.onSuccess {
+                runCatching { onComplete?.invoke() }
+                    .onFailure { error ->
+                        Log.e(TAG, "Degraded incoming SMS completion callback failed", error)
+                    }
+            }.onFailure { error ->
+                Log.e(TAG, "Unable to enrich degraded incoming SMS", error)
+                runCatching { onFailure?.invoke(error) }
+                    .onFailure { callbackError ->
+                        Log.e(TAG, "Degraded incoming SMS failure callback failed", callbackError)
+                    }
+            }
+        }
+    }
+
+    private fun insertIncomingWithOutboxNow(
+        event: IncomingSmsEventEntity,
+        idempotencyKey: String
+    ): Boolean {
+        val outboxEvent = OutboxHelper.createOutboxForIncoming(event, idempotencyKey)
+        var inserted = false
+        database.runInTransaction {
+            // The manifest receiver and the runtime HyperOS fallback can
+            // observe the same broadcast. The unique idempotencyKey index
+            // is the single cross-process arbiter: only the transaction
+            // whose outbox insert actually landed may insert the incoming
+            // row. A pre-check alone races between :sms_receiver and main.
+            val outboxRowId = dao.insertOutbox(outboxEvent)
+            if (outboxRowId != -1L) {
+                dao.insertIncoming(event)
+                inserted = true
+            }
+        }
+        return inserted
     }
 
     fun enqueueOutboxSelfTest(onComplete: (() -> Unit)? = null) {

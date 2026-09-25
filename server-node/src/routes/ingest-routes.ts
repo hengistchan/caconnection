@@ -104,4 +104,84 @@ export async function ingestRoutes(app: FastifyInstance) {
       rethrowOperationalError(error);
     }
   });
+
+  /**
+   * POST /v1/device-commands/stream — server-sent events command nudge.
+   *
+   * Advisory only (ADR-003): frames say "commands are queued", never what
+   * they are. The device reacts by claiming over the normal claim endpoint,
+   * which stays the only place commands are marked CLAIMED and their content
+   * leaves the server. POST with a signed body reuses the device
+   * authenticator unchanged — a GET stream would need a second signing scheme.
+   */
+  app.post('/v1/device-commands/stream', async (request, reply) => {
+    const auth = app.deviceAuthenticator.authenticate(request, 'device-auth-ip', 'device');
+    const body = request.body;
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      return reply.status(400).send({ error: 'invalid request' });
+    }
+    const allowedKeys = new Set(['stream']);
+    if (Object.keys(body).some(key => !allowedKeys.has(key))) {
+      return reply.status(400).send({ error: 'invalid request' });
+    }
+    if ((body as Record<string, unknown>).stream !== 'commands') {
+      return reply.status(400).send({ error: 'invalid request' });
+    }
+
+    app.deviceRepo.touchDevice(auth.deviceId, auth.nowMs);
+
+    reply.hijack();
+    const headers: Record<string, string> = {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache, no-transform',
+      connection: 'keep-alive',
+      // Reverse proxies must not batch these frames behind a buffer.
+      'x-accel-buffering': 'no',
+    };
+    reply.raw.writeHead(200, headers);
+
+    let closed = false;
+    const write = (frame: string) => {
+      if (closed || reply.raw.writableEnded) return;
+      reply.raw.write(frame);
+    };
+
+    // Client reconnect pacing hint; the client also runs its own backoff.
+    write('retry: 15000\n\n');
+
+    const unsubscribe = app.commandStreamHub.subscribe(auth.deviceId, event => {
+      write(`event: command_queued\ndata: ${JSON.stringify(event)}\n\n`);
+    });
+
+    // Connect-time snapshot: work queued while this stream was down (or
+    // before it existed) must not wait for the reconcile poll.
+    const pending = app.outboundRepo.countQueued(auth.deviceId, auth.nowMs);
+    if (pending > 0) {
+      write(
+        `event: command_queued\ndata: ${JSON.stringify({
+          deviceId: auth.deviceId,
+          queuedAt: auth.nowMs,
+          pending,
+        })}\n\n`,
+      );
+    }
+
+    // Heartbeat keeps intermediaries from closing an idle stream and lets
+    // the client detect a half-open connection.
+    const heartbeat = setInterval(() => write(': ping\n\n'), 25_000);
+
+    const cleanup = () => {
+      if (closed) return;
+      closed = true;
+      clearInterval(heartbeat);
+      unsubscribe();
+      detachStream();
+      if (!reply.raw.writableEnded) reply.raw.end();
+    };
+    const detachStream = app.commandStreamHub.attachStream(cleanup);
+    // Only the response socket is a safe teardown signal here: on a POST,
+    // request.raw emits 'close' as soon as the request body is consumed —
+    // listening to it would end the stream the moment it opens.
+    reply.raw.on('close', cleanup);
+  });
 }

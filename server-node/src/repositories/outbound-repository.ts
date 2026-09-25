@@ -170,6 +170,22 @@ export class OutboundRepository {
   }
 
   /**
+   * Count commands a device could claim right now. Used by the command
+   * stream's connect-time snapshot: a gateway that reconnects after being
+   * offline must hear about work queued while the stream was down, without
+   * waiting for its next reconcile poll.
+   */
+  countQueued(deviceId: string, nowMs: number): number {
+    const row = queryOne<{ count: number }>(
+      this.db,
+      "SELECT COUNT(*) AS count FROM outbound_commands WHERE device_id = ? AND status = 'QUEUED' AND expires_at > ?",
+      deviceId,
+      nowMs,
+    );
+    return row?.count ?? 0;
+  }
+
+  /**
    * Update outbound command status from device.
    */
   updateStatus(deviceId: string, payload: Record<string, unknown>, nowMs: number): boolean {

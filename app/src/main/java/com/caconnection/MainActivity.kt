@@ -45,6 +45,7 @@ import com.caconnection.data.poc.SubscriptionSnapshotEntity
 import com.caconnection.notifications.NotificationAccess
 import com.caconnection.notifications.NotificationAllowlist
 import com.caconnection.notifications.NotificationHelper
+import com.caconnection.notifications.GatewayForegroundService
 import com.caconnection.telephony.call.CallScreeningRoleController
 import com.caconnection.telephony.call.CallStateMonitor
 import com.caconnection.telephony.diagnostics.TelephonyDiagnostics
@@ -52,6 +53,9 @@ import com.caconnection.telephony.smsrole.SmsRoleController
 import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.telephony.subscription.SubscriptionSnapshot
 import com.caconnection.transport.GatewayTransportConfig
+import com.caconnection.transport.CommandStreamState
+import com.caconnection.transport.ConnectionHealth
+import com.caconnection.transport.ConnectionStateStore
 import com.caconnection.transport.DeviceStateReporter
 import com.caconnection.transport.ConnectionDiagnosticReport
 import com.caconnection.transport.ConnectionDiagnostics
@@ -113,6 +117,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var simList: LinearLayout
     private lateinit var homeReadinessList: LinearLayout
     private lateinit var homeActivityList: LinearLayout
+    private lateinit var healthList: LinearLayout
 
     private lateinit var incomingMetric: TextView
     private lateinit var outgoingMetric: TextView
@@ -372,6 +377,14 @@ class MainActivity : AppCompatActivity() {
         homeContent.addView(sectionTitle(getString(R.string.sim_cards)))
         simList = vertical()
         homeContent.addView(simList)
+
+        // Layered health (ADR-003): passive capability stays correct when the
+        // process dies; active capability only affects latency. A single
+        // "gateway running" flag cannot tell those apart when HyperOS kills
+        // the main process.
+        homeContent.addView(sectionTitle(getString(R.string.gateway_health)))
+        healthList = vertical(paddingVertical = 6)
+        homeContent.addView(card().apply { addView(healthList) })
 
         homeContent.addView(
             sectionHeader(getString(R.string.system_readiness), getString(R.string.review)) {
@@ -927,7 +940,247 @@ class MainActivity : AppCompatActivity() {
                 if (index != recent.lastIndex) homeActivityList.addView(divider())
             }
         }
+
+        renderGatewayHealth()
     }
+
+    private data class HealthRow(
+        val title: String,
+        val detail: String,
+        val status: String,
+        val tone: Tone,
+        val onClick: (() -> Unit)? = null
+    )
+
+    private data class HealthGroup(val label: String, val rows: List<HealthRow>)
+
+    /**
+     * Layered health per ADR-003. Passive rows answer "will an SMS survive
+     * HyperOS killing this process"; active rows answer "how fast does the
+     * device react while it is alive". Never collapse them into one green
+     * "running" flag — after a process kill the difference is the whole
+     * diagnosis.
+     */
+    private fun renderGatewayHealth() {
+        healthList.removeAllViews()
+        gatewayHealthGroups().forEach { group ->
+            healthList.addView(healthGroupLabel(group.label))
+            group.rows.forEachIndexed { index, row ->
+                healthList.addView(healthRow(row))
+                if (index != group.rows.lastIndex) healthList.addView(divider())
+            }
+        }
+    }
+
+    private fun healthGroupLabel(text: String) = secondaryText(text, 12).apply {
+        setPadding(dp(16), dp(12), dp(16), dp(2))
+    }
+
+    private fun healthRow(row: HealthRow): View {
+        val container = horizontal(
+            gravity = Gravity.CENTER_VERTICAL,
+            paddingHorizontal = 16,
+            paddingVertical = 11
+        )
+        val texts = vertical()
+        texts.addView(primaryText(row.title, 14, true))
+        if (row.detail.isNotBlank()) {
+            texts.addView(secondaryText(row.detail, 12), topMarginParams(2))
+        }
+        container.addView(texts, weightedParams())
+        container.addView(statusPill(row.status, row.tone))
+        row.onClick?.let { action -> container.setOnClickListener { action() } }
+        return container
+    }
+
+    private fun gatewayHealthGroups(): List<HealthGroup> {
+        val subscriptions = visibleSubscriptions()
+        val transport = GatewayTransportConfig.load(this)
+        val transportConfigured = transport.enabled && transport.configured
+        val connection = ConnectionStateStore.snapshot(this)
+        val callSnapshot = CallStateMonitor.snapshot()
+        val smsGranted = isGranted(Manifest.permission.RECEIVE_SMS)
+        val roleHeld = SmsRoleController(this).isRoleHeld()
+
+        val sms = when {
+            !smsGranted -> HealthRow(
+                getString(R.string.health_sms_receiving),
+                getString(R.string.health_sms_missing_detail),
+                getString(R.string.health_status_missing),
+                Tone.ERROR
+            )
+            roleHeld -> HealthRow(
+                getString(R.string.health_sms_receiving),
+                getString(R.string.health_sms_default_detail),
+                getString(R.string.status_ready),
+                Tone.SUCCESS
+            )
+            else -> HealthRow(
+                getString(R.string.health_sms_receiving),
+                getString(R.string.health_sms_observer_detail),
+                getString(R.string.health_status_observer),
+                Tone.SUCCESS
+            )
+        }
+
+        val callReady = subscriptions.isNotEmpty() &&
+            callSnapshot.registeredSubscriptions.size == subscriptions.size
+        val call = HealthRow(
+            getString(R.string.health_call_monitoring),
+            getString(
+                R.string.health_call_detail,
+                callSnapshot.registeredSubscriptions.size,
+                subscriptions.size
+            ),
+            getString(if (callReady) R.string.status_ready else R.string.status_attention),
+            if (callReady) Tone.SUCCESS else Tone.WARNING
+        )
+
+        val notificationOn = NotificationAccess.isEnabled(this)
+        val notification = HealthRow(
+            getString(R.string.health_notification_relay),
+            getString(
+                if (notificationOn) R.string.health_notification_on_detail
+                else R.string.health_notification_off_detail
+            ),
+            getString(if (notificationOn) R.string.status_enabled else R.string.status_disabled),
+            if (notificationOn) Tone.SUCCESS else Tone.WARNING
+        )
+
+        val serviceRunning = GatewayForegroundService.isRunning
+        val service = HealthRow(
+            getString(R.string.health_background_service),
+            getString(
+                if (serviceRunning) R.string.health_service_on_detail
+                else R.string.health_service_off_detail
+            ),
+            getString(
+                if (serviceRunning) R.string.health_status_running
+                else R.string.health_status_stopped
+            ),
+            if (serviceRunning) Tone.SUCCESS else Tone.WARNING
+        )
+
+        val server = when (connection.health) {
+            ConnectionHealth.CONNECTED -> HealthRow(
+                getString(R.string.health_server_connection),
+                getString(
+                    R.string.health_connection_detail,
+                    timeOrNever(connection.lastSuccessAt)
+                ),
+                getString(R.string.health_status_connected),
+                Tone.SUCCESS
+            )
+            ConnectionHealth.DEGRADED -> HealthRow(
+                getString(R.string.health_server_connection),
+                getString(
+                    R.string.health_connection_degraded_detail,
+                    connection.consecutiveFailures
+                ),
+                getString(R.string.health_status_degraded),
+                Tone.WARNING
+            )
+            ConnectionHealth.DISCONNECTED -> HealthRow(
+                getString(R.string.health_server_connection),
+                getString(R.string.health_connection_down_detail),
+                getString(R.string.health_status_disconnected),
+                Tone.ERROR
+            )
+            ConnectionHealth.UNKNOWN -> HealthRow(
+                getString(R.string.health_server_connection),
+                getString(
+                    R.string.health_connection_detail,
+                    timeOrNever(connection.lastSuccessAt)
+                ),
+                getString(R.string.health_status_unknown),
+                Tone.NEUTRAL
+            )
+        }
+
+        val commands = when {
+            !transportConfigured -> HealthRow(
+                getString(R.string.health_remote_commands),
+                getString(R.string.health_commands_off_detail),
+                getString(R.string.health_status_unknown),
+                Tone.NEUTRAL
+            )
+            CommandStreamState.connected -> HealthRow(
+                getString(R.string.health_remote_commands),
+                getString(R.string.health_commands_online_detail),
+                getString(R.string.health_status_online),
+                Tone.SUCCESS
+            )
+            else -> HealthRow(
+                getString(R.string.health_remote_commands),
+                getString(R.string.health_commands_polling_detail),
+                getString(R.string.health_status_polling),
+                Tone.WARNING
+            )
+        }
+
+        val unrestricted = isIgnoringBatteryOptimizations()
+        val battery = HealthRow(
+            getString(R.string.health_battery),
+            getString(
+                if (unrestricted) R.string.health_battery_ok_detail
+                else R.string.health_battery_restricted_detail
+            ),
+            getString(
+                if (unrestricted) R.string.health_status_unrestricted
+                else R.string.health_status_restricted
+            ),
+            if (unrestricted) Tone.SUCCESS else Tone.WARNING
+        )
+
+        // Vendor auto-start (HyperOS/MIUI) has no public query API — say so
+        // instead of inventing a green checkmark, and link to the one screen
+        // where the user can actually see it.
+        val autoStart = HealthRow(
+            getString(R.string.health_auto_start),
+            getString(R.string.health_autostart_detail),
+            getString(R.string.health_status_unknown),
+            Tone.NEUTRAL,
+            onClick = { openBatterySettings() }
+        )
+
+        fun timestampRow(title: String, time: Long) = HealthRow(
+            title,
+            "",
+            timeOrNever(time),
+            Tone.NEUTRAL
+        )
+
+        val lastSmsAt = incomingEvents.maxOfOrNull { it.receivedAt } ?: 0L
+        val lastHeartbeatAt = outboxEvents
+            .filter { it.payloadType == "DEVICE_STATE" }
+            .maxOfOrNull { it.createdAt } ?: 0L
+
+        return listOf(
+            HealthGroup(
+                getString(R.string.health_group_passive),
+                listOf(sms, call, notification)
+            ),
+            HealthGroup(
+                getString(R.string.health_group_active),
+                listOf(service, server, commands)
+            ),
+            HealthGroup(
+                getString(R.string.health_group_environment),
+                listOf(battery, autoStart)
+            ),
+            HealthGroup(
+                getString(R.string.health_group_recent),
+                listOf(
+                    timestampRow(getString(R.string.health_last_sms), lastSmsAt),
+                    timestampRow(getString(R.string.health_last_upload), connection.lastSuccessAt),
+                    timestampRow(getString(R.string.health_last_heartbeat), lastHeartbeatAt)
+                )
+            )
+        )
+    }
+
+    private fun timeOrNever(time: Long): String =
+        if (time > 0L) relativeTime(time) else getString(R.string.not_available)
 
     private fun renderMessages() {
         incomingMetric.text = formatCount(incomingEvents.size)
