@@ -41,14 +41,24 @@ class RemoteCommandWorker(
                 // rejection to the server and execute the survivors.
                 result.rejected.forEach(::reportRejected)
                 result.commands.forEach(::execute)
-                RemoteCommandScheduler.enqueue(
-                    applicationContext,
-                    RemoteCommandScheduler.NORMAL_POLL_DELAY_MS
-                )
+                // A stream nudge is one-shot: extending the poll chain from
+                // it would grow that chain with every command. The chain is
+                // re-cadenced only by its own runs (ADR-003).
+                if (!isNudgeRun()) {
+                    RemoteCommandScheduler.enqueue(
+                        applicationContext,
+                        RemoteCommandScheduler.nextPollDelay()
+                    )
+                }
                 Result.success()
             }
 
             is RemoteCommandClaimResult.RetryableFailure -> {
+                if (isNudgeRun()) {
+                    // Leave retry pacing to WorkManager; the poll chain
+                    // remains the fallback either way.
+                    return Result.retry()
+                }
                 result.retryAfterMillis?.let {
                     RemoteCommandScheduler.enqueue(applicationContext, it)
                     return Result.success()
@@ -57,14 +67,19 @@ class RemoteCommandWorker(
             }
 
             is RemoteCommandClaimResult.PermanentFailure -> {
-                RemoteCommandScheduler.enqueue(
-                    applicationContext,
-                    RemoteCommandScheduler.UNCONFIGURED_POLL_DELAY_MS
-                )
+                if (!isNudgeRun()) {
+                    RemoteCommandScheduler.enqueue(
+                        applicationContext,
+                        RemoteCommandScheduler.UNCONFIGURED_POLL_DELAY_MS
+                    )
+                }
                 Result.success()
             }
         }
     }
+
+    private fun isNudgeRun(): Boolean =
+        inputData.getBoolean(RemoteCommandScheduler.KEY_NUDGE, false)
 
     private fun execute(command: RemoteSmsCommand) {
         val subscriptions = SubscriptionRepository(applicationContext)

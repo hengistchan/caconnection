@@ -88,6 +88,16 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
         expiresInSeconds,
       );
 
+      // Latency nudge only (ADR-003): a connected gateway claims within
+      // milliseconds instead of waiting for its reconcile poll. An
+      // idempotent retry may nudge again — the extra claim is empty and
+      // harmless, and command content still travels only via claim.
+      app.commandStreamHub.notifyQueued({
+        deviceId,
+        queuedAt: nowMs,
+        pending: app.outboundRepo.countQueued(deviceId, nowMs),
+      });
+
       app.auditRepo.record(clientId, 'OUTBOUND_SMS_QUEUE', deviceId, 'SUCCESS', {
         slotIndex,
         expiresInSeconds,

@@ -14,9 +14,11 @@ import androidx.core.app.ServiceCompat
 import com.caconnection.MainActivity
 import com.caconnection.R
 import com.caconnection.telephony.inbound.SmsSpoolRecovery
+import com.caconnection.transport.CommandStreamClient
 import com.caconnection.transport.ConnectionHealth
 import com.caconnection.transport.ConnectionStateStore
 import com.caconnection.transport.DeviceStateReporter
+import com.caconnection.transport.GatewayTransportConfig
 import com.caconnection.worker.OutboxScheduler
 import com.caconnection.worker.RemoteCommandScheduler
 import java.text.DateFormat
@@ -29,6 +31,17 @@ class GatewayForegroundService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_REFRESH = "com.caconnection.action.REFRESH_GATEWAY_STATUS"
         private const val ACTION_RECOVER = "com.caconnection.action.RECOVER_GATEWAY"
+
+        @Volatile
+        private var runningSince = 0L
+
+        /**
+         * Whether the availability layer's foreground service is alive right
+         * now. The health panel shows this separately on purpose (ADR-003):
+         * a dead service degrades latency and visibility, never data safety.
+         */
+        val isRunning: Boolean
+            get() = runningSince > 0L
 
         fun start(context: Context) {
             start(context, null)
@@ -71,8 +84,10 @@ class GatewayForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        runningSince = System.currentTimeMillis()
         NotificationHelper.createForegroundChannel(this)
         startAsForeground()
+        ensureCommandStream()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -81,6 +96,9 @@ class GatewayForegroundService : Service() {
         // Application.onCreate / GatewayRecoveryReceiver — calling reconcile
         // here would re-enter startForegroundService in a loop.
         startAsForeground()
+        // Re-checked on every start so a transport settings change picks up
+        // a new stream without waiting for a process restart.
+        ensureCommandStream()
         if (intent?.action == ACTION_RECOVER) {
             SmsSpoolRecovery.recover(this)
             DeviceStateReporter.enqueue(this)
@@ -88,6 +106,44 @@ class GatewayForegroundService : Service() {
             RemoteCommandScheduler.enqueueNow(this)
         }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        runningSince = 0L
+        CommandStreamClient.stop()
+        super.onDestroy()
+    }
+
+    /**
+     * The command stream is pure availability (ADR-003): while it is up it
+     * carries command latency and polling relaxes to a reconcile cadence;
+     * when it drops, polling snaps back to the fast fallback immediately.
+     */
+    private fun ensureCommandStream() {
+        val settings = GatewayTransportConfig.load(this)
+        if (!settings.enabled || !settings.configured) {
+            CommandStreamClient.stop()
+            return
+        }
+        CommandStreamClient.start(
+            settings = settings,
+            onConnectionChanged = { connected ->
+                RemoteCommandScheduler.reschedulePolling(
+                    this,
+                    if (connected) {
+                        RemoteCommandScheduler.RECONCILE_POLL_DELAY_MS
+                    } else {
+                        RemoteCommandScheduler.NORMAL_POLL_DELAY_MS
+                    }
+                )
+                startAsForeground()
+            },
+            onCommandQueued = {
+                // The stream only says work exists; claim/lease stays the
+                // single place commands are taken and content leaves.
+                RemoteCommandScheduler.nudge(this)
+            }
+        )
     }
 
     private fun startAsForeground() {
