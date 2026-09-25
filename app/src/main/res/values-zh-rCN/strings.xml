@@ -211,6 +211,15 @@
     <string name="foreground_channel_description">常驻通知，防止系统在后台冻结短信网关</string>
     <string name="foreground_notification_title">CA Connection 网关</string>
     <string name="foreground_notification_text">运行中 – 短信转发已就绪</string>
+    <string name="foreground_notification_connected">已连接 · 最近成功 %1$s</string>
+    <string name="foreground_notification_degraded">连接不稳定 · 已连续失败 %1$d 次</string>
+    <string name="foreground_notification_disconnected">连接已断开 · 点击诊断或重连</string>
+    <string name="connection_alert_channel_name">网关连接告警</string>
+    <string name="connection_alert_channel_description">手机无法连接 CA Connection 网关时发出告警</string>
+    <string name="connection_alert_title">CA Connection 已断开</string>
+    <string name="connection_alert_text">手机已连续多次无法连接网关。短信仍保存在本地队列中；点击可诊断或重连。</string>
+    <string name="connection_alert_reconnect">立即重连</string>
+    <string name="connection_alert_diagnostics">打开诊断</string>
     <string name="dashboard">概览</string>
     <string name="send">发送</string>
     <string name="diagnostics">诊断</string>

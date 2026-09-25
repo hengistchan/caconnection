@@ -15,7 +15,9 @@ export type NotificationChannelEventType =
   | 'call.ringing'
   | 'call.missed'
   | 'call.ended'
-  | 'notification.received';
+  | 'notification.received'
+  | 'device.offline'
+  | 'device.recovered';
 
 export interface NotificationChannelState {
   id: string;
@@ -43,7 +45,7 @@ export interface NotificationDelivery {
   id: number;
   channelId?: string;
   eventId: number | null;
-  kind: 'EVENT' | 'TEST';
+  kind: 'EVENT' | 'TEST' | 'DEVICE_ALERT';
   notificationEventType?: NotificationChannelEventType | 'channel.test' | null;
   contentMode: NotificationContentMode;
   attemptCount: number;
@@ -53,6 +55,7 @@ export interface NotificationDelivery {
   receivedAt: number | null;
   slotIndex: number | null;
   envelopeJson: string | null;
+  alertPayload: Record<string, unknown> | null;
 }
 
 interface ChannelRow {
@@ -76,7 +79,7 @@ interface DeliveryRow {
   id: number;
   channel: string;
   event_id: number | null;
-  kind: 'EVENT' | 'TEST';
+  kind: 'EVENT' | 'TEST' | 'DEVICE_ALERT';
   notification_event_type: NotificationChannelEventType | 'channel.test' | null;
   content_mode: NotificationContentMode;
   attempt_count: number;
@@ -86,6 +89,7 @@ interface DeliveryRow {
   received_at: number | null;
   slot_index: number | null;
   envelope_json: string | null;
+  alert_payload_json: string | null;
 }
 
 const DEFAULT_EVENTS: NotificationChannelEventType[] = [
@@ -176,6 +180,21 @@ export class NotificationRepository {
       .map(row => ({ id: row.channel_id, contentMode: row.content_mode }));
   }
 
+  getOperationalChannels(): ActiveNotificationChannel[] {
+    return (this.db.prepare(`
+      SELECT channel_id, content_mode
+      FROM notification_channels
+      WHERE enabled = 1 AND configured = 1
+      ORDER BY channel_id
+    `).all() as Array<{
+      channel_id: string;
+      content_mode: NotificationContentMode;
+    }>).map(row => ({
+      id: row.channel_id,
+      contentMode: row.content_mode,
+    }));
+  }
+
   getChannels(): NotificationChannelState[] {
     const rows = this.db.prepare(`
       SELECT c.*,
@@ -245,7 +264,7 @@ export class NotificationRepository {
         this.db.prepare(`
           UPDATE notification_outbox
           SET status = 'PAUSED'
-          WHERE channel = ? AND status IN ('PENDING', 'RETRY') AND kind = 'EVENT'
+          WHERE channel = ? AND status IN ('PENDING', 'RETRY') AND kind != 'TEST'
         `).run(channelId);
       }
       return true;
@@ -346,6 +365,31 @@ export class NotificationRepository {
     return Number(result.lastInsertRowid);
   }
 
+  enqueueDeviceAlert(
+    channels: ActiveNotificationChannel[],
+    eventType: 'device.offline' | 'device.recovered',
+    payload: Record<string, unknown>,
+    nowMs: number,
+  ): void {
+    const insert = this.db.prepare(`
+      INSERT INTO notification_outbox(
+        channel, event_id, kind, notification_event_type, content_mode, status, attempt_count,
+        next_attempt_at, lease_started_at, created_at, sent_at, last_error, alert_payload_json
+      ) VALUES (?, NULL, 'DEVICE_ALERT', ?, ?, 'PENDING', 0, ?, NULL, ?, NULL, NULL, ?)
+    `);
+    const serialized = JSON.stringify(payload);
+    for (const channel of channels) {
+      insert.run(
+        channel.id,
+        eventType,
+        channel.contentMode,
+        nowMs,
+        nowMs,
+        serialized,
+      );
+    }
+  }
+
   claimDue(nowMs: number): NotificationDelivery | null {
     return transaction(this.db, () => {
       this.db.prepare(`
@@ -376,7 +420,7 @@ export class NotificationRepository {
         SELECT n.id, n.channel, n.event_id, n.kind, n.notification_event_type,
                n.content_mode, n.attempt_count,
                n.created_at, e.device_id, e.event_type, e.received_at,
-               e.slot_index, e.envelope_json
+               e.slot_index, e.envelope_json, n.alert_payload_json
         FROM notification_outbox n
         LEFT JOIN events e ON e.id = n.event_id
         WHERE n.id = ?
@@ -396,6 +440,7 @@ export class NotificationRepository {
         receivedAt: row.received_at,
         slotIndex: row.slot_index,
         envelopeJson: row.envelope_json,
+        alertPayload: parseAlertPayload(row.alert_payload_json),
       };
     });
   }
@@ -459,6 +504,18 @@ export class NotificationRepository {
       ) VALUES ('feishu', 'Feishu', 'FEISHU', 0, 'REDACTED', ?, 1, 0, ?)
     `).run(JSON.stringify(DEFAULT_EVENTS), nowMs);
     this.updateChannel('feishu', enabled, contentMode, DEFAULT_EVENTS, nowMs);
+  }
+}
+
+function parseAlertPayload(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
   }
 }
 

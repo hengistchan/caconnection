@@ -117,7 +117,12 @@ object GatewayTransportFactory {
     fun create(context: Context): Transport {
         val settings = GatewayTransportConfig.load(context)
         return if (settings.enabled && settings.configured) {
-            AuthenticatedHttpTransport(settings)
+            AuthenticatedHttpTransport(
+                settings = settings,
+                resultObserver = { result ->
+                    ConnectionStateStore.record(context.applicationContext, result)
+                }
+            )
         } else {
             MockTransport()
         }

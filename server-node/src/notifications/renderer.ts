@@ -19,6 +19,30 @@ export function renderFeishuNotification(
       '结果：飞书 Webhook 配置工作正常',
     ].join('\n');
   }
+  if (delivery.kind === 'DEVICE_ALERT') {
+    const payload = delivery.alertPayload;
+    if (!payload) throw new Error('notification event is unavailable');
+    const alertType = stringValue(payload.alertType);
+    const deviceId = stringValue(payload.deviceId) || '未知';
+    const detectedAt = numberValue(payload.detectedAt) || delivery.createdAt;
+    const lastSeenAt = numberValue(payload.lastSeenAt);
+    const outageDurationMs = numberValue(payload.outageDurationMs);
+    if (alertType === 'RECOVERED') {
+      return [
+        'CAConnection 网关已恢复',
+        `设备：${deviceId}`,
+        `恢复时间：${formatTime(detectedAt)}`,
+        `离线时长：${formatDuration(outageDurationMs)}`,
+      ].join('\n');
+    }
+    return [
+      alertType === 'CRITICAL' ? 'CAConnection 网关严重失联' : 'CAConnection 网关失联',
+      `设备：${deviceId}`,
+      `最后在线：${lastSeenAt > 0 ? formatTime(lastSeenAt) : '未知'}`,
+      `已失联：${formatDuration(outageDurationMs)}`,
+      '服务端仍在运行，请检查手机网络、应用进程或 HyperOS 后台限制。',
+    ].join('\n');
+  }
 
   const payload = delivery.payload;
   if (!payload || !delivery.deviceId || !delivery.eventType || delivery.receivedAt === null) {
@@ -123,6 +147,21 @@ function maskIdentifier(value: string | null): string {
     return `${value.slice(0, 1)}${'*'.repeat(value.length - 2)}${value.slice(-1)}`;
   }
   return `${value.slice(0, 3)}${'*'.repeat(value.length - 7)}${value.slice(-4)}`;
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function formatDuration(durationMs: number): string {
+  const totalMinutes = Math.max(0, Math.floor(durationMs / 60_000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours} 小时 ${minutes} 分钟` : `${minutes} 分钟`;
 }
 
 const FEISHU_TIME_ZONE_OFFSET_MS = 8 * 3_600_000;

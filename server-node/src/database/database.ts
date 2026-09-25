@@ -239,12 +239,22 @@ export function initializeDatabase(db: DatabaseSync): void {
       created_at INTEGER NOT NULL,
       sent_at INTEGER,
       last_error TEXT,
+      alert_payload_json TEXT,
       UNIQUE(channel, event_id),
       FOREIGN KEY(event_id) REFERENCES events(id) ON DELETE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS index_notification_outbox_due
       ON notification_outbox(status, next_attempt_at, id);
+
+    CREATE TABLE IF NOT EXISTS device_liveness_state (
+      device_id TEXT PRIMARY KEY,
+      alert_level INTEGER NOT NULL,
+      offline_since INTEGER,
+      last_alert_at INTEGER,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY(device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+    );
   `);
 
   // Handle schema migrations for columns added after initial release
@@ -288,5 +298,8 @@ export function initializeDatabase(db: DatabaseSync): void {
   );
   if (!notificationOutboxColumns.has('notification_event_type')) {
     db.exec('ALTER TABLE notification_outbox ADD COLUMN notification_event_type TEXT');
+  }
+  if (!notificationOutboxColumns.has('alert_payload_json')) {
+    db.exec('ALTER TABLE notification_outbox ADD COLUMN alert_payload_json TEXT');
   }
 }

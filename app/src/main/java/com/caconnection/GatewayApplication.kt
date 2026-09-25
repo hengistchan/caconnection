@@ -5,6 +5,8 @@ import android.app.Application
 class GatewayApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-        GatewayRuntime.reconcile(this)
+        if (ProcessIdentity.isMainProcess(this)) {
+            GatewayRuntime.reconcile(this)
+        }
     }
 }

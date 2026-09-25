@@ -17,6 +17,8 @@ import com.caconnection.data.poc.IncomingSmsEventEntity
 
 object NotificationHelper {
     private const val CHANNEL_ID = "incoming_sms_poc"
+    private const val CONNECTION_ALERT_CHANNEL_ID = "gateway_connection_alert"
+    private const val CONNECTION_ALERT_NOTIFICATION_ID = 1002
     const val FOREGROUND_CHANNEL_ID = "gateway_foreground"
 
     fun createForegroundChannel(context: Context) {
@@ -46,14 +48,64 @@ object NotificationHelper {
         )
     }
 
+    fun createConnectionAlertChannel(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CONNECTION_ALERT_CHANNEL_ID,
+                context.getString(R.string.connection_alert_channel_name),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = context.getString(R.string.connection_alert_channel_description)
+            }
+        )
+    }
+
+    fun notifyConnectionAlert(
+        context: Context,
+        reconnectIntent: PendingIntent,
+        openDiagnosticsIntent: PendingIntent
+    ) {
+        createConnectionAlertChannel(context)
+        if (!canPostNotifications(context)) return
+        val notification = NotificationCompat.Builder(context, CONNECTION_ALERT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.connection_alert_title))
+            .setContentText(context.getString(R.string.connection_alert_text))
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText(context.getString(R.string.connection_alert_text))
+            )
+            .setContentIntent(openDiagnosticsIntent)
+            .addAction(
+                0,
+                context.getString(R.string.connection_alert_reconnect),
+                reconnectIntent
+            )
+            .addAction(
+                0,
+                context.getString(R.string.connection_alert_diagnostics),
+                openDiagnosticsIntent
+            )
+            .setAutoCancel(false)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        try {
+            NotificationManagerCompat.from(context)
+                .notify(CONNECTION_ALERT_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // Permission can be revoked between the explicit check and notify().
+        }
+    }
+
+    fun cancelConnectionAlert(context: Context) {
+        NotificationManagerCompat.from(context).cancel(CONNECTION_ALERT_NOTIFICATION_ID)
+    }
+
     fun notifyIncoming(context: Context, event: IncomingSmsEventEntity) {
         createChannel(context)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
+        if (!canPostNotifications(context)) return
 
         val openIntent = PendingIntent.getActivity(
             context,
@@ -74,6 +126,18 @@ object NotificationHelper {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .build()
 
-        NotificationManagerCompat.from(context).notify(event.eventId.hashCode(), notification)
+        try {
+            NotificationManagerCompat.from(context)
+                .notify(event.eventId.hashCode(), notification)
+        } catch (_: SecurityException) {
+            // Permission can be revoked between the explicit check and notify().
+        }
     }
+
+    private fun canPostNotifications(context: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
 }

@@ -2,6 +2,7 @@ package com.caconnection.telephony.inbound
 
 import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
 import android.provider.Telephony
 import com.caconnection.data.poc.IncomingSmsEventEntity
 import com.caconnection.data.poc.OutgoingSmsEventEntity
@@ -15,6 +16,9 @@ data class ProviderWriteResult(
 object DefaultSmsProviderWriter {
     fun saveIncoming(context: Context, event: IncomingSmsEventEntity): ProviderWriteResult {
         return runCatching {
+            findExistingIncoming(context, event)?.let {
+                return ProviderWriteResult(status = "SAVED", uri = it.toString())
+            }
             val values = ContentValues().apply {
                 put(Telephony.TextBasedSmsColumns.ADDRESS, event.originatingAddress)
                 put(Telephony.TextBasedSmsColumns.BODY, event.body)
@@ -36,6 +40,36 @@ object DefaultSmsProviderWriter {
             )
         }
     }
+
+    private fun findExistingIncoming(
+        context: Context,
+        event: IncomingSmsEventEntity
+    ): Uri? = runCatching {
+        val projection = arrayOf(Telephony.Sms._ID)
+        val selection = buildString {
+            append("${Telephony.TextBasedSmsColumns.DATE} = ?")
+            append(" AND ${Telephony.TextBasedSmsColumns.ADDRESS} = ?")
+            append(" AND ${Telephony.TextBasedSmsColumns.BODY} = ?")
+        }
+        val arguments = arrayOf(
+            event.receivedAt.toString(),
+            event.originatingAddress.orEmpty(),
+            event.body.orEmpty()
+        )
+        context.contentResolver.query(
+            Telephony.Sms.Inbox.CONTENT_URI,
+            projection,
+            selection,
+            arguments,
+            null
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            Uri.withAppendedPath(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                cursor.getLong(0).toString()
+            )
+        }
+    }.getOrNull()
 
     fun saveOutgoing(context: Context, event: OutgoingSmsEventEntity): ProviderWriteResult {
         return runCatching {

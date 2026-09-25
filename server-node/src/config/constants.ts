@@ -1,4 +1,4 @@
-export const SERVICE_VERSION = '0.7.0';
+export const SERVICE_VERSION = '0.8.0';
 
 // API and protocol versions — must remain identical to Python
 export const API_VERSION = 1;

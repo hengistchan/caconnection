@@ -7,8 +7,10 @@ import android.util.Log
 import com.caconnection.data.poc.IncomingSmsEventEntity
 import com.caconnection.data.poc.PocEventStore
 import com.caconnection.notifications.NotificationHelper
+import com.caconnection.notifications.GatewayForegroundService
 import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.transport.DeviceStateReporter
+import com.caconnection.worker.OutboxScheduler
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -117,6 +119,7 @@ object IncomingSmsProcessor {
                     null,
                     null
                 )
+                SmsSpoolStore.stage(applicationContext, event)
                 if (isDefaultDelivery) {
                     val provider = DefaultSmsProviderWriter.saveIncoming(
                         applicationContext,
@@ -125,13 +128,20 @@ object IncomingSmsProcessor {
                     event.providerWriteStatus = provider.status
                     event.providerUri = provider.uri
                     event.providerWriteError = provider.error
+                    SmsSpoolStore.update(applicationContext, event)
                 }
                 event to isDefaultDelivery
             }.onSuccess { result ->
                 val (event, shouldNotify) = result
                 PocEventStore.get(applicationContext).insertIncomingWithOutbox(
                     event,
+                    scheduleUpload = false,
                     onComplete = { inserted ->
+                        SmsSpoolStore.remove(applicationContext, event.eventId)
+                        // WorkManager outbox work is durable: it survives process
+                        // death and is executed once the system restarts the app.
+                        OutboxScheduler.enqueueNow(applicationContext)
+                        GatewayForegroundService.requestRecovery(applicationContext)
                         if (inserted) {
                             Log.i(
                                 TAG,
