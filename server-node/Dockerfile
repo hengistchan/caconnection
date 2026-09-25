@@ -11,7 +11,7 @@ RUN npm run build
 FROM node:22-alpine@sha256:b6f26b36c8ff49624cfdac716b8ea1138d606df02586a77d364bb5536a634f85
 
 LABEL org.opencontainers.image.title="CA Connection Gateway" \
-      org.opencontainers.image.version="0.7.0"
+      org.opencontainers.image.version="0.8.0"
 
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \

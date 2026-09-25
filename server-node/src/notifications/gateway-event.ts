@@ -6,6 +6,8 @@ export type GatewayNotificationEventType =
   | 'call.missed'
   | 'call.ended'
   | 'notification.received'
+  | 'device.offline'
+  | 'device.recovered'
   | 'channel.test';
 
 export interface GatewayNotificationEvent {
@@ -37,6 +39,34 @@ export function normalizeGatewayEvent(delivery: RenderableDelivery): GatewayNoti
       data: { contentMode: delivery.contentMode },
       title: 'CA Connection Test',
       body: 'Notification channel configuration is working.',
+    };
+  }
+  if (delivery.kind === 'DEVICE_ALERT') {
+    const payload = delivery.alertPayload;
+    if (!payload) throw new Error('notification event is unavailable');
+    const alertType = stringValue(payload.alertType);
+    const deviceId = stringValue(payload.deviceId) || 'unknown';
+    const lastSeenAt = numberValue(payload.lastSeenAt);
+    const detectedAt = numberValue(payload.detectedAt) || delivery.createdAt;
+    const outageDurationMs = numberValue(payload.outageDurationMs);
+    const recovered = alertType === 'RECOVERED';
+    return {
+      event: {
+        id: `device_alert_${delivery.id}`,
+        type: recovered ? 'device.recovered' : 'device.offline',
+        timestamp: detectedAt,
+      },
+      device: { id: deviceId, name: deviceId },
+      data: {
+        alertType,
+        lastSeenAt,
+        outageDurationMs,
+      },
+      title: recovered ? 'Gateway Recovered' : 'Gateway Offline',
+      body: recovered
+        ? `Device ${deviceId} is reporting again.`
+        : `Device ${deviceId} has stopped reporting.`,
+      level: recovered ? 'active' : 'timeSensitive',
     };
   }
   if (!delivery.payload || !delivery.deviceId || !delivery.eventType || delivery.receivedAt === null) {
@@ -126,6 +156,10 @@ export function normalizeGatewayEvent(delivery: RenderableDelivery): GatewayNoti
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function maskIdentifier(value: string): string {

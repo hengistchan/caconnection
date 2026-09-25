@@ -38,6 +38,7 @@ import { registerRawJsonParser } from './http/raw-json.js';
 import { DeviceRequestAuthenticator } from './services/device-request-authenticator.js';
 import { EventIngestionService } from './services/event-ingestion-service.js';
 import { NotificationDispatcher } from './services/notification-dispatcher.js';
+import { DeviceLivenessMonitor } from './services/device-liveness-monitor.js';
 import {
   FeishuWebhookClient,
   type NotificationTransport,
@@ -182,6 +183,11 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
       deviceSecrets,
     )
     : null;
+  const deviceLivenessMonitor = new DeviceLivenessMonitor(
+    db,
+    notificationRepo,
+    () => notificationDispatcher?.wake(),
+  );
 
   app.decorate('db', db);
   app.decorate('runtimeConfig', runtimeConfig);
@@ -279,8 +285,10 @@ export async function buildApp(config: AppConfig): Promise<FastifyInstance> {
 
   app.addHook('onReady', async () => {
     notificationDispatcher?.start();
+    deviceLivenessMonitor.start();
   });
   app.addHook('onClose', async () => {
+    deviceLivenessMonitor.stop();
     await notificationDispatcher?.stop();
     db.close();
   });
