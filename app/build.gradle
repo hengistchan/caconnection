@@ -21,8 +21,8 @@ android {
         applicationId = "com.caconnection"
         minSdk = 31
         targetSdk = 37
-        versionCode = 8
-        versionName = "0.2.6"
+        versionCode = 10
+        versionName = "0.2.8"
         buildConfigField("String", "POC_BUILD", '"targetSdk 37"')
         manifestPlaceholders = [appLabel: "CA Connection"]
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

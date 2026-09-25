@@ -138,14 +138,18 @@ object OutboxScheduler {
         val triggerAt = System.currentTimeMillis() + delayMillis
 
         runCatching {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (alarmManager.canScheduleExactAlarms()) {
                 alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.RTC_WAKEUP,
                     triggerAt,
                     pending
                 )
             } else {
-                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAt, pending)
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    triggerAt,
+                    pending
+                )
             }
         }.onFailure {
             Log.w(TAG, "Unable to schedule alarm wake", it)

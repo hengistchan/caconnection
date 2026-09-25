@@ -35,6 +35,7 @@ class PocEventStore private constructor(private val context: Context) {
 
     fun insertIncomingWithOutbox(
         event: IncomingSmsEventEntity,
+        scheduleUpload: Boolean = true,
         onComplete: ((inserted: Boolean) -> Unit)? = null,
         onFailure: ((Throwable) -> Unit)? = null
     ) {
@@ -55,7 +56,7 @@ class PocEventStore private constructor(private val context: Context) {
                         inserted = true
                     }
                 }
-                OutboxScheduler.enqueueNow(context)
+                if (scheduleUpload) OutboxScheduler.enqueueNow(context)
                 if (inserted) notifyChanged()
                 inserted
             }.onSuccess { inserted ->

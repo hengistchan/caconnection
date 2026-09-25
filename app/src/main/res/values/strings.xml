@@ -211,6 +211,15 @@
     <string name="foreground_channel_description">Persistent notification that keeps the SMS gateway alive in the background</string>
     <string name="foreground_notification_title">CA Connection gateway</string>
     <string name="foreground_notification_text">Running – SMS relay is active</string>
+    <string name="foreground_notification_connected">Connected · last success %1$s</string>
+    <string name="foreground_notification_degraded">Connection unstable · %1$d consecutive failures</string>
+    <string name="foreground_notification_disconnected">Disconnected · tap to diagnose or reconnect</string>
+    <string name="connection_alert_channel_name">Gateway connection alerts</string>
+    <string name="connection_alert_channel_description">Alerts when the phone cannot reach the CA Connection gateway</string>
+    <string name="connection_alert_title">CA Connection is disconnected</string>
+    <string name="connection_alert_text">The phone has repeatedly failed to reach the gateway. SMS remains queued locally; tap to diagnose or reconnect.</string>
+    <string name="connection_alert_reconnect">Reconnect</string>
+    <string name="connection_alert_diagnostics">Diagnostics</string>
     <string name="dashboard">Dashboard</string>
     <string name="send">Send</string>
     <string name="diagnostics">Diagnostics</string>

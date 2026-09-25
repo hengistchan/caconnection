@@ -71,7 +71,8 @@ class AuthenticatedHttpTransport(
     private val httpClient: GatewayHttpClient =
         UrlConnectionGatewayHttpClient(settings.certificatePinSha256Base64),
     private val now: () -> Long = System::currentTimeMillis,
-    private val nonce: () -> String = { UUID.randomUUID().toString() }
+    private val nonce: () -> String = { UUID.randomUUID().toString() },
+    private val resultObserver: (TransportResult) -> Unit = {}
 ) : Transport {
     override suspend fun send(event: TransportEvent): TransportResult =
         withContext(Dispatchers.IO) {
@@ -96,12 +97,14 @@ class AuthenticatedHttpTransport(
                     body = request.body
                 )
             }.getOrElse {
-                return@withContext TransportResult.RetryableFailure(
+                val result = TransportResult.RetryableFailure(
                     "Transport exception: ${it.javaClass.simpleName}"
                 )
+                resultObserver(result)
+                return@withContext result
             }
 
-            when {
+            val result = when {
                 response.statusCode in 200..299 -> TransportResult.Success
                 response.statusCode == 408 ||
                     response.statusCode == 425 ||
@@ -116,5 +119,7 @@ class AuthenticatedHttpTransport(
                     response.statusCode
                 )
             }
+            resultObserver(result)
+            result
         }
 }

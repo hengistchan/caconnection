@@ -79,6 +79,7 @@
         <receiver
             android:name=".telephony.inbound.SmsReceivedReceiver"
             android:exported="true"
+            android:process=":sms_receiver"
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="999">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED" />
@@ -89,6 +90,7 @@
         <receiver
             android:name=".telephony.inbound.SmsDeliverReceiver"
             android:exported="true"
+            android:process=":sms_receiver"
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter>
                 <action android:name="android.provider.Telephony.SMS_DELIVER" />
@@ -131,6 +133,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <!-- Recover after HyperOS SwipeUpClean kills the process: the
+                     next screen unlock rebuilds the gateway. -->
+                <action android:name="android.intent.action.USER_PRESENT" />
+                <action android:name="android.intent.action.PACKAGE_RESTARTED" />
             </intent-filter>
         </receiver>
 
