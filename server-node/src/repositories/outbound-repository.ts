@@ -13,6 +13,7 @@ import {
   OUTBOUND_STATUS_ORDER,
   OUTBOUND_COMMAND_LEASE_MS,
   OUTBOUND_COMMAND_STATUSES,
+  OUTBOUND_SENT_SETTLE_MS,
 } from '../config/constants.js';
 import { InvalidEventPayloadError } from '../http/operational-errors.js';
 
@@ -79,10 +80,13 @@ export class OutboundRepository {
     }, deviceId, secret);
 
     return transaction(this.db, () => {
-      const existing = queryOne<OutboundCommandRow>(this.db, 'SELECT * FROM outbound_commands WHERE idempotency_key = ?', idempotencyKey);
+      // Idempotency is scoped per device: one logical key may fan out to
+      // several devices, and only a same-device reuse with different content
+      // is a conflict.
+      const existing = queryOne<OutboundCommandRow>(this.db, 'SELECT * FROM outbound_commands WHERE device_id = ? AND idempotency_key = ?', deviceId, idempotencyKey);
       if (existing) {
         const cmd = this.toCommand(existing, secret);
-        if (existing.device_id !== deviceId || existing.slot_index !== slotIndex || cmd.recipient !== recipient || cmd.body !== body) {
+        if (existing.slot_index !== slotIndex || cmd.recipient !== recipient || cmd.body !== body) {
           throw new Error('idempotency key conflict');
         }
         return cmd;
@@ -126,6 +130,7 @@ export class OutboundRepository {
 
     const nowMs = Date.now();
     this.db.prepare("UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ? WHERE status IN ('QUEUED', 'CLAIMED') AND expires_at <= ?").run(nowMs, nowMs);
+    this.settleUnconfirmedSends(nowMs);
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = queryAll<OutboundCommandRow>(this.db, `SELECT * FROM outbound_commands ${where} ORDER BY id DESC LIMIT ?`, ...params);
@@ -144,6 +149,7 @@ export class OutboundRepository {
   claim(deviceId: string, secret: Buffer, limit: number, nowMs: number): OutboundCommand[] {
     return transaction(this.db, () => {
       this.db.prepare("UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ? WHERE device_id = ? AND status IN ('QUEUED', 'CLAIMED') AND expires_at <= ?").run(nowMs, deviceId, nowMs);
+      this.settleUnconfirmedSends(nowMs, deviceId);
       this.db.prepare("UPDATE outbound_commands SET status = 'QUEUED', claimed_at = NULL, updated_at = ? WHERE device_id = ? AND status = 'CLAIMED' AND claimed_at <= ? AND expires_at > ?").run(nowMs, deviceId, nowMs - OUTBOUND_COMMAND_LEASE_MS, nowMs);
 
       const rows = queryAll<OutboundCommandRow>(this.db, `
@@ -197,8 +203,23 @@ export class OutboundRepository {
     return true;
   }
 
-  private toCommand(row: OutboundCommandRow, secret: Buffer): OutboundCommand {
-    const envelope = decryptPayload(JSON.parse(row.envelope_json), row.device_id, secret);
+  /**
+   * A command stuck in SENT_TO_MODEM without a delivery report would show as
+   * "in progress" forever. Settle it once the confirmation window closes.
+   */
+  private settleUnconfirmedSends(nowMs: number, deviceId?: string): void {
+    if (deviceId === undefined) {
+      this.db.prepare(
+        "UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ?, error_detail = 'Delivery unconfirmed' WHERE status = 'SENT_TO_MODEM' AND updated_at <= ?",
+      ).run(nowMs, nowMs - OUTBOUND_SENT_SETTLE_MS);
+    } else {
+      this.db.prepare(
+        "UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ?, error_detail = 'Delivery unconfirmed' WHERE device_id = ? AND status = 'SENT_TO_MODEM' AND updated_at <= ?",
+      ).run(nowMs, deviceId, nowMs - OUTBOUND_SENT_SETTLE_MS);
+    }
+  }
+
+  private toCommand(row: OutboundCommandRow, secret: Buffer): OutboundCommand {    const envelope = decryptPayload(JSON.parse(row.envelope_json), row.device_id, secret);
     const payload = envelope.payload as Record<string, unknown>;
     return {
       id: row.id,

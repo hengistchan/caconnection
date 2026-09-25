@@ -10,13 +10,18 @@ object OutboxHelper {
 
     /**
      * Creates the upload record that is committed in the same Room
-     * transaction as its incoming SMS event.
+     * transaction as its incoming SMS event. The idempotency key must be the
+     * one computed at spool stage time — never recomputed from entity state
+     * that changes between staging and SIM resolution.
      */
-    fun createOutboxForIncoming(incomingEvent: IncomingSmsEventEntity): OutboxEventEntity {
+    fun createOutboxForIncoming(
+        incomingEvent: IncomingSmsEventEntity,
+        idempotencyKey: String
+    ): OutboxEventEntity {
         val now = System.currentTimeMillis()
         return OutboxEventEntity(
             UUID.randomUUID().toString(),
-            generateIdempotencyKey(incomingEvent),
+            idempotencyKey,
             incomingEvent.eventId,
             OutboxStatus.PENDING.name,
             0,
@@ -171,23 +176,48 @@ object OutboxHelper {
     }
 
     /**
-     * The full SHA-256 digest avoids the silent collision risk of Java's
-     * 32-bit hashCode. Slot/subscription are included so identical content
-     * received by two physical lines is not collapsed.
+     * Stable content key for an incoming SMS. Only immutable broadcast facts
+     * are hashed: never values derived from live subscription lookups, which
+     * can differ between the manifest receiver, the runtime fallback and a
+     * spool replay of the same message. The full SHA-256 digest avoids the
+     * silent collision risk of Java's 32-bit hashCode. Slot/subscription are
+     * included so identical content received by two physical lines is not
+     * collapsed.
      */
-    private fun generateIdempotencyKey(event: IncomingSmsEventEntity): String {
+    fun incomingIdempotencyKey(
+        originatingAddress: String?,
+        receivedAt: Long,
+        body: String?,
+        partCount: Int,
+        subscriptionId: Int?,
+        slotIndex: Int?
+    ): String {
         val canonical = listOf(
-            event.originatingAddress.orEmpty(),
-            event.receivedAt.toString(),
-            event.body.orEmpty(),
-            event.partCount.toString(),
-            event.resolvedSubscriptionId?.toString().orEmpty(),
-            event.resolvedSlotIndex?.toString().orEmpty()
+            originatingAddress.orEmpty(),
+            receivedAt.toString(),
+            body.orEmpty(),
+            partCount.toString(),
+            subscriptionId?.toString().orEmpty(),
+            slotIndex?.toString().orEmpty()
         ).joinToString(separator = "") { value ->
             "${value.toByteArray(StandardCharsets.UTF_8).size}:$value"
         }
         return "sms_${sha256(canonical)}"
     }
+
+    /**
+     * Legacy derivation used only to replay spool entries staged before the
+     * key was persisted alongside them.
+     */
+    fun generateIdempotencyKey(event: IncomingSmsEventEntity): String =
+        incomingIdempotencyKey(
+            event.originatingAddress,
+            event.receivedAt,
+            event.body,
+            event.partCount,
+            event.resolvedSubscriptionId,
+            event.resolvedSlotIndex
+        )
 
     private fun sha256(value: String): String =
         MessageDigest.getInstance("SHA-256")

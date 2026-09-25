@@ -20,6 +20,21 @@ class GatewayProvisioningReceiver : BroadcastReceiver() {
             val document = GatewayProvisioning.parse(
                 provisioning.readText(Charsets.UTF_8)
             )
+            val current = GatewayTransportConfig.load(context)
+            if (current.configured) {
+                // Re-pointing a gateway that already holds a secret must carry
+                // a signature under that secret. The import channel is ADB
+                // (DUMP-gated); without the check, shell access silently
+                // redirects every future SMS to an attacker endpoint.
+                require(
+                    GatewayProvisioning.verifySignature(
+                        document,
+                        current.sharedSecretBase64
+                    )
+                ) {
+                    "Re-provisioning requires a signature under the current device secret"
+                }
+            }
             GatewayTransportConfig.save(
                 context = context,
                 enabled = document.enabled,

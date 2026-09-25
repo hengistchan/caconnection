@@ -15,7 +15,12 @@ import { validateEnvelope } from '../protocol/envelope.js';
 
 export async function ingestRoutes(app: FastifyInstance) {
   app.post('/v1/events', async (request, reply) => {
-    const auth = app.deviceAuthenticator.authenticate(request, 'ingest-ip', 'ingest-device');
+    const auth = app.deviceAuthenticator.authenticate(request, 'ingest-ip', 'ingest-device', {
+      // The ingestion service records the nonce in the same transaction as
+      // the event insert — a "replayed nonce" 409 must always correspond to
+      // an event that is already stored.
+      deferNonceRecording: true,
+    });
 
     let envelope;
     let decryptedPayload: Record<string, unknown>;
@@ -81,7 +86,8 @@ export async function ingestRoutes(app: FastifyInstance) {
     }
 
     try {
-      app.deviceRepo.recordNonce(auth.deviceId, auth.nonce, auth.nowMs);
+      // Nonce recording happens in authenticate() — a duplicate request must
+      // fail there with 409 before any claim side effects run.
       app.deviceRepo.touchDevice(auth.deviceId, auth.nowMs);
       const commands = app.outboundRepo.claim(
         auth.deviceId,

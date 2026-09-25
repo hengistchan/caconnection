@@ -133,10 +133,11 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-                <!-- Recover after HyperOS SwipeUpClean kills the process: the
-                     next screen unlock rebuilds the gateway. -->
+                <!-- Best-effort runtime recovery after HyperOS SwipeUpClean
+                     kills the process. Availability optimization only — data
+                     correctness is carried by the manifest SMS receivers,
+                     durable spool/outbox and WorkManager. -->
                 <action android:name="android.intent.action.USER_PRESENT" />
-                <action android:name="android.intent.action.PACKAGE_RESTARTED" />
             </intent-filter>
         </receiver>
 

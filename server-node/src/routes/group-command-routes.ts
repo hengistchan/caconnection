@@ -14,10 +14,10 @@ export async function groupCommandRoutes(app: FastifyInstance) {
    * POST /v1/device-groups
    *
    * Create a Gateway group.
-   * Requires pairing:create scope and global device access.
+   * Requires devices:write scope and global device access.
    */
   app.post('/v1/device-groups', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
 
     if (app.getAllowedDeviceIds(clientId) !== null) {
       return reply.status(403).send({ error: 'global device access required' });
@@ -75,10 +75,10 @@ export async function groupCommandRoutes(app: FastifyInstance) {
    * PUT /v1/device-groups/:groupId
    *
    * Rename a Gateway group or replace its members.
-   * Requires pairing:create scope and global device access.
+   * Requires devices:write scope and global device access.
    */
   app.put('/v1/device-groups/:groupId', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const { groupId } = request.params as { groupId: string };
 
     if (app.getAllowedDeviceIds(clientId) !== null) {
@@ -136,10 +136,10 @@ export async function groupCommandRoutes(app: FastifyInstance) {
    * DELETE /v1/device-groups/:groupId
    *
    * Delete a Gateway group without deleting its devices.
-   * Requires pairing:create scope and global device access.
+   * Requires devices:write scope and global device access.
    */
   app.delete('/v1/device-groups/:groupId', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const { groupId } = request.params as { groupId: string };
 
     if (app.getAllowedDeviceIds(clientId) !== null) {

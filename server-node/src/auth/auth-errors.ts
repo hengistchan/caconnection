@@ -30,3 +30,12 @@ export class RateLimitError extends Error {
     this.retryAfterMs = retryAfterMs;
   }
 }
+
+export class ReplayedNonceError extends Error {
+  readonly statusCode = 409;
+
+  constructor() {
+    super('replayed nonce');
+    this.name = 'ReplayedNonceError';
+  }
+}

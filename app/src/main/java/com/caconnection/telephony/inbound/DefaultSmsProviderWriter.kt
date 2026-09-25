@@ -14,10 +14,23 @@ data class ProviderWriteResult(
 )
 
 object DefaultSmsProviderWriter {
-    fun saveIncoming(context: Context, event: IncomingSmsEventEntity): ProviderWriteResult {
+    /**
+     * @param matchExisting when true, a row with the same date/address/body is
+     *   treated as this message's earlier write (crash-replay protection).
+     *   First-time processing must pass false: a content match would then eat
+     *   a genuinely distinct second message with identical content, dropping
+     *   it from the user's inbox.
+     */
+    fun saveIncoming(
+        context: Context,
+        event: IncomingSmsEventEntity,
+        matchExisting: Boolean = false
+    ): ProviderWriteResult {
         return runCatching {
-            findExistingIncoming(context, event)?.let {
-                return ProviderWriteResult(status = "SAVED", uri = it.toString())
+            if (matchExisting) {
+                findExistingIncoming(context, event)?.let {
+                    return ProviderWriteResult(status = "SAVED", uri = it.toString())
+                }
             }
             val values = ContentValues().apply {
                 put(Telephony.TextBasedSmsColumns.ADDRESS, event.originatingAddress)

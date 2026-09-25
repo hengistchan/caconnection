@@ -84,10 +84,63 @@ class RemoteCommandClientTest {
             RemoteCommandClaimResult.RetryableFailure(5_000L),
             retry
         )
+        // A malformed entry rejects exactly that command — the claim itself
+        // succeeded and the server has already marked the batch CLAIMED.
         assertEquals(
-            RemoteCommandClaimResult.PermanentFailure(502),
+            RemoteCommandClaimResult.Success(
+                commands = emptyList(),
+                rejected = listOf(
+                    RemoteCommandClaimResult.RejectedCommand(null, "Malformed command entry")
+                )
+            ),
             malformed
         )
+    }
+
+    @Test
+    fun oneBadCommandDoesNotDiscardTheBatch() = runTest {
+        val result = RemoteCommandClient(
+            settings,
+            httpClient = GatewayHttpClient { _, _, _ ->
+                GatewayHttpResponse(
+                    200,
+                    null,
+                    """
+                    {
+                      "commands":[
+                        {
+                          "commandId":"expiredcommandid1",
+                          "deviceId":"xiaomi-gateway",
+                          "slotIndex":0,
+                          "recipient":"10086",
+                          "body":"late",
+                          "status":"CLAIMED",
+                          "createdAt":1000,
+                          "expiresAt":2000
+                        },
+                        {
+                          "commandId":"validcommandid001",
+                          "deviceId":"xiaomi-gateway",
+                          "slotIndex":1,
+                          "recipient":"10010",
+                          "body":"hello",
+                          "status":"CLAIMED",
+                          "createdAt":1000,
+                          "expiresAt":9000
+                        }
+                      ]
+                    }
+                    """.trimIndent()
+                )
+            },
+            now = { 3_000L }
+        ).claim()
+
+        assertTrue(result is RemoteCommandClaimResult.Success)
+        val success = result as RemoteCommandClaimResult.Success
+        assertEquals(listOf("validcommandid001"), success.commands.map { it.commandId })
+        assertEquals(1, success.rejected.size)
+        assertEquals("expiredcommandid1", success.rejected[0].commandId)
     }
 
     @Test
@@ -142,11 +195,27 @@ class RemoteCommandClientTest {
         ).claim()
 
         assertEquals(
-            RemoteCommandClaimResult.PermanentFailure(502),
+            RemoteCommandClaimResult.Success(
+                commands = emptyList(),
+                rejected = listOf(
+                    RemoteCommandClaimResult.RejectedCommand(
+                        "abcdefghijklmnop",
+                        "Expired before execution"
+                    )
+                )
+            ),
             expired
         )
         assertEquals(
-            RemoteCommandClaimResult.PermanentFailure(502),
+            RemoteCommandClaimResult.Success(
+                commands = emptyList(),
+                rejected = listOf(
+                    RemoteCommandClaimResult.RejectedCommand(
+                        "abcdefghijklmnop",
+                        "Unexpected command status QUEUED"
+                    )
+                )
+            ),
             wrongStatus
         )
     }

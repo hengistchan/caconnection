@@ -6,58 +6,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class GatewayRecoveryReceiverTest {
-    private val ownPackage = "com.caconnection.gateway"
 
     @Test
     fun acceptsBootAndPackageReplacementActions() {
-        assertTrue(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_BOOT_COMPLETED, null, ownPackage
-            )
-        )
-        assertTrue(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_MY_PACKAGE_REPLACED, null, ownPackage
-            )
-        )
+        assertTrue(GatewayRecoveryReceiver.shouldRecover(Intent.ACTION_BOOT_COMPLETED))
+        assertTrue(GatewayRecoveryReceiver.shouldRecover(Intent.ACTION_MY_PACKAGE_REPLACED))
     }
 
     @Test
     fun acceptsUserPresentForPostKillRecovery() {
-        assertTrue(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_USER_PRESENT, null, ownPackage
-            )
-        )
+        assertTrue(GatewayRecoveryReceiver.shouldRecover(Intent.ACTION_USER_PRESENT))
     }
 
+    /**
+     * PACKAGE_RESTARTED is a force-stop notification, not a wake-up event: the
+     * killed package is in the stopped state and cannot recover from it.
+     */
     @Test
-    fun packageRestartedOnlyRecoversOwnPackage() {
-        assertTrue(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_PACKAGE_RESTARTED, ownPackage, ownPackage
-            )
-        )
-        assertFalse(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_PACKAGE_RESTARTED, "com.other.app", ownPackage
-            )
-        )
-        assertFalse(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_PACKAGE_RESTARTED, null, ownPackage
-            )
-        )
-    }
-
-    @Test
-    fun rejectsUnrelatedOrMissingActions() {
-        assertFalse(
-            GatewayRecoveryReceiver.shouldRecover(
-                Intent.ACTION_TIME_CHANGED, null, ownPackage
-            )
-        )
-        assertFalse(GatewayRecoveryReceiver.shouldRecover(null, null, ownPackage))
+    fun rejectsPackageRestartedAndUnrelatedActions() {
+        assertFalse(GatewayRecoveryReceiver.shouldRecover(Intent.ACTION_PACKAGE_RESTARTED))
+        assertFalse(GatewayRecoveryReceiver.shouldRecover(Intent.ACTION_TIME_CHANGED))
+        assertFalse(GatewayRecoveryReceiver.shouldRecover(null))
     }
 
     @Test
@@ -86,13 +55,6 @@ class GatewayRecoveryReceiverTest {
         assertFalse(
             GatewayRecoveryReceiver.isThrottled(
                 Intent.ACTION_BOOT_COMPLETED,
-                lastRecoverAt = 1_000L,
-                now = 1_001L
-            )
-        )
-        assertFalse(
-            GatewayRecoveryReceiver.isThrottled(
-                Intent.ACTION_PACKAGE_RESTARTED,
                 lastRecoverAt = 1_000L,
                 now = 1_001L
             )

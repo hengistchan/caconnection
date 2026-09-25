@@ -3,6 +3,7 @@ package com.caconnection.telephony.inbound
 import android.content.Context
 import android.util.Log
 import com.caconnection.ProcessIdentity
+import com.caconnection.data.poc.OutboxHelper
 import com.caconnection.data.poc.PocEventStore
 import com.caconnection.notifications.GatewayForegroundService
 import com.caconnection.telephony.smsrole.SmsRoleController
@@ -25,19 +26,32 @@ object SmsSpoolRecovery {
             if (entries.isEmpty()) return@execute
 
             val holdsSmsRole = SmsRoleController(applicationContext).isRoleHeld()
-            entries.forEach { event ->
+            entries.forEach { spooled ->
+                val event = spooled.event
+                // Replays must reuse the key stored at stage time. Deriving it
+                // again here would produce a second key whenever resolution
+                // state changed since staging → duplicate upload.
+                val idempotencyKey = spooled.idempotencyKey
+                    ?: OutboxHelper.generateIdempotencyKey(event)
                 if (holdsSmsRole && event.providerWriteStatus != "SAVED") {
+                    // Recovery may re-run after a crash between the provider
+                    // write and the spool update — matchExisting protects
+                    // against writing the inbox twice for one message.
                     val provider = DefaultSmsProviderWriter.saveIncoming(
                         applicationContext,
-                        event
+                        event,
+                        matchExisting = true
                     )
                     event.providerWriteStatus = provider.status
                     event.providerUri = provider.uri
                     event.providerWriteError = provider.error
-                    runCatching { SmsSpoolStore.update(applicationContext, event) }
+                    runCatching {
+                        SmsSpoolStore.update(applicationContext, event, idempotencyKey)
+                    }
                 }
                 PocEventStore.get(applicationContext).insertIncomingWithOutbox(
                     event = event,
+                    idempotencyKey = idempotencyKey,
                     scheduleUpload = true,
                     onComplete = {
                         SmsSpoolStore.remove(applicationContext, event.eventId)

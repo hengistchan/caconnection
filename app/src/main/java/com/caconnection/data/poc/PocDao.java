@@ -46,6 +46,9 @@ public interface PocDao {
     @Query("DELETE FROM outgoing_sms_events")
     void clearOutgoing();
 
+    @Query("DELETE FROM outgoing_sms_events WHERE remoteCommandId IS NULL")
+    void clearLocalOutgoing();
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void insertNotification(NotificationEventEntity event);
 
@@ -74,7 +77,7 @@ public interface PocDao {
     void clearCallIdentities();
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    void insertOutbox(OutboxEventEntity event);
+    long insertOutbox(OutboxEventEntity event);
 
     @Update
     void updateOutbox(OutboxEventEntity event);
@@ -109,6 +112,12 @@ public interface PocDao {
     @Query("DELETE FROM outbox_events WHERE status = 'SUCCESS'")
     void clearSuccessfulOutboxEvents();
 
+    @Query("DELETE FROM outbox_events WHERE status = 'SUCCESS' AND updatedAt < :cutoff")
+    int clearSuccessfulOutboxEventsBefore(long cutoff);
+
     @Query("DELETE FROM outbox_events")
     void clearOutbox();
+
+    @Query("DELETE FROM outbox_events WHERE payloadType != 'OUTBOUND_SMS_STATUS'")
+    void clearOutboxKeepingRemoteStatus();
 }

@@ -10,6 +10,7 @@ import { transaction } from '../database/transaction.js';
 import { queryAll, queryOne } from '../database/helpers.js';
 import { encryptPayload, decryptPayload } from '../crypto/payload-crypto.js';
 import { base64Decode, base64Encode } from '../crypto/encoding.js';
+import { ReplayedNonceError } from '../auth/auth-errors.js';
 import {
   DEVICE_ONLINE_WINDOW_MS,
   DEVICE_STALE_WINDOW_MS,
@@ -111,7 +112,7 @@ export class DeviceRepository {
    */
   isActive(deviceId: string): boolean {
     const row = queryOne<DeviceRow>(this.db, 'SELECT retired_at FROM devices WHERE device_id = ?', deviceId);
-    return row === undefined || row.retired_at === null;
+    return row !== undefined && row.retired_at === null;
   }
 
   /**
@@ -123,7 +124,7 @@ export class DeviceRepository {
       this.db.prepare('INSERT INTO request_nonces(device_id, nonce, seen_at) VALUES (?, ?, ?)').run(deviceId, nonce, nowMs);
     } catch (error: any) {
       if (error?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error?.errcode === 1555) {
-        throw new Error('replayed nonce');
+        throw new ReplayedNonceError();
       }
       throw error;
     }

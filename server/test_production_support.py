@@ -78,6 +78,7 @@ class ProductionSetupTest(unittest.TestCase):
                 & 0o777,
             )
             self.assertEqual([], list(runtime.glob(".*.tmp")))
+            self.assertIn("signatureBase64", provisioning)
             self.assertEqual(
                 [
                     "GATEWAY_DOMAIN=gateway.example.com",
@@ -116,6 +117,67 @@ class ProductionSetupTest(unittest.TestCase):
             self.assertEqual(
                 hashlib.sha256(rotated_token.encode()).hexdigest(),
                 rotated["api_clients"]["automation"]["token_sha256"],
+            )
+
+    def test_provisioning_signature_matches_android_known_answer(self) -> None:
+        # Known-answer vector shared with the Android verifier
+        # (GatewayProvisioningTest.matchesGeneratorKnownAnswerVector) — the
+        # canonical message and HMAC must stay byte-identical across both.
+        from server.setup_production import provisioning_signature
+
+        secret = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+        self.assertEqual(
+            "sPYwwSqqEkutn33600OMGH5IpL8cC+n6kQY/ioisRsE=",
+            provisioning_signature(
+                secret,
+                "https://gateway.example.com",
+                "xiaomi-gateway",
+                secret,
+                "",
+                True,
+            ),
+        )
+
+    def test_rotation_signs_under_previous_secret(self) -> None:
+        from server.setup_production import provisioning_signature
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "runtime"
+            command = [
+                sys.executable,
+                "server/setup_production.py",
+                "--domain",
+                "gateway.example.com",
+                "--runtime-dir",
+                str(runtime),
+                "--env-file",
+                str(Path(temporary) / ".env"),
+            ]
+            subprocess.run(command, check=True, capture_output=True, text=True)
+            previous_secret = json.loads((runtime / "config.json").read_text())[
+                "devices"
+            ]["xiaomi-gateway"]["secret_base64"]
+
+            subprocess.run(
+                command + ["--rotate-device-secret"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            provisioning = json.loads(
+                (runtime / "android-provisioning.json").read_text()
+            )
+
+            self.assertEqual(
+                provisioning_signature(
+                    previous_secret,
+                    provisioning["endpoint"],
+                    provisioning["deviceId"],
+                    provisioning["sharedSecretBase64"],
+                    provisioning["certificatePinSha256Base64"],
+                    provisioning["enabled"],
+                ),
+                provisioning["signatureBase64"],
             )
 
     def test_cloudflare_mode_selects_private_tunnel_compose(self) -> None:

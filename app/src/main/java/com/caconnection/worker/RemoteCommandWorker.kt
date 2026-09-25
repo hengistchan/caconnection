@@ -3,6 +3,7 @@ package com.caconnection.worker
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -36,6 +37,9 @@ class RemoteCommandWorker(
                 ?: RemoteCommandClient(settings).claim()
         ) {
             is RemoteCommandClaimResult.Success -> {
+                // One bad command must not discard the batch: report each
+                // rejection to the server and execute the survivors.
+                result.rejected.forEach(::reportRejected)
                 result.commands.forEach(::execute)
                 RemoteCommandScheduler.enqueue(
                     applicationContext,
@@ -69,7 +73,15 @@ class RemoteCommandWorker(
             it.slotIndex == command.slotIndex
         }
         if (subscription == null) {
-            recordFailure(command, "Requested SIM is not active")
+            // Transient: the telephony stack may still be loading (boot, SIM
+            // hot-swap, eSIM toggle) or the slot list is empty. Terminal FAILED
+            // here would burn a command that is sendable seconds later. Report
+            // nothing — the server lease requeues the row and a later poll
+            // retries it within the TTL.
+            Log.w(
+                TAG,
+                "SIM slot ${command.slotIndex} unavailable; deferring command ${command.commandId}"
+            )
             return
         }
         if (
@@ -78,7 +90,7 @@ class RemoteCommandWorker(
                 Manifest.permission.SEND_SMS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            recordFailure(command, "SEND_SMS permission is not granted")
+            recordFailure(command.commandId, command.recipient, command.body, command.slotIndex, "SEND_SMS permission is not granted")
             return
         }
         SmsGatewaySender(applicationContext).sendRemote(
@@ -86,23 +98,36 @@ class RemoteCommandWorker(
             recipient = command.recipient,
             body = command.body,
             subscription = subscription,
-            onRejected = { reason -> recordFailure(command, reason) }
+            onRejected = { reason ->
+                recordFailure(command.commandId, command.recipient, command.body, command.slotIndex, reason)
+            }
         )
     }
 
-    private fun recordFailure(command: RemoteSmsCommand, reason: String) {
+    private fun reportRejected(rejected: RemoteCommandClaimResult.RejectedCommand) {
+        val commandId = rejected.commandId ?: return
+        recordFailure(commandId, "", "", 0, rejected.reason)
+    }
+
+    private fun recordFailure(
+        commandId: String,
+        recipient: String,
+        body: String,
+        slotIndex: Int,
+        reason: String
+    ) {
         val now = System.currentTimeMillis()
         PocEventStore.get(applicationContext).insertRemoteCommandFailure(
             OutgoingSmsEventEntity(
-                command.commandId,
-                command.recipient,
-                command.body,
+                commandId,
+                recipient,
+                body,
                 now,
                 now,
                 -1,
-                command.slotIndex,
+                slotIndex,
                 "",
-                command.commandId,
+                commandId,
                 OutgoingStatus.FAILED.name,
                 0,
                 0,
@@ -115,5 +140,9 @@ class RemoteCommandWorker(
                 null
             )
         )
+    }
+
+    companion object {
+        private const val TAG = "RemoteCommandWorker"
     }
 }

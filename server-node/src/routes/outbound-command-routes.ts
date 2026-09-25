@@ -38,8 +38,14 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
     const expiresInSeconds = body.expiresInSeconds ?? DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS;
     const idempotencyKey = body.idempotencyKey;
 
+    // Access check first: distinguishing "not yours" (403) from "not found"
+    // (400) would let scoped clients enumerate global device ids.
+    if (typeof deviceId !== 'string' || !app.verifyDeviceAccess(clientId, deviceId)) {
+      return reply.status(403).send({ error: 'device access denied' });
+    }
+
     // Validate deviceId
-    if (typeof deviceId !== 'string' || !app.deviceSecrets.has(deviceId) || !app.deviceRepo.isActive(deviceId)) {
+    if (!app.deviceSecrets.has(deviceId) || !app.deviceRepo.isActive(deviceId)) {
       return reply.status(400).send({ error: 'invalid deviceId' });
     }
 
@@ -66,11 +72,6 @@ export async function outboundCommandRoutes(app: FastifyInstance) {
     // Validate idempotencyKey
     if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9._-]{16,128}$/.test(idempotencyKey)) {
       return reply.status(400).send({ error: 'invalid idempotencyKey' });
-    }
-
-    // Check device access
-    if (!app.verifyDeviceAccess(clientId, deviceId)) {
-      return reply.status(403).send({ error: 'device access denied' });
     }
 
     try {

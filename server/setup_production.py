@@ -3,6 +3,7 @@
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -21,6 +22,37 @@ def valid_domain(value: str) -> str:
     if not DOMAIN_PATTERN.fullmatch(normalized):
         raise ValueError("A valid DNS hostname is required")
     return normalized
+
+
+def provisioning_signature(
+    signing_secret_base64: str,
+    endpoint: str,
+    device_id: str,
+    shared_secret_base64: str,
+    certificate_pin_sha256_base64: str,
+    enabled: bool,
+) -> str:
+    """HMAC-SHA256 over the canonical provisioning message.
+
+    Must stay byte-identical to GatewayProvisioning.signingMessage on the
+    Android side: the key is the secret the device already holds (the new
+    secret is wrong during rotation, since the device still trusts the old
+    one until the document is applied).
+    """
+    message = "\n".join(
+        [
+            "caconnection/provisioning/v1",
+            endpoint,
+            device_id,
+            shared_secret_base64,
+            certificate_pin_sha256_base64 or "",
+            "true" if enabled else "false",
+        ]
+    ).encode("utf-8")
+    key = base64.b64decode(signing_secret_base64)
+    return base64.b64encode(
+        hmac.new(key, message, hashlib.sha256).digest()
+    ).decode("ascii")
 
 
 def write_private(path: Path, value: str) -> None:
@@ -83,6 +115,7 @@ def main() -> None:
         else {}
     )
     devices = data.setdefault("devices", {})
+    previous_device_secret = devices.get(args.device_id, {}).get("secret_base64")
     if args.rotate_device_secret or args.device_id not in devices:
         devices[args.device_id] = {
             "secret_base64": base64.b64encode(
@@ -123,17 +156,32 @@ def main() -> None:
         config_path,
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
     )
+    # Signed with the secret the device currently holds — after a rotation
+    # that is the previous secret, otherwise the one in this document (first
+    # provisioning is accepted unsigned by a not-yet-configured device).
+    provisioning_endpoint = f"https://{domain}"
+    provisioning_pin = ""
+    provisioning_enabled = True
+    signing_secret = previous_device_secret or device["secret_base64"]
     write_private(
         runtime / "android-provisioning.json",
         json.dumps(
             {
                 "schemaVersion": 1,
-                "endpoint": f"https://{domain}",
+                "endpoint": provisioning_endpoint,
                 "deviceId": args.device_id,
                 "sharedSecretBase64": device["secret_base64"],
-                "certificatePinSha256Base64": "",
+                "certificatePinSha256Base64": provisioning_pin,
                 "tlsValidation": "SYSTEM_CA",
-                "enabled": True,
+                "enabled": provisioning_enabled,
+                "signatureBase64": provisioning_signature(
+                    signing_secret,
+                    provisioning_endpoint,
+                    args.device_id,
+                    device["secret_base64"],
+                    provisioning_pin,
+                    provisioning_enabled,
+                ),
             },
             indent=2,
         )
