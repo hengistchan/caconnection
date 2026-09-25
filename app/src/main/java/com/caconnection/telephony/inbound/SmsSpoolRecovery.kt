@@ -53,8 +53,22 @@ object SmsSpoolRecovery {
                     event = event,
                     idempotencyKey = idempotencyKey,
                     scheduleUpload = true,
-                    onComplete = {
-                        SmsSpoolStore.remove(applicationContext, event.eventId)
+                    onComplete = { inserted ->
+                        if (!inserted) {
+                            // The durable copy already exists — typically the
+                            // degraded synchronous persist from the broadcast
+                            // thread, which ran before resolution. Fold this
+                            // replay's resolution results into those rows.
+                            PocEventStore.get(applicationContext)
+                                .enrichIncomingAfterDegradedPersist(event, idempotencyKey)
+                        }
+                        // Cleanup failure must not swallow the refresh below —
+                        // a leftover entry is re-recovered and deduped later.
+                        runCatching {
+                            SmsSpoolStore.remove(applicationContext, event.eventId)
+                        }.onFailure { error ->
+                            Log.e(TAG, "Unable to clear recovered spool entry", error)
+                        }
                         GatewayForegroundService.refresh(applicationContext)
                     },
                     onFailure = { error ->

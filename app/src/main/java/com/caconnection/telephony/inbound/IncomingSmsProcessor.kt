@@ -25,12 +25,16 @@ object IncomingSmsProcessor {
      * loses the SMS is as small as possible.
      *
      * Phase 1 runs synchronously on the broadcast thread: parse the intent and
-     * write the durable spool entry. Android / HyperOS can kill the process at
-     * any moment; everything before [SmsSpoolStore.stage] is unrecoverable loss.
+     * land a durable copy. The normal durable copy is the spool entry
+     * ([SmsSpoolStore.stage]); if that write fails, the degraded path persists
+     * Room + outbox synchronously before returning. Android / HyperOS can kill
+     * the process at any moment — everything before one of those two writes
+     * completes is unrecoverable loss, and nothing after it is.
      *
      * Phase 2 runs on the worker: SIM resolution, provider write, Room/outbox
-     * persistence and scheduling. Losing it to process death is safe — the
-     * spool entry is the recovery point and [SmsSpoolRecovery] replays it.
+     * persistence (or enrichment, on the degraded path) and scheduling.
+     * Losing it to process death is safe — Phase 1 is the recovery point and
+     * [SmsSpoolRecovery] replays a staged entry.
      */
     fun process(context: Context, intent: Intent, onComplete: () -> Unit) {
         val applicationContext = context.applicationContext
@@ -99,13 +103,45 @@ object IncomingSmsProcessor {
             null,
             null
         )
+        // Durability contract for the broadcast thread — the SMS is protected
+        // only after one of these layers has actually landed:
+        //
+        //  1. Spool: [SmsSpoolStore.stage] returns → the normal path. Phase-2
+        //     loss is recoverable; [SmsSpoolRecovery] replays the entry.
+        //  2. Room (degraded): stage() threw → persist the incoming + outbox
+        //     rows synchronously here, before the receiver returns. Survives
+        //     process death even with a broken spool.
+        //  3. Neither: the SMS is unprotected. Keep going (Phase 2 may still
+        //     land the Room write if the fault was transient) but the critical
+        //     log line below is the only trace if it does not.
+        var persistedViaRoom = false
         try {
             SmsSpoolStore.stage(applicationContext, staged, idempotencyKey)
         } catch (error: Exception) {
-            // The spool write failed; dropping the SMS here would lose it.
-            // Keep processing — Room persistence may still succeed, and the
-            // Phase-2 update() retries the spool write.
             Log.e(TAG, "Unable to stage SMS spool entry action=$action", error)
+            persistedViaRoom = try {
+                PocEventStore.get(applicationContext)
+                    .persistIncomingWithOutboxBlocking(staged, idempotencyKey)
+                Log.w(TAG, "SMS durable via Room fallback only action=$action")
+                true
+            } catch (roomError: Exception) {
+                Log.e(
+                    TAG,
+                    "CRITICAL: no durable copy of incoming SMS — spool and Room both failed " +
+                        "action=$action",
+                    roomError
+                )
+                // Diagnostic only — the real completion is owned by Phase 2
+                // (or by the scheduling failure path below).
+                try {
+                    executor.execute {
+                        reportFailure(applicationContext, invokedAt, action, "NO_DURABLE_COPY") {}
+                    }
+                } catch (diagnosticError: Exception) {
+                    Log.e(TAG, "Unable to report missing durable copy", diagnosticError)
+                }
+                false
+            }
         }
 
         try {
@@ -119,12 +155,16 @@ object IncomingSmsProcessor {
                     staged,
                     idempotencyKey,
                     isDefaultDelivery,
+                    persistedViaRoom,
                     completion
                 )
             }
         } catch (error: Exception) {
             Log.e(TAG, "Unable to schedule SMS processing action=$action", error)
-            // The spool entry is already durable; SmsSpoolRecovery replays it.
+            // Exactly the protection Phase 1 established still holds: a staged
+            // spool entry is replayed by SmsSpoolRecovery, a Room-only degraded
+            // persist needs no replay. If neither landed, this SMS is lost and
+            // the diagnostic above is the only record.
             reportFailureAsync(
                 applicationContext,
                 invokedAt,
@@ -144,6 +184,7 @@ object IncomingSmsProcessor {
         event: IncomingSmsEventEntity,
         idempotencyKey: String,
         isDefaultDelivery: Boolean,
+        persistedViaRoom: Boolean,
         completion: CompletionGuard
     ) {
         try {
@@ -163,7 +204,7 @@ object IncomingSmsProcessor {
                 event.resolutionConfidence = resolution.confidence.name
                 event.resolutionNotes = resolution.notes
                 event.rawExtras = IntentExtrasInspector.describe(extras)
-                SmsSpoolStore.update(applicationContext, event, idempotencyKey)
+                updateSpool(applicationContext, event, idempotencyKey)
                 if (isDefaultDelivery) {
                     val provider = DefaultSmsProviderWriter.saveIncoming(
                         applicationContext,
@@ -172,7 +213,7 @@ object IncomingSmsProcessor {
                     event.providerWriteStatus = provider.status
                     event.providerUri = provider.uri
                     event.providerWriteError = provider.error
-                    SmsSpoolStore.update(applicationContext, event, idempotencyKey)
+                    updateSpool(applicationContext, event, idempotencyKey)
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "SMS resolution failed action=$action", error)
@@ -186,50 +227,70 @@ object IncomingSmsProcessor {
                 return
             }
 
-            PocEventStore.get(applicationContext).insertIncomingWithOutbox(
-                event,
-                idempotencyKey,
-                scheduleUpload = false,
-                onComplete = { inserted ->
-                    SmsSpoolStore.remove(applicationContext, event.eventId)
-                    // WorkManager outbox work is durable: it survives process
-                    // death and is executed once the system restarts the app.
-                    OutboxScheduler.enqueueNow(applicationContext)
-                    GatewayForegroundService.requestRecovery(applicationContext)
-                    if (inserted) {
-                        Log.i(
-                            TAG,
-                            "Incoming SMS persisted and queued action=$action"
+            if (persistedViaRoom) {
+                // Phase 1 already committed the durable copy on the degraded
+                // path. Fold resolution results into those rows — a second
+                // insert would be deduped by the idempotency key and silently
+                // drop the SIM attribution.
+                PocEventStore.get(applicationContext).enrichIncomingAfterDegradedPersist(
+                    event,
+                    idempotencyKey,
+                    onComplete = {
+                        afterIncomingPersisted(
+                            applicationContext,
+                            action,
+                            event,
+                            isDefaultDelivery,
+                            inserted = true,
+                            completion
                         )
-                        if (isDefaultDelivery) {
-                            NotificationHelper.notifyIncoming(
-                                applicationContext,
-                                event
-                            )
-                        }
-                    } else {
-                        Log.i(
+                    },
+                    onFailure = { error ->
+                        Log.e(
                             TAG,
-                            "Duplicate incoming SMS ignored action=$action"
+                            "Incoming SMS enrichment failed action=$action",
+                            error
+                        )
+                        reportFailure(
+                            applicationContext,
+                            invokedAt,
+                            action,
+                            "PROCESSING_EXCEPTION",
+                            completion::finish
                         )
                     }
-                    completion.finish()
-                },
-                onFailure = { error ->
-                    Log.e(
-                        TAG,
-                        "Incoming SMS persistence failed action=$action",
-                        error
-                    )
-                    reportFailure(
-                        applicationContext,
-                        invokedAt,
-                        action,
-                        "PROCESSING_EXCEPTION",
-                        completion::finish
-                    )
-                }
-            )
+                )
+            } else {
+                PocEventStore.get(applicationContext).insertIncomingWithOutbox(
+                    event,
+                    idempotencyKey,
+                    scheduleUpload = false,
+                    onComplete = { inserted ->
+                        afterIncomingPersisted(
+                            applicationContext,
+                            action,
+                            event,
+                            isDefaultDelivery,
+                            inserted,
+                            completion
+                        )
+                    },
+                    onFailure = { error ->
+                        Log.e(
+                            TAG,
+                            "Incoming SMS persistence failed action=$action",
+                            error
+                        )
+                        reportFailure(
+                            applicationContext,
+                            invokedAt,
+                            action,
+                            "PROCESSING_EXCEPTION",
+                            completion::finish
+                        )
+                    }
+                )
+            }
         } catch (error: Exception) {
             Log.e(TAG, "Unexpected SMS processing failure action=$action", error)
             reportFailure(
@@ -240,6 +301,61 @@ object IncomingSmsProcessor {
                 completion::finish
             )
         }
+    }
+
+    private fun afterIncomingPersisted(
+        applicationContext: Context,
+        action: String,
+        event: IncomingSmsEventEntity,
+        isDefaultDelivery: Boolean,
+        inserted: Boolean,
+        completion: CompletionGuard
+    ) {
+        // The spool entry is recovery state, not the durability gate — a
+        // failing cleanup must never abort the completion path (which would
+        // strand the receiver's goAsync() result).
+        runCatching { SmsSpoolStore.remove(applicationContext, event.eventId) }
+            .onFailure { error ->
+                Log.e(TAG, "Unable to clear SMS spool entry action=$action", error)
+            }
+        // WorkManager outbox work is durable: it survives process
+        // death and is executed once the system restarts the app.
+        OutboxScheduler.enqueueNow(applicationContext)
+        GatewayForegroundService.requestRecovery(applicationContext)
+        if (inserted) {
+            Log.i(
+                TAG,
+                "Incoming SMS persisted and queued action=$action"
+            )
+            if (isDefaultDelivery) {
+                NotificationHelper.notifyIncoming(
+                    applicationContext,
+                    event
+                )
+            }
+        } else {
+            Log.i(
+                TAG,
+                "Duplicate incoming SMS ignored action=$action"
+            )
+        }
+        completion.finish()
+    }
+
+    /**
+     * Spool updates only refresh the crash-recovery state. Once the entry is
+     * staged (or the degraded Room persist landed) they are never allowed to
+     * abort the pipeline — a broken spool must not also cost the Room write.
+     */
+    private fun updateSpool(
+        context: Context,
+        event: IncomingSmsEventEntity,
+        idempotencyKey: String
+    ) {
+        runCatching { SmsSpoolStore.update(context, event, idempotencyKey) }
+            .onFailure { error ->
+                Log.e(TAG, "Unable to refresh SMS spool entry ${event.eventId}", error)
+            }
     }
 
     private fun reportReceiverInvocation(

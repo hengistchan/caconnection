@@ -291,6 +291,37 @@ class OutboxHelperTest {
         assertTrue(!outbox.payloadData.contains("Sensitive remote message"))
     }
 
+    /**
+     * The degraded synchronous persist commits the outbox row before SIM
+     * resolution runs. Enrichment must fold those later facts into the
+     * unsent row so the upload is not stuck with the unresolved snapshot.
+     */
+    @Test
+    fun enrichmentFoldsResolutionIntoUnsentOutboxRow() {
+        val staged = incoming(subscriptionId = null, slotIndex = null)
+        val outbox = OutboxHelper.createOutboxForIncoming(
+            staged,
+            OutboxHelper.generateIdempotencyKey(staged)
+        )
+        val resolved = incoming(
+            eventId = staged.eventId,
+            originatingAddress = staged.originatingAddress,
+            body = staged.body,
+            receivedAt = staged.receivedAt
+        ).apply {
+            resolutionMethod = "EXTRA"
+            resolutionConfidence = "HIGH"
+        }
+
+        OutboxHelper.applyIncomingEnrichment(outbox, resolved)
+
+        assertEquals(1, outbox.subscriptionId)
+        assertEquals(0, outbox.slotIndex)
+        assertTrue(outbox.payloadData.contains("\"subscriptionId\":1"))
+        assertTrue(outbox.payloadData.contains("\"slotIndex\":0"))
+        assertTrue(outbox.payloadData.contains("EXTRA"))
+    }
+
     private fun incoming(
         eventId: String = UUID.randomUUID().toString(),
         originatingAddress: String = "+1234567890",
