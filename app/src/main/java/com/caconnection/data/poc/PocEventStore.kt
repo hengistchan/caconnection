@@ -276,36 +276,32 @@ class PocEventStore private constructor(private val context: Context) {
     }
 
     /**
-     * Settle sends whose process died before the platform produced a callback.
-     *
-     * Re-sending is unsafe: a DISPATCHING row may represent either side of the
-     * SmsManager call, so automatic replay can send the same SMS twice. A stale
-     * CREATED row is also failed instead of replayed because local UI sends have
-     * no durable user intent/attempt token with which to authorize a retry.
+     * CREATED is a durable intent that has definitely not entered SmsManager
+     * and is safe to retry. DISPATCHING straddles the external modem call, so
+     * it becomes provisional OUTCOME_UNKNOWN and waits for a late callback.
      */
     fun recoverInterruptedOutgoing(
         currentTime: Long = System.currentTimeMillis(),
+        resumeCreated: (OutgoingSmsEventEntity) -> Unit = {},
         onComplete: ((Int) -> Unit)? = null
     ) {
         executeSafely("recover interrupted outgoing SMS") {
             val staleBefore = currentTime - OUTGOING_DISPATCH_STALE_MS
-            val interrupted = dao.getInterruptedOutgoing(staleBefore)
+            val created = dao.getCreatedOutgoing()
+            val dispatching = dao.getStaleDispatchingOutgoing(staleBefore)
             var recovered = 0
             var statusQueued = false
             database.runInTransaction {
-                interrupted.forEach { event ->
+                dispatching.forEach { event ->
                     val current = dao.findOutgoing(event.eventId) ?: return@forEach
                     if (
                         current.updatedAt > staleBefore ||
-                        (current.status != OutgoingStatus.CREATED.name &&
-                            current.status != OutgoingStatus.DISPATCHING.name)
+                        current.status != OutgoingStatus.DISPATCHING.name
                     ) {
                         return@forEach
                     }
-                    val previousStatus = current.status
-                    current.status = OutgoingStatus.FAILED.name
-                    current.failedPartCount = maxOf(1, current.failedPartCount)
-                    current.errorDetail = OutgoingRecoveryPolicy.failureDetail(previousStatus)
+                    current.status = OutgoingStatus.OUTCOME_UNKNOWN.name
+                    current.errorDetail = OutgoingRecoveryPolicy.dispatchOutcomeUnknown()
                     current.updatedAt = currentTime
                     dao.updateOutgoing(current)
                     statusQueued = queueOutgoingStatus(current) || statusQueued
@@ -314,31 +310,34 @@ class PocEventStore private constructor(private val context: Context) {
             }
             if (statusQueued) OutboxScheduler.enqueueNow(context)
             if (recovered > 0) notifyChanged()
-            onComplete?.invoke(recovered)
+            created.forEach(resumeCreated)
+            onComplete?.invoke(recovered + created.size)
         }
     }
 
     fun markDispatching(
         eventId: String,
         partCount: Int,
-        onComplete: (() -> Unit)? = null,
+        onClaimed: ((Boolean) -> Unit)? = null,
         onFailure: ((Throwable) -> Unit)? = null
     ) {
         executeSafely(
             operation = "mark SMS dispatching",
             onFailure = onFailure
-        ) action@{
-            val event = dao.findOutgoing(eventId) ?: return@action
-            event.status = OutgoingStatus.DISPATCHING.name
-            event.partCount = partCount
-            event.updatedAt = System.currentTimeMillis()
-            val statusQueued = database.runInTransaction<Boolean> {
-                dao.updateOutgoing(event)
-                queueOutgoingStatus(event)
+        ) {
+            val now = System.currentTimeMillis()
+            var claimed = false
+            var statusQueued = false
+            database.runInTransaction {
+                claimed = dao.claimCreatedForDispatch(eventId, partCount, now) == 1
+                if (claimed) {
+                    val event = dao.findOutgoing(eventId)
+                    if (event != null) statusQueued = queueOutgoingStatus(event)
+                }
             }
             if (statusQueued) OutboxScheduler.enqueueNow(context)
-            notifyChanged()
-            onComplete?.invoke()
+            if (claimed) notifyChanged()
+            onClaimed?.invoke(claimed)
         }
     }
 
@@ -381,6 +380,9 @@ class PocEventStore private constructor(private val context: Context) {
                     event.updatedAt = System.currentTimeMillis()
                     if (resultCode == Activity.RESULT_OK) {
                         event.sentPartCount += 1
+                        if (event.failedPartCount > 0) {
+                            event.errorDetail = OutgoingStatusDetails.multipartFailure(event)
+                        }
                         if (
                             event.sentPartCount >= event.partCount
                             && event.failedPartCount == 0
@@ -396,7 +398,14 @@ class PocEventStore private constructor(private val context: Context) {
                     } else {
                         event.failedPartCount += 1
                         event.status = OutgoingStatus.FAILED.name
-                        event.errorDetail = smsResultDescription(resultCode)
+                        event.errorDetail = if (event.sentPartCount > 0) {
+                            OutgoingStatusDetails.multipartFailure(
+                                event,
+                                smsResultDescription(resultCode)
+                            )
+                        } else {
+                            smsResultDescription(resultCode)
+                        }
                     }
                     dao.updateOutgoing(event)
                     statusQueued = queueOutgoingStatus(event)
@@ -560,20 +569,25 @@ class PocEventStore private constructor(private val context: Context) {
     }
 }
 
-object OutgoingRecoveryPolicy {
-    fun failureDetail(previousStatus: String?): String = when (previousStatus) {
-        OutgoingStatus.CREATED.name ->
-            "Interrupted before SMS dispatch; not retried automatically"
-        OutgoingStatus.DISPATCHING.name ->
-            "SMS dispatch outcome unknown after process interruption; not retried automatically"
-        else ->
-            "Interrupted SMS dispatch; not retried automatically"
+object OutgoingStatusDetails {
+    fun multipartFailure(
+        event: OutgoingSmsEventEntity,
+        failure: String? = event.errorDetail
+    ): String {
+        val detail = failure?.takeIf { it.isNotBlank() } ?: "One or more SMS parts failed"
+        return "Partial SMS failure: ${event.sentPartCount}/${event.partCount} parts accepted; $detail"
     }
+}
+
+object OutgoingRecoveryPolicy {
+    fun dispatchOutcomeUnknown(): String =
+        "SMS dispatch outcome unknown after process interruption; awaiting late callback"
 }
 
 enum class OutgoingStatus {
     CREATED,
     DISPATCHING,
+    OUTCOME_UNKNOWN,
     SENT_TO_MODEM,
     DELIVERED,
     FAILED

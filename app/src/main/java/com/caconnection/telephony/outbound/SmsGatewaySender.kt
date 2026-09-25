@@ -15,6 +15,12 @@ import com.caconnection.telephony.subscription.SubscriptionSnapshot
 import java.util.UUID
 
 class SmsGatewaySender(private val context: Context) {
+    fun recoverInterrupted() {
+        PocEventStore.get(context).recoverInterruptedOutgoing(
+            resumeCreated = ::dispatch
+        )
+    }
+
     fun send(
         recipient: String,
         body: String,
@@ -112,8 +118,8 @@ class SmsGatewaySender(private val context: Context) {
             PocEventStore.get(context).markDispatching(
                 eventId = event.eventId,
                 partCount = parts.size,
-                onComplete = {
-                    sendPrepared(event, manager, parts)
+                onClaimed = { claimed ->
+                    if (claimed) sendPrepared(event, manager, parts)
                 },
                 onFailure = {
                     PocEventStore.get(context).markDispatchFailure(

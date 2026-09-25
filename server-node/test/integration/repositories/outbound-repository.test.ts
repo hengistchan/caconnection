@@ -365,26 +365,67 @@ describe('OutboundRepository', () => {
         .run(now - OUTBOUND_SENT_SETTLE_MS - 1, commandId);
 
       const settled = outboundRepo.list(secrets, 100)[0];
-      expect(settled.status).toBe('EXPIRED');
+      expect(settled.status).toBe('OUTCOME_UNKNOWN');
       expect(settled.errorDetail).toBe('Delivery unconfirmed');
     });
 
-    it.each([
-      ['CREATED', 'Interrupted before SMS dispatch'],
-      ['DISPATCHING', 'SMS dispatch outcome unknown'],
-    ])('should settle stale %s commands instead of leaving them in progress', (status, detail) => {
+    it('should leave stale CREATED commands recoverable by Android', () => {
       const now = Date.now();
       outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', now, 3600);
       const claimed = outboundRepo.claim('test-device', secret, 10, now + 1);
       const commandId = claimed[0].commandId;
 
-      outboundRepo.updateStatus('test-device', { commandId, status }, now + 2);
+      outboundRepo.updateStatus('test-device', { commandId, status: 'CREATED' }, now + 2);
       db.prepare('UPDATE outbound_commands SET updated_at = ? WHERE command_id = ?')
         .run(now - OUTBOUND_DISPATCH_SETTLE_MS - 1, commandId);
 
       const settled = outboundRepo.list(deviceRepo.loadSecrets(), 100)[0];
-      expect(settled.status).toBe('FAILED');
-      expect(settled.errorDetail).toBe(detail);
+      expect(settled.status).toBe('CREATED');
+    });
+
+    it('should make stale DISPATCHING provisional and accept a late callback', () => {
+      const now = Date.now();
+      outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', now, 3600);
+      const claimed = outboundRepo.claim('test-device', secret, 10, now + 1);
+      const commandId = claimed[0].commandId;
+
+      outboundRepo.updateStatus('test-device', { commandId, status: 'DISPATCHING' }, now + 2);
+      db.prepare('UPDATE outbound_commands SET updated_at = ? WHERE command_id = ?')
+        .run(now - OUTBOUND_DISPATCH_SETTLE_MS - 1, commandId);
+
+      const unknown = outboundRepo.list(deviceRepo.loadSecrets(), 100)[0];
+      expect(unknown.status).toBe('OUTCOME_UNKNOWN');
+      expect(unknown.errorDetail).toBe('SMS dispatch outcome unknown');
+
+      outboundRepo.updateStatus('test-device', {
+        commandId,
+        status: 'CREATED',
+      }, now + 3);
+      expect(outboundRepo.list(deviceRepo.loadSecrets(), 100)[0].status)
+        .toBe('OUTCOME_UNKNOWN');
+
+      outboundRepo.updateStatus('test-device', {
+        commandId,
+        status: 'SENT_TO_MODEM',
+        resultCode: 0,
+      }, now + 4);
+      expect(outboundRepo.list(deviceRepo.loadSecrets(), 100)[0].status).toBe('SENT_TO_MODEM');
+    });
+
+    it('should allow a late delivery callback to correct delivery unknown', () => {
+      const now = Date.now();
+      outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', now, 3600);
+      const claimed = outboundRepo.claim('test-device', secret, 10, now + 1);
+      const commandId = claimed[0].commandId;
+
+      outboundRepo.updateStatus('test-device', { commandId, status: 'SENT_TO_MODEM' }, now + 2);
+      db.prepare('UPDATE outbound_commands SET updated_at = ? WHERE command_id = ?')
+        .run(now - OUTBOUND_SENT_SETTLE_MS - 1, commandId);
+      expect(outboundRepo.list(deviceRepo.loadSecrets(), 100)[0].status)
+        .toBe('OUTCOME_UNKNOWN');
+
+      outboundRepo.updateStatus('test-device', { commandId, status: 'DELIVERED' }, now + 3);
+      expect(outboundRepo.list(deviceRepo.loadSecrets(), 100)[0].status).toBe('DELIVERED');
     });
 
     it('should not downgrade status', () => {

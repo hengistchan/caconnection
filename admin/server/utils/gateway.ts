@@ -404,6 +404,7 @@ export interface GatewayOutboundMessage {
     | 'CLAIMED'
     | 'CREATED'
     | 'DISPATCHING'
+    | 'OUTCOME_UNKNOWN'
     | 'SENT_TO_MODEM'
     | 'DELIVERED'
     | 'FAILED'
@@ -599,6 +600,7 @@ function parseOutboundMessage(value: unknown): GatewayOutboundMessage {
       'CLAIMED',
       'CREATED',
       'DISPATCHING',
+      'OUTCOME_UNKNOWN',
       'SENT_TO_MODEM',
       'DELIVERED',
       'FAILED',

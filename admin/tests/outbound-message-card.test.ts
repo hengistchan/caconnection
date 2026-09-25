@@ -91,4 +91,32 @@ describe('OutboundMessageCard', () => {
     expect(wrapper.text()).toContain('Requested SIM is not active')
     expect(wrapper.text()).not.toContain('Private failed message')
   })
+
+  it('renders provisional unknown outcomes as warnings instead of failures', () => {
+    const wrapper = mount(OutboundMessageCard, {
+      props: {
+        message: {
+          id: 46,
+          commandId: 'unknownoutcome12',
+          deviceId: 'phone-1',
+          slotIndex: 0,
+          recipient: '10086',
+          body: 'Private uncertain message',
+          status: 'OUTCOME_UNKNOWN',
+          createdAt: 1_757_894_404_000,
+          expiresAt: 1_757_894_704_000,
+          claimedAt: 1_757_894_405_000,
+          updatedAt: 1_757_894_406_000,
+          lastResultCode: null,
+          errorDetail: 'SMS dispatch outcome unknown',
+        },
+      },
+    })
+
+    expect(wrapper.find('.badge-warning').exists()).toBe(true)
+    expect(wrapper.find('.inline-alert-warning').exists()).toBe(true)
+    expect(wrapper.find('.badge-danger').exists()).toBe(false)
+    expect(wrapper.text()).toContain('结果待确认')
+    expect(wrapper.text()).not.toContain('Private uncertain message')
+  })
 })

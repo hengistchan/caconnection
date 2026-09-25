@@ -293,6 +293,7 @@
       "CLAIMED": "已领取",
       "CREATED": "已创建",
       "DISPATCHING": "正在发送",
+      "OUTCOME_UNKNOWN": "结果待确认",
       "SENT_TO_MODEM": "已提交基带",
       "DELIVERED": "已送达",
       "FAILED": "失败",

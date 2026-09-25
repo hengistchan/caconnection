@@ -139,6 +139,7 @@ export type GatewayOutboundStatus =
   | 'CLAIMED'
   | 'CREATED'
   | 'DISPATCHING'
+  | 'OUTCOME_UNKNOWN'
   | 'SENT_TO_MODEM'
   | 'DELIVERED'
   | 'FAILED'

@@ -24,14 +24,11 @@ export const DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300;
 // requeue requires expires_at > now, so a lease >= TTL leaves no recovery
 // window at all and a crashed client strands the command until expiry.
 export const OUTBOUND_COMMAND_LEASE_MS = 30 * 1000;
-// Once the device has acknowledged a command as CREATED/DISPATCHING, the
-// server must not leave it "in progress" forever. The Android client uses the
-// same two-minute window and deliberately fails rather than blindly re-sending
-// an SMS whose modem submission outcome may be unknown.
+// DISPATCHING straddles the external SmsManager call. After this window its
+// result becomes unknown, but late callbacks remain authoritative.
 export const OUTBOUND_DISPATCH_SETTLE_MS = 2 * 60 * 1000;
-// A command in SENT_TO_MODEM with no delivery report settles as EXPIRED after
-// this idle period — otherwise it stays "in progress" forever when the
-// operator never reports delivery.
+// A command in SENT_TO_MODEM with no delivery report becomes OUTCOME_UNKNOWN
+// after this idle period. A late delivery callback may still correct it.
 export const OUTBOUND_SENT_SETTLE_MS = 10 * 60 * 1000;
 export const DEFAULT_NOTIFICATION_RETRY_SECONDS = 5;
 export const MAX_NOTIFICATION_RETRY_SECONDS = 15 * 60;
@@ -72,6 +69,7 @@ export const OUTBOUND_COMMAND_STATUSES = new Set([
   'CLAIMED',
   'CREATED',
   'DISPATCHING',
+  'OUTCOME_UNKNOWN',
   'SENT_TO_MODEM',
   'DELIVERED',
   'FAILED',
@@ -84,6 +82,7 @@ export const OUTBOUND_STATUS_ORDER: Record<string, number> = {
   CLAIMED: 1,
   CREATED: 2,
   DISPATCHING: 3,
+  OUTCOME_UNKNOWN: 4,
   SENT_TO_MODEM: 4,
   DELIVERED: 5,
   FAILED: 5,

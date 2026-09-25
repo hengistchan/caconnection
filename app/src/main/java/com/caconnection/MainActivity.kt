@@ -1389,6 +1389,7 @@ class MainActivity : AppCompatActivity() {
         outgoingEvents.forEach { event ->
             val tone = when (event.status) {
                 "FAILED" -> Tone.ERROR
+                "OUTCOME_UNKNOWN" -> Tone.WARNING
                 "DELIVERED", "SENT_TO_MODEM" -> Tone.SUCCESS
                 else -> Tone.BLUE
             }

@@ -31,7 +31,13 @@
       </div>
     </dl>
 
-    <p v-if="message.errorDetail" class="inline-alert inline-alert-error">
+    <p
+      v-if="message.errorDetail"
+      class="inline-alert"
+      :class="message.status === 'OUTCOME_UNKNOWN'
+        ? 'inline-alert-warning'
+        : 'inline-alert-error'"
+    >
       {{ message.errorDetail }}
     </p>
 
@@ -92,6 +98,7 @@ const statusClass = computed(() => {
   if (props.message.status === 'FAILED' || props.message.status === 'EXPIRED') {
     return 'badge-danger'
   }
+  if (props.message.status === 'OUTCOME_UNKNOWN') return 'badge-warning'
   if (props.message.status === 'SENT_TO_MODEM') return 'badge-info'
   return 'badge-warning'
 })

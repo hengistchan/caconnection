@@ -5,18 +5,40 @@ import org.junit.Test
 
 class OutgoingRecoveryPolicyTest {
     @Test
-    fun createdFailureExplainsThatDispatchNeverStarted() {
+    fun dispatchingTimeoutRemainsProvisionalForLateCallbacks() {
         assertEquals(
-            "Interrupted before SMS dispatch; not retried automatically",
-            OutgoingRecoveryPolicy.failureDetail(OutgoingStatus.CREATED.name)
+            "SMS dispatch outcome unknown after process interruption; awaiting late callback",
+            OutgoingRecoveryPolicy.dispatchOutcomeUnknown()
         )
     }
 
     @Test
-    fun dispatchingFailureDoesNotClaimThatSmsWasUnsent() {
+    fun multipartFailureReportsThatSomePartsMayHaveBeenSent() {
+        val event = OutgoingSmsEventEntity(
+            "event",
+            "10086",
+            "body",
+            1L,
+            1L,
+            1,
+            0,
+            "carrier",
+            "remote-command",
+            OutgoingStatus.FAILED.name,
+            3,
+            2,
+            0,
+            1,
+            1,
+            "No service",
+            "PENDING",
+            null,
+            null
+        )
+
         assertEquals(
-            "SMS dispatch outcome unknown after process interruption; not retried automatically",
-            OutgoingRecoveryPolicy.failureDetail(OutgoingStatus.DISPATCHING.name)
+            "Partial SMS failure: 2/3 parts accepted; No service",
+            OutgoingStatusDetails.multipartFailure(event)
         )
     }
 }

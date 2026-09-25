@@ -215,7 +215,16 @@ export class OutboundRepository {
     if (!row) return false;
 
     if (['DELIVERED', 'FAILED', 'EXPIRED'].includes(row.status)) return true;
-    if ((OUTBOUND_STATUS_ORDER[status] ?? 0) < (OUTBOUND_STATUS_ORDER[row.status] ?? 0)) return true;
+    // OUTCOME_UNKNOWN is provisional. A delayed Android callback is more
+    // authoritative and may correct it to SENT_TO_MODEM, DELIVERED or FAILED.
+    if (
+      row.status === 'OUTCOME_UNKNOWN'
+      && !['SENT_TO_MODEM', 'DELIVERED', 'FAILED'].includes(status)
+    ) return true;
+    if (
+      row.status !== 'OUTCOME_UNKNOWN'
+      && (OUTBOUND_STATUS_ORDER[status] ?? 0) < (OUTBOUND_STATUS_ORDER[row.status] ?? 0)
+    ) return true;
 
     const normalizedError = errorDetail == null ? null : errorDetail.trim().slice(0, 256);
     this.db.prepare('UPDATE outbound_commands SET status = ?, updated_at = ?, last_result_code = ?, error_detail = ? WHERE command_id = ? AND device_id = ?').run(status, nowMs, resultCode ?? null, normalizedError, commandId, deviceId);
@@ -223,34 +232,25 @@ export class OutboundRepository {
   }
 
   /**
-   * CREATED means the device persisted the command but did not confirm modem
-   * dispatch. DISPATCHING straddles the non-transactional SmsManager call, so
-   * replay could duplicate a real SMS. Both states therefore converge to a
-   * terminal failure after a short window instead of remaining in progress or
-   * being automatically requeued.
+   * CREATED is a durable, safe-to-retry intent and is recovered by Android.
+   * DISPATCHING straddles the non-transactional SmsManager call, so replay
+   * could duplicate a real SMS. It becomes provisional unknown instead.
    */
   private settleInterruptedDispatches(nowMs: number, deviceId?: string): void {
     const cutoff = nowMs - OUTBOUND_DISPATCH_SETTLE_MS;
     if (deviceId === undefined) {
       this.db.prepare(`
         UPDATE outbound_commands
-        SET status = 'FAILED', updated_at = ?,
-            error_detail = CASE status
-              WHEN 'CREATED' THEN 'Interrupted before SMS dispatch'
-              ELSE 'SMS dispatch outcome unknown'
-            END
-        WHERE status IN ('CREATED', 'DISPATCHING') AND updated_at <= ?
+        SET status = 'OUTCOME_UNKNOWN', updated_at = ?,
+            error_detail = 'SMS dispatch outcome unknown'
+        WHERE status = 'DISPATCHING' AND updated_at <= ?
       `).run(nowMs, cutoff);
     } else {
       this.db.prepare(`
         UPDATE outbound_commands
-        SET status = 'FAILED', updated_at = ?,
-            error_detail = CASE status
-              WHEN 'CREATED' THEN 'Interrupted before SMS dispatch'
-              ELSE 'SMS dispatch outcome unknown'
-            END
-        WHERE device_id = ? AND status IN ('CREATED', 'DISPATCHING')
-          AND updated_at <= ?
+        SET status = 'OUTCOME_UNKNOWN', updated_at = ?,
+            error_detail = 'SMS dispatch outcome unknown'
+        WHERE device_id = ? AND status = 'DISPATCHING' AND updated_at <= ?
       `).run(nowMs, deviceId, cutoff);
     }
   }
@@ -262,11 +262,11 @@ export class OutboundRepository {
   private settleUnconfirmedSends(nowMs: number, deviceId?: string): void {
     if (deviceId === undefined) {
       this.db.prepare(
-        "UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ?, error_detail = 'Delivery unconfirmed' WHERE status = 'SENT_TO_MODEM' AND updated_at <= ?",
+        "UPDATE outbound_commands SET status = 'OUTCOME_UNKNOWN', updated_at = ?, error_detail = 'Delivery unconfirmed' WHERE status = 'SENT_TO_MODEM' AND updated_at <= ?",
       ).run(nowMs, nowMs - OUTBOUND_SENT_SETTLE_MS);
     } else {
       this.db.prepare(
-        "UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ?, error_detail = 'Delivery unconfirmed' WHERE device_id = ? AND status = 'SENT_TO_MODEM' AND updated_at <= ?",
+        "UPDATE outbound_commands SET status = 'OUTCOME_UNKNOWN', updated_at = ?, error_detail = 'Delivery unconfirmed' WHERE device_id = ? AND status = 'SENT_TO_MODEM' AND updated_at <= ?",
       ).run(nowMs, deviceId, nowMs - OUTBOUND_SENT_SETTLE_MS);
     }
   }
