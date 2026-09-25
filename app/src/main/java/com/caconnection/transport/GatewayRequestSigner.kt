@@ -11,8 +11,15 @@ import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Outbound envelope version. Bound into the payload AAD so a recipient cannot
+ * reinterpret the ciphertext under another schema version without breaking
+ * the GCM tag. Must stay in sync with the server's payload-crypto.
+ */
+private const val OUTBOUND_SCHEMA_VERSION = 2
+
 data class GatewayEnvelope(
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = OUTBOUND_SCHEMA_VERSION,
     val deliveryId: String,
     val sourceEventId: String,
     val eventType: String,
@@ -126,7 +133,7 @@ object GatewayRequestSigner {
 
     fun encryptionAad(event: TransportEvent, deviceId: String): ByteArray =
         listOf(
-            "2",
+            OUTBOUND_SCHEMA_VERSION.toString(),
             event.deliveryId,
             event.sourceEventId,
             event.eventType,

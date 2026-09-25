@@ -22,6 +22,7 @@ class OutboxWorker(
         private const val BATCH_SIZE = 10
         private const val MAX_EVENTS_PER_RUN = 100
         private const val IN_PROGRESS_LEASE_MS = 2 * 60 * 1_000L
+        private const val SUCCESS_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000L
         const val KEY_RETRY_WAKE = "retry_wake"
     }
 
@@ -86,6 +87,12 @@ class OutboxWorker(
             }
 
             scheduleRemainingWork(dao.getEarliestScheduledOutboxAt())
+            // SUCCESS rows hold copies of sender/body payloads; prune old ones
+            // instead of accumulating them until a manual history clear.
+            val pruned = dao.clearSuccessfulOutboxEventsBefore(
+                startedAt - SUCCESS_RETENTION_MS
+            )
+            if (pruned > 0) Log.i(TAG, "Pruned $pruned settled outbox rows")
             Log.i(
                 TAG,
                 "Outbox drain complete processed=$processed success=$succeeded " +

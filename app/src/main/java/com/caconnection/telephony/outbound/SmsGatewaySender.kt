@@ -144,14 +144,14 @@ class SmsGatewaySender(private val context: Context) {
                     action = SmsSentReceiver.ACTION_SMS_SENT,
                     eventId = event.eventId,
                     partIndex = index,
-                    requestCode = requestCode(event.eventId, index, false)
+                    requestCode = requestCode(delivery = false)
                 )
                 deliveryIntents += callbackIntent(
                     receiverClass = SmsDeliveryReceiver::class.java,
                     action = SmsDeliveryReceiver.ACTION_SMS_DELIVERED,
                     eventId = event.eventId,
                     partIndex = index,
-                    requestCode = requestCode(event.eventId, index, true)
+                    requestCode = requestCode(delivery = true)
                 )
             }
 
@@ -199,9 +199,17 @@ class SmsGatewaySender(private val context: Context) {
         )
     }
 
-    private fun requestCode(eventId: String, partIndex: Int, delivery: Boolean): Int {
-        val salt = if (delivery) 0x5A5A else 0x2C2C
-        return (eventId.hashCode() * 31 + partIndex * 2 + salt) and 0x7fffffff
+    // PendingIntent equality ignores extras and FLAG_UPDATE_CURRENT overwrites
+    // the extras of an existing match, so a hash-based requestCode can attach
+    // one command's part callbacks to another command's row on collision.
+    // A random-seeded monotonic counter makes cross-event collisions (and
+    // collisions with callbacks left over from a previous process) negligible.
+    private val requestCodeSeed = (System.nanoTime() and 0x1FFF_FFFF).toInt()
+    private val requestCodeCounter = java.util.concurrent.atomic.AtomicInteger(requestCodeSeed)
+
+    private fun requestCode(delivery: Boolean): Int {
+        val salt = if (delivery) 0x2000_0000 else 0
+        return (requestCodeCounter.getAndIncrement() and 0x1FFF_FFFF) or salt
     }
 
     companion object {

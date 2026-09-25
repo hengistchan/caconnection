@@ -18,8 +18,20 @@ data class RemoteSmsCommand(
 )
 
 sealed class RemoteCommandClaimResult {
-    data class Success(val commands: List<RemoteSmsCommand>) :
-        RemoteCommandClaimResult()
+    /**
+     * A claim response. [rejected] commands failed validation individually —
+     * one bad command must never discard the rest of the batch (the server has
+     * already marked every row CLAIMED).
+     */
+    data class Success(
+        val commands: List<RemoteSmsCommand>,
+        val rejected: List<RejectedCommand> = emptyList()
+    ) : RemoteCommandClaimResult()
+
+    data class RejectedCommand(
+        val commandId: String?,
+        val reason: String
+    )
 
     data class RetryableFailure(val retryAfterMillis: Long? = null) :
         RemoteCommandClaimResult()
@@ -39,6 +51,10 @@ class RemoteCommandClient(
     }
 ) {
     private val gson = Gson()
+
+    private companion object {
+        val COMMAND_ID_PATTERN = Regex("""[A-Za-z0-9_-]{16,128}""")
+    }
 
     suspend fun claim(limit: Int = 5): RemoteCommandClaimResult =
         withContext(Dispatchers.IO) {
@@ -93,24 +109,55 @@ class RemoteCommandClient(
         body: String,
         receivedAt: Long
     ): RemoteCommandClaimResult {
-        return runCatching {
-            val root = JsonParser.parseString(body).asJsonObject
-            val commands = root["commands"].asJsonArray.map { element ->
-                gson.fromJson(element, RemoteSmsCommand::class.java).also {
-                    require(it.commandId.matches(Regex("""[A-Za-z0-9_-]{16,128}""")))
-                    require(it.deviceId == settings.deviceId)
-                    require(it.slotIndex in 0..1)
-                    require(it.recipient.isNotBlank())
-                    require(it.body.isNotBlank())
-                    require(it.status == "CLAIMED")
-                    require(it.createdAt >= 0)
-                    require(it.expiresAt > it.createdAt)
-                    require(it.expiresAt > receivedAt)
-                }
+        val root = runCatching { JsonParser.parseString(body).asJsonObject }
+            .getOrElse { return RemoteCommandClaimResult.RetryableFailure() }
+        val elements = runCatching {
+            root["commands"]?.asJsonArray
+                ?: error("claim response has no commands array")
+        }.getOrElse { return RemoteCommandClaimResult.RetryableFailure() }
+
+        val valid = mutableListOf<RemoteSmsCommand>()
+        val rejected = mutableListOf<RemoteCommandClaimResult.RejectedCommand>()
+        elements.forEach { element ->
+            // Gson bypasses Kotlin null-safety for absent JSON fields, so the
+            // validation itself is wrapped — a null field must reject one
+            // command, never throw out of the parse loop.
+            val command = runCatching {
+                gson.fromJson(element, RemoteSmsCommand::class.java)
+            }.getOrNull()
+            val reason = if (command == null) {
+                "Malformed command entry"
+            } else {
+                runCatching { validationError(command, receivedAt) }
+                    .getOrElse { "Malformed command entry" }
             }
-            RemoteCommandClaimResult.Success(commands)
-        }.getOrElse {
-            RemoteCommandClaimResult.PermanentFailure(502)
+            if (command != null && reason == null) {
+                valid += command
+            } else {
+                rejected += RemoteCommandClaimResult.RejectedCommand(
+                    runCatching { command?.commandId }.getOrNull()
+                        ?.takeIf { it.matches(COMMAND_ID_PATTERN) },
+                    reason ?: "Malformed command entry"
+                )
+            }
         }
+        return RemoteCommandClaimResult.Success(valid, rejected)
+    }
+
+    /**
+     * Per-command validation. A failure rejects exactly one command — the
+     * claim response as a whole is still usable.
+     */
+    private fun validationError(command: RemoteSmsCommand, receivedAt: Long): String? {
+        if (!command.commandId.matches(COMMAND_ID_PATTERN)) return "Invalid command id"
+        if (command.deviceId != settings.deviceId) return "Command targets another device"
+        if (command.slotIndex !in 0..1) return "Invalid SIM slot"
+        if (command.recipient.isBlank()) return "Missing recipient"
+        if (command.body.isBlank()) return "Missing body"
+        if (command.status != "CLAIMED") return "Unexpected command status ${command.status}"
+        if (command.createdAt < 0) return "Invalid creation time"
+        if (command.expiresAt <= command.createdAt) return "Invalid expiry"
+        if (command.expiresAt <= receivedAt) return "Expired before execution"
+        return null
     }
 }

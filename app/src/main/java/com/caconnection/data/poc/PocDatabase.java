@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
                 CallIdentityEventEntity.class,
                 OutboxEventEntity.class
         },
-        version = 7,
+        version = 8,
         exportSchema = true
 )
 public abstract class PocDatabase extends RoomDatabase {
@@ -161,6 +161,27 @@ public abstract class PocDatabase extends RoomDatabase {
         }
     };
 
+    static final Migration MIGRATION_7_8 = new Migration(7, 8) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            // Hot-path indices: the outbox drain loop queries
+            // (status, nextRetryAt) up to 10x per pass and history screens
+            // order by createdAt / persistedAt.
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_outbox_events_status_nextRetryAt` " +
+                "ON `outbox_events` (`status`, `nextRetryAt`)"
+            );
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_outbox_events_createdAt` " +
+                "ON `outbox_events` (`createdAt`)"
+            );
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_incoming_sms_events_persistedAt` " +
+                "ON `incoming_sms_events` (`persistedAt`)"
+            );
+        }
+    };
+
     public abstract PocDao pocDao();
 
     public static PocDatabase get(Context context) {
@@ -178,7 +199,8 @@ public abstract class PocDatabase extends RoomDatabase {
                                     MIGRATION_3_4,
                                     MIGRATION_4_5,
                                     MIGRATION_5_6,
-                                    MIGRATION_6_7
+                                    MIGRATION_6_7,
+                                    MIGRATION_7_8
                             )
                             .build();
                 }

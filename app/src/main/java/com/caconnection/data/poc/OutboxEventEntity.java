@@ -5,7 +5,14 @@ import androidx.room.Entity;
 import androidx.room.Index;
 import androidx.room.PrimaryKey;
 
-@Entity(tableName = "outbox_events", indices = {@Index(value = {"idempotencyKey"}, unique = true)})
+@Entity(
+        tableName = "outbox_events",
+        indices = {
+                @Index(value = {"idempotencyKey"}, unique = true),
+                @Index(value = {"status", "nextRetryAt"}),
+                @Index(value = {"createdAt"})
+        }
+)
 public class OutboxEventEntity {
     @PrimaryKey
     @NonNull

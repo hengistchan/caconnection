@@ -35,24 +35,24 @@ class PocEventStore private constructor(private val context: Context) {
 
     fun insertIncomingWithOutbox(
         event: IncomingSmsEventEntity,
+        idempotencyKey: String,
         scheduleUpload: Boolean = true,
         onComplete: ((inserted: Boolean) -> Unit)? = null,
         onFailure: ((Throwable) -> Unit)? = null
     ) {
         executor.execute {
             runCatching {
-                val outboxEvent = OutboxHelper.createOutboxForIncoming(event)
+                val outboxEvent = OutboxHelper.createOutboxForIncoming(event, idempotencyKey)
                 var inserted = false
                 database.runInTransaction {
                     // The manifest receiver and the runtime HyperOS fallback can
-                    // observe the same broadcast. The stable SMS idempotency key
-                    // prevents duplicate local rows and duplicate uploads.
-                    if (dao.findOutboxByIdempotencyKey(
-                            outboxEvent.idempotencyKey
-                        ) == null
-                    ) {
+                    // observe the same broadcast. The unique idempotencyKey index
+                    // is the single cross-process arbiter: only the transaction
+                    // whose outbox insert actually landed may insert the incoming
+                    // row. A pre-check alone races between :sms_receiver and main.
+                    val outboxRowId = dao.insertOutbox(outboxEvent)
+                    if (outboxRowId != -1L) {
                         dao.insertIncoming(event)
-                        dao.insertOutbox(outboxEvent)
                         inserted = true
                     }
                 }
@@ -60,10 +60,18 @@ class PocEventStore private constructor(private val context: Context) {
                 if (inserted) notifyChanged()
                 inserted
             }.onSuccess { inserted ->
-                onComplete?.invoke(inserted)
+                // Callbacks touch the spool store; a throwing callback must not
+                // kill the store executor thread.
+                runCatching { onComplete?.invoke(inserted) }
+                    .onFailure { error ->
+                        Log.e(TAG, "Incoming SMS completion callback failed", error)
+                    }
             }.onFailure { error ->
                 Log.e(TAG, "Unable to persist incoming SMS and Outbox row", error)
-                onFailure?.invoke(error)
+                runCatching { onFailure?.invoke(error) }
+                    .onFailure { callbackError ->
+                        Log.e(TAG, "Incoming SMS failure callback failed", callbackError)
+                    }
             }
         }
     }
@@ -152,17 +160,28 @@ class PocEventStore private constructor(private val context: Context) {
             onFailure = onFailure
         ) {
             var inserted = false
+            var resumeDispatch = false
             var statusQueued = false
             database.runInTransaction {
-                if (dao.findOutgoing(event.eventId) == null) {
+                val existing = dao.findOutgoing(event.eventId)
+                if (existing == null) {
                     dao.insertOutgoing(event)
                     inserted = true
                     statusQueued = queueOutgoingStatus(event)
+                } else if (
+                    existing.status == OutgoingStatus.CREATED.name &&
+                    existing.partCount == 0
+                ) {
+                    // Persisted but never dispatched: the process died between
+                    // the Room write and the modem dispatch. Re-dispatch — a
+                    // row in any later state means sendTextMessage was already
+                    // reached and re-sending would duplicate the SMS.
+                    resumeDispatch = true
                 }
             }
             if (statusQueued) OutboxScheduler.enqueueNow(context)
             notifyChanged()
-            if (inserted) dispatch()
+            if (inserted || resumeDispatch) dispatch()
             onPersisted?.invoke()
         }
     }
@@ -302,6 +321,10 @@ class PocEventStore private constructor(private val context: Context) {
                             event.status = OutgoingStatus.DELIVERED.name
                         }
                     } else {
+                        // A failed delivery report is a terminal outcome —
+                        // without this the row sits in SENT_TO_MODEM forever
+                        // when the operator never confirms delivery.
+                        event.status = OutgoingStatus.FAILED.name
                         event.errorDetail =
                             "Delivery report result=$resultCode (operator-dependent)"
                     }
@@ -350,13 +373,17 @@ class PocEventStore private constructor(private val context: Context) {
         executeSafely("clear local event history") {
             database.runInTransaction {
                 dao.clearIncoming()
-                dao.clearOutgoing()
+                // Remote-command rows and their status uploads are operational
+                // state: deleting them strands the server row at CLAIMED and a
+                // lease requeue re-sends the SMS to the recipient a second
+                // time. Keep them until the command settles server-side.
+                dao.clearLocalOutgoing()
                 dao.clearNotifications()
                 dao.clearCalls()
                 dao.clearCallIdentities()
                 // Outbox rows contain copies of sender/body data and must
                 // follow the same user-visible clear operation.
-                dao.clearOutbox()
+                dao.clearOutboxKeepingRemoteStatus()
             }
             notifyChanged()
             onComplete?.invoke()

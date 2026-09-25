@@ -2,9 +2,10 @@ package com.caconnection.data.poc;
 
 import androidx.annotation.NonNull;
 import androidx.room.Entity;
+import androidx.room.Index;
 import androidx.room.PrimaryKey;
 
-@Entity(tableName = "incoming_sms_events")
+@Entity(tableName = "incoming_sms_events", indices = {@Index(value = {"persistedAt"})})
 public class IncomingSmsEventEntity {
     @PrimaryKey
     @NonNull

@@ -10,11 +10,13 @@ class OutboxHelperTest {
     @Test
     fun createsPendingOutboxWithFullSha256IdempotencyKey() {
         val incoming = incoming()
+        val key = OutboxHelper.generateIdempotencyKey(incoming)
 
-        val outbox = OutboxHelper.createOutboxForIncoming(incoming)
+        val outbox = OutboxHelper.createOutboxForIncoming(incoming, key)
 
         assertTrue(outbox.eventId.isNotBlank())
         assertTrue(outbox.idempotencyKey.matches(Regex("sms_[0-9a-f]{64}")))
+        assertEquals(key, outbox.idempotencyKey)
         assertEquals(incoming.eventId, outbox.incomingEventId)
         assertEquals(OutboxStatus.PENDING.name, outbox.status)
         assertEquals(0, outbox.retryCount)
@@ -35,26 +37,45 @@ class OutboxHelperTest {
         )
 
         assertEquals(
-            OutboxHelper.createOutboxForIncoming(first).idempotencyKey,
-            OutboxHelper.createOutboxForIncoming(duplicate).idempotencyKey
+            OutboxHelper.generateIdempotencyKey(first),
+            OutboxHelper.generateIdempotencyKey(duplicate)
         )
     }
 
     @Test
     fun identicalContentOnDifferentSimGetsDifferentIdempotencyKey() {
-        val first = incoming(subscriptionId = 1, slotIndex = 0)
-        val second = incoming(
-            eventId = UUID.randomUUID().toString(),
-            originatingAddress = first.originatingAddress,
-            body = first.body,
-            receivedAt = first.receivedAt,
-            subscriptionId = 2,
+        assertNotEquals(
+            OutboxHelper.incomingIdempotencyKey("+1234567890", 1_789_189_395_000L, "Test", 1, 1, 0),
+            OutboxHelper.incomingIdempotencyKey("+1234567890", 1_789_189_395_000L, "Test", 1, 2, 1)
+        )
+    }
+
+    /**
+     * The key is derived only from immutable broadcast facts. Live SIM
+     * resolution state must never influence it, otherwise a spool replay and
+     * the original attempt compute two keys for the same SMS.
+     */
+    @Test
+    fun keyIsStableWhenResolutionStateChanges() {
+        val staged = incoming(subscriptionId = null, slotIndex = null)
+        val resolved = incoming(
+            eventId = staged.eventId,
+            originatingAddress = staged.originatingAddress,
+            body = staged.body,
+            receivedAt = staged.receivedAt,
+            subscriptionId = 42,
             slotIndex = 1
         )
 
-        assertNotEquals(
-            OutboxHelper.createOutboxForIncoming(first).idempotencyKey,
-            OutboxHelper.createOutboxForIncoming(second).idempotencyKey
+        assertEquals(
+            OutboxHelper.incomingIdempotencyKey(
+                staged.originatingAddress, staged.receivedAt, staged.body,
+                staged.partCount, subscriptionId = null, slotIndex = null
+            ),
+            OutboxHelper.incomingIdempotencyKey(
+                resolved.originatingAddress, resolved.receivedAt, resolved.body,
+                resolved.partCount, subscriptionId = null, slotIndex = null
+            )
         )
     }
 
@@ -62,7 +83,10 @@ class OutboxHelperTest {
     fun payloadContainsRequiredInboundFields() {
         val incoming = incoming()
 
-        val payload = OutboxHelper.createOutboxForIncoming(incoming).payloadData
+        val payload = OutboxHelper.createOutboxForIncoming(
+            incoming,
+            OutboxHelper.generateIdempotencyKey(incoming)
+        ).payloadData
 
         assertTrue(payload.contains(incoming.eventId))
         assertTrue(payload.contains(incoming.originatingAddress))

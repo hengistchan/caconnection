@@ -1,7 +1,9 @@
 package com.caconnection.telephony.inbound
 
 import android.content.Context
+import android.util.Log
 import com.caconnection.data.poc.IncomingSmsEventEntity
+import com.caconnection.data.poc.OutboxHelper
 import com.google.gson.Gson
 import java.io.File
 import java.io.FileOutputStream
@@ -12,16 +14,29 @@ import java.io.RandomAccessFile
  * Each entry is written atomically and can be recovered by the main process.
  */
 object SmsSpoolStore {
+    private const val TAG = "SmsSpoolStore"
     private const val DIRECTORY = "incoming-sms-spool"
     private const val LOCK_FILE = ".lock"
+    private const val CORRUPT_SUFFIX = ".corrupt"
     private val gson = Gson()
 
-    fun stage(context: Context, event: IncomingSmsEventEntity) {
-        write(context, SpoolEntry.fromEntity(event))
+    /**
+     * A staged SMS together with the idempotency key computed once at stage
+     * time. Replays must reuse the stored key — recomputing it from entity
+     * state that changes between staging and resolution would produce a
+     * second key for the same SMS and upload it twice.
+     */
+    data class SpooledSms(
+        val event: IncomingSmsEventEntity,
+        val idempotencyKey: String?
+    )
+
+    fun stage(context: Context, event: IncomingSmsEventEntity, idempotencyKey: String) {
+        write(context, SpoolEntry.fromEntity(event, idempotencyKey))
     }
 
-    fun update(context: Context, event: IncomingSmsEventEntity) {
-        write(context, SpoolEntry.fromEntity(event))
+    fun update(context: Context, event: IncomingSmsEventEntity, idempotencyKey: String) {
+        write(context, SpoolEntry.fromEntity(event, idempotencyKey))
     }
 
     fun remove(context: Context, eventId: String) {
@@ -31,7 +46,7 @@ object SmsSpoolStore {
         }
     }
 
-    fun loadAll(context: Context): List<IncomingSmsEventEntity> =
+    fun loadAll(context: Context): List<SpooledSms> =
         withDirectoryLock(context) { directory ->
             directory.listFiles { file ->
                 file.isFile && file.name.endsWith(".json")
@@ -40,8 +55,18 @@ object SmsSpoolStore {
                 .sortedBy(File::lastModified)
                 .mapNotNull { file ->
                     runCatching {
-                        gson.fromJson(file.readText(), SpoolEntry::class.java).toEntity()
-                    }.getOrNull()
+                        val entry = gson.fromJson(file.readText(), SpoolEntry::class.java)
+                            ?: error("empty spool entry")
+                        entry.toSpooled()
+                    }.getOrElse { error ->
+                        // Never drop an unreadable durability entry silently —
+                        // quarantine it so the loss stays visible.
+                        Log.e(TAG, "Quarantining unreadable SMS spool entry ${file.name}", error)
+                        runCatching {
+                            file.renameTo(File(directory, "${file.name}$CORRUPT_SUFFIX"))
+                        }
+                        null
+                    }
                 }
         }
 
@@ -64,12 +89,20 @@ object SmsSpoolStore {
         return File(protectedContext.noBackupFilesDir, DIRECTORY).apply { mkdirs() }
     }
 
+    // FileChannel.lock() is JVM-wide: a second overlapping acquisition from
+    // another thread of this process throws OverlappingFileLockException
+    // instead of blocking. Serialize threads in-process first, then take the
+    // file lock for cross-process exclusion (:sms_receiver vs main).
+    private val inProcessMutex = Any()
+
     private fun <T> withDirectoryLock(context: Context, block: (File) -> T): T {
         val directory = directory(context)
-        val lockFile = File(directory, LOCK_FILE)
-        RandomAccessFile(lockFile, "rw").channel.use { channel ->
-            channel.lock().use {
-                return block(directory)
+        synchronized(inProcessMutex) {
+            val lockFile = File(directory, LOCK_FILE)
+            RandomAccessFile(lockFile, "rw").channel.use { channel ->
+                channel.lock().use {
+                    return block(directory)
+                }
             }
         }
     }
@@ -90,8 +123,18 @@ object SmsSpoolStore {
         val rawExtras: String?,
         val providerWriteStatus: String?,
         val providerUri: String?,
-        val providerWriteError: String?
+        val providerWriteError: String?,
+        val idempotencyKey: String? = null
     ) {
+        fun toSpooled() = SpooledSms(toEntity(), idempotencyKey ?: legacyKey())
+
+        /**
+         * Entries staged before key persistence existed. Best effort: derive
+         * the historical content key so replayed entries still dedup against
+         * rows inserted by the old code.
+         */
+        private fun legacyKey() = OutboxHelper.generateIdempotencyKey(toEntity())
+
         fun toEntity() = IncomingSmsEventEntity(
             eventId,
             action,
@@ -112,7 +155,7 @@ object SmsSpoolStore {
         )
 
         companion object {
-            fun fromEntity(event: IncomingSmsEventEntity) = SpoolEntry(
+            fun fromEntity(event: IncomingSmsEventEntity, idempotencyKey: String) = SpoolEntry(
                 event.eventId,
                 event.action,
                 event.originatingAddress,
@@ -128,7 +171,8 @@ object SmsSpoolStore {
                 event.rawExtras,
                 event.providerWriteStatus,
                 event.providerUri,
-                event.providerWriteError
+                event.providerWriteError,
+                idempotencyKey
             )
         }
     }

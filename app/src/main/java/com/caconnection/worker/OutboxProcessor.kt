@@ -29,9 +29,12 @@ object OutboxRetryPolicy {
         val newRetryCount =
             if (currentRetryCount == Int.MAX_VALUE) Int.MAX_VALUE
             else currentRetryCount + 1
-        val delay = retryAfterMillis
-            ?.coerceIn(0L, MAX_RETRY_DELAY_MS)
-            ?: backoffDelay(newRetryCount)
+        // Retry-After is honoured when it asks for a longer wait, but never
+        // below the backoff floor: a Retry-After of 0/negative would spin the
+        // drain loop hot (re-claim in the same run, then re-arm immediately).
+        val backoffFloor = backoffDelay(newRetryCount)
+        val delay = (retryAfterMillis ?: backoffFloor)
+            .coerceIn(backoffFloor, MAX_RETRY_DELAY_MS)
         return RetryDecision(
             status = OutboxStatus.RETRY,
             retryCount = newRetryCount,

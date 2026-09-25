@@ -27,6 +27,16 @@ data class IncomingSimResolution(
     val notes: String
 )
 
+/**
+ * SIM identity exactly as broadcast in the intent extras. Unlike
+ * [IncomingSimResolution] these values never depend on live subscription
+ * lookups, so they are safe to use for idempotency keys.
+ */
+data class BroadcastSimCandidates(
+    val subscriptionId: Int?,
+    val slotIndex: Int?
+)
+
 object IncomingSimResolver {
     private val subscriptionKeys = listOf(
         "subscription",
@@ -46,14 +56,21 @@ object IncomingSimResolver {
         "phoneId"
     )
 
+    fun broadcastCandidates(extras: Map<String, Any?>): BroadcastSimCandidates =
+        BroadcastSimCandidates(
+            subscriptionId = firstInt(extras, subscriptionKeys),
+            slotIndex = firstInt(extras, slotKeys)
+        )
+
     fun resolve(
         action: String?,
         extras: Map<String, Any?>,
         subscriptions: List<SubscriptionSnapshot>
     ): IncomingSimResolution {
         val isDeliver = action == Telephony.Sms.Intents.SMS_DELIVER_ACTION
-        val subCandidate = firstInt(extras, subscriptionKeys)
-        val slotCandidate = firstInt(extras, slotKeys)
+        val candidates = broadcastCandidates(extras)
+        val subCandidate = candidates.subscriptionId
+        val slotCandidate = candidates.slotIndex
         val bySub = subCandidate?.let { candidate ->
             subscriptions.firstOrNull { it.subscriptionId == candidate }
         }
@@ -84,7 +101,17 @@ object IncomingSimResolver {
                 else ->
                     "subscription=$subCandidate was present but did not match the current active subscription list"
             }
-            return IncomingSimResolution(subCandidate, resolvedSlot, method, confidence, notes)
+            // Only an active-subscription match is publishable. An unmatched
+            // candidate is stale broadcast metadata (SIM swap, eSIM toggle) —
+            // forwarding it would route the event to a subscription that no
+            // longer exists.
+            return IncomingSimResolution(
+                subscriptionId = bySub?.subscriptionId,
+                slotIndex = if (bySub != null) resolvedSlot else null,
+                method = method,
+                confidence = confidence,
+                notes = notes
+            )
         }
 
         if (slotCandidate != null) {
@@ -95,7 +122,7 @@ object IncomingSimResolver {
             }
             return IncomingSimResolution(
                 subscriptionId = bySlot?.subscriptionId,
-                slotIndex = slotCandidate,
+                slotIndex = if (bySlot != null) slotCandidate else null,
                 method = method,
                 confidence = if (bySlot != null) ResolutionConfidence.MEDIUM else ResolutionConfidence.LOW,
                 notes = if (bySlot != null) {

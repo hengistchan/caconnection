@@ -91,4 +91,35 @@ class IncomingSimResolverTest {
         assertEquals(ResolutionMethod.UNRESOLVED, result.method)
         assertEquals(ResolutionConfidence.NONE, result.confidence)
     }
+
+    /**
+     * A subscription id that matches no active subscription is stale (SIM
+     * swap / eSIM toggle). It must not be published — the webhook payload
+     * would otherwise route the event to a subscription that no longer exists.
+     */
+    @Test
+    fun unmatchedSubscriptionExtraIsNotPublished() {
+        val result = IncomingSimResolver.resolve(
+            Telephony.Sms.Intents.SMS_RECEIVED_ACTION,
+            mapOf("subscription" to 99, "slot" to 1),
+            subscriptions
+        )
+
+        assertNull(result.subscriptionId)
+        assertNull(result.slotIndex)
+        assertEquals(ResolutionConfidence.LOW, result.confidence)
+    }
+
+    @Test
+    fun unmatchedSlotExtraIsNotPublished() {
+        val result = IncomingSimResolver.resolve(
+            Telephony.Sms.Intents.SMS_RECEIVED_ACTION,
+            mapOf("phone" to 3),
+            subscriptions
+        )
+
+        assertNull(result.subscriptionId)
+        assertNull(result.slotIndex)
+        assertEquals(ResolutionConfidence.LOW, result.confidence)
+    }
 }

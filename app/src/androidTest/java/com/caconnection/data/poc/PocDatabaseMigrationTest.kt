@@ -31,19 +31,20 @@ class PocDatabaseMigrationTest {
 
     @Test
     fun everyHistoricalSchemaMigratesToLatest() {
-        for (sourceVersion in 1..6) {
+        for (sourceVersion in 1..7) {
             context.deleteDatabase(TEST_DATABASE)
             helper.createDatabase(TEST_DATABASE, sourceVersion).close()
             helper.runMigrationsAndValidate(
                 TEST_DATABASE,
-                7,
+                8,
                 true,
                 PocDatabase.MIGRATION_1_2,
                 PocDatabase.MIGRATION_2_3,
                 PocDatabase.MIGRATION_3_4,
                 PocDatabase.MIGRATION_4_5,
                 PocDatabase.MIGRATION_5_6,
-                PocDatabase.MIGRATION_6_7
+                PocDatabase.MIGRATION_6_7,
+                PocDatabase.MIGRATION_7_8
             ).close()
         }
     }
