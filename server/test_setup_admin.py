@@ -193,6 +193,8 @@ class TestSetupAdminCredentials(unittest.TestCase):
 
             # Check scopes
             self.assertEqual(client["scopes"], ADMIN_SCOPES)
+            self.assertIn("devices:read", client["scopes"])
+            self.assertIn("devices:write", client["scopes"])
 
     def test_repeat_run_upgrades_admin_pairing_scope(self):
         with tempfile.TemporaryDirectory() as tmpdir:

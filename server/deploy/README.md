@@ -272,7 +272,7 @@ python3 ../setup_admin.py --runtime-dir runtime
 This creates:
 - `admin-ui-api-token.txt` - Gateway API token (`messages:read`,
   `messages:send`, `otp:claim`, `pairing:create`, and
-  `notifications:manage` scopes)
+  `notifications:manage`, `devices:read`, and `devices:write` scopes)
 - `admin-ui-password.txt` - Admin password (show once, then securely store)
 - `admin-config.json` - Admin configuration (password hash, session secret)
 - `admin-ui-totp-secret.txt` - Empty unless TOTP is explicitly enabled

@@ -42,6 +42,8 @@ ADMIN_SCOPES = [
     "otp:claim",
     "pairing:create",
     "notifications:manage",
+    "devices:read",
+    "devices:write",
 ]
 
 # Required fields in existing Gateway config
