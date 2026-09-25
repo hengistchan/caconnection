@@ -24,6 +24,10 @@ class RemoteCommandWorker(
     internal var clientOverride: RemoteCommandClient? = null
 
     override suspend fun doWork(): Result {
+        // Reconcile old local dispatch attempts on every durable poll. This
+        // covers a process that stays alive but never receives modem callbacks,
+        // while the startup reconciliation covers process death/recreation.
+        PocEventStore.get(applicationContext).recoverInterruptedOutgoing()
         val settings = GatewayTransportConfig.load(applicationContext)
         if (!settings.enabled || !settings.configured) {
             RemoteCommandScheduler.enqueue(

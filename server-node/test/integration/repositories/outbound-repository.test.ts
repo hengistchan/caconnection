@@ -9,7 +9,11 @@ import { DatabaseSync } from 'node:sqlite';
 import { OutboundRepository } from '../../../src/repositories/outbound-repository.js';
 import { DeviceRepository } from '../../../src/repositories/device-repository.js';
 import { initializeDatabase } from '../../../src/database/database.js';
-import { OUTBOUND_COMMAND_LEASE_MS, OUTBOUND_SENT_SETTLE_MS } from '../../../src/config/constants.js';
+import {
+  OUTBOUND_COMMAND_LEASE_MS,
+  OUTBOUND_DISPATCH_SETTLE_MS,
+  OUTBOUND_SENT_SETTLE_MS,
+} from '../../../src/config/constants.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -363,6 +367,24 @@ describe('OutboundRepository', () => {
       const settled = outboundRepo.list(secrets, 100)[0];
       expect(settled.status).toBe('EXPIRED');
       expect(settled.errorDetail).toBe('Delivery unconfirmed');
+    });
+
+    it.each([
+      ['CREATED', 'Interrupted before SMS dispatch'],
+      ['DISPATCHING', 'SMS dispatch outcome unknown'],
+    ])('should settle stale %s commands instead of leaving them in progress', (status, detail) => {
+      const now = Date.now();
+      outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', now, 3600);
+      const claimed = outboundRepo.claim('test-device', secret, 10, now + 1);
+      const commandId = claimed[0].commandId;
+
+      outboundRepo.updateStatus('test-device', { commandId, status }, now + 2);
+      db.prepare('UPDATE outbound_commands SET updated_at = ? WHERE command_id = ?')
+        .run(now - OUTBOUND_DISPATCH_SETTLE_MS - 1, commandId);
+
+      const settled = outboundRepo.list(deviceRepo.loadSecrets(), 100)[0];
+      expect(settled.status).toBe('FAILED');
+      expect(settled.errorDetail).toBe(detail);
     });
 
     it('should not downgrade status', () => {

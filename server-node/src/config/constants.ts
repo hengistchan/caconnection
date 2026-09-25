@@ -24,6 +24,11 @@ export const DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300;
 // requeue requires expires_at > now, so a lease >= TTL leaves no recovery
 // window at all and a crashed client strands the command until expiry.
 export const OUTBOUND_COMMAND_LEASE_MS = 30 * 1000;
+// Once the device has acknowledged a command as CREATED/DISPATCHING, the
+// server must not leave it "in progress" forever. The Android client uses the
+// same two-minute window and deliberately fails rather than blindly re-sending
+// an SMS whose modem submission outcome may be unknown.
+export const OUTBOUND_DISPATCH_SETTLE_MS = 2 * 60 * 1000;
 // A command in SENT_TO_MODEM with no delivery report settles as EXPIRED after
 // this idle period — otherwise it stays "in progress" forever when the
 // operator never reports delivery.

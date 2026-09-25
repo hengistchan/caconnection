@@ -40,6 +40,9 @@ public interface PocDao {
     @Query("SELECT * FROM outgoing_sms_events ORDER BY createdAt DESC LIMIT :limit")
     List<OutgoingSmsEventEntity> getLatestOutgoing(int limit);
 
+    @Query("SELECT * FROM outgoing_sms_events WHERE status IN ('CREATED', 'DISPATCHING') AND updatedAt <= :staleBefore ORDER BY updatedAt ASC")
+    List<OutgoingSmsEventEntity> getInterruptedOutgoing(long staleBefore);
+
     @Query("DELETE FROM incoming_sms_events")
     void clearIncoming();
 

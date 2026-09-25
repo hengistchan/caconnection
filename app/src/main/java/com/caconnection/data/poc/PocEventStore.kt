@@ -275,6 +275,49 @@ class PocEventStore private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * Settle sends whose process died before the platform produced a callback.
+     *
+     * Re-sending is unsafe: a DISPATCHING row may represent either side of the
+     * SmsManager call, so automatic replay can send the same SMS twice. A stale
+     * CREATED row is also failed instead of replayed because local UI sends have
+     * no durable user intent/attempt token with which to authorize a retry.
+     */
+    fun recoverInterruptedOutgoing(
+        currentTime: Long = System.currentTimeMillis(),
+        onComplete: ((Int) -> Unit)? = null
+    ) {
+        executeSafely("recover interrupted outgoing SMS") {
+            val staleBefore = currentTime - OUTGOING_DISPATCH_STALE_MS
+            val interrupted = dao.getInterruptedOutgoing(staleBefore)
+            var recovered = 0
+            var statusQueued = false
+            database.runInTransaction {
+                interrupted.forEach { event ->
+                    val current = dao.findOutgoing(event.eventId) ?: return@forEach
+                    if (
+                        current.updatedAt > staleBefore ||
+                        (current.status != OutgoingStatus.CREATED.name &&
+                            current.status != OutgoingStatus.DISPATCHING.name)
+                    ) {
+                        return@forEach
+                    }
+                    val previousStatus = current.status
+                    current.status = OutgoingStatus.FAILED.name
+                    current.failedPartCount = maxOf(1, current.failedPartCount)
+                    current.errorDetail = OutgoingRecoveryPolicy.failureDetail(previousStatus)
+                    current.updatedAt = currentTime
+                    dao.updateOutgoing(current)
+                    statusQueued = queueOutgoingStatus(current) || statusQueued
+                    recovered += 1
+                }
+            }
+            if (statusQueued) OutboxScheduler.enqueueNow(context)
+            if (recovered > 0) notifyChanged()
+            onComplete?.invoke(recovered)
+        }
+    }
+
     fun markDispatching(
         eventId: String,
         partCount: Int,
@@ -503,6 +546,7 @@ class PocEventStore private constructor(private val context: Context) {
 
     companion object {
         private const val TAG = "PocEventStore"
+        const val OUTGOING_DISPATCH_STALE_MS = 2 * 60 * 1000L
         const val ACTION_DATA_CHANGED = PocEventChangeNotifier.ACTION_DATA_CHANGED
 
         @SuppressLint("StaticFieldLeak")
@@ -513,6 +557,17 @@ class PocEventStore private constructor(private val context: Context) {
             instance ?: synchronized(this) {
                 instance ?: PocEventStore(context.applicationContext).also { instance = it }
             }
+    }
+}
+
+object OutgoingRecoveryPolicy {
+    fun failureDetail(previousStatus: String?): String = when (previousStatus) {
+        OutgoingStatus.CREATED.name ->
+            "Interrupted before SMS dispatch; not retried automatically"
+        OutgoingStatus.DISPATCHING.name ->
+            "SMS dispatch outcome unknown after process interruption; not retried automatically"
+        else ->
+            "Interrupted SMS dispatch; not retried automatically"
     }
 }
 

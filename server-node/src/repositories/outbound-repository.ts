@@ -13,6 +13,7 @@ import {
   OUTBOUND_STATUS_ORDER,
   OUTBOUND_COMMAND_LEASE_MS,
   OUTBOUND_COMMAND_STATUSES,
+  OUTBOUND_DISPATCH_SETTLE_MS,
   OUTBOUND_SENT_SETTLE_MS,
 } from '../config/constants.js';
 import { InvalidEventPayloadError } from '../http/operational-errors.js';
@@ -130,6 +131,7 @@ export class OutboundRepository {
 
     const nowMs = Date.now();
     this.db.prepare("UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ? WHERE status IN ('QUEUED', 'CLAIMED') AND expires_at <= ?").run(nowMs, nowMs);
+    this.settleInterruptedDispatches(nowMs);
     this.settleUnconfirmedSends(nowMs);
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -149,6 +151,7 @@ export class OutboundRepository {
   claim(deviceId: string, secret: Buffer, limit: number, nowMs: number): OutboundCommand[] {
     return transaction(this.db, () => {
       this.db.prepare("UPDATE outbound_commands SET status = 'EXPIRED', updated_at = ? WHERE device_id = ? AND status IN ('QUEUED', 'CLAIMED') AND expires_at <= ?").run(nowMs, deviceId, nowMs);
+      this.settleInterruptedDispatches(nowMs, deviceId);
       this.settleUnconfirmedSends(nowMs, deviceId);
       this.db.prepare("UPDATE outbound_commands SET status = 'QUEUED', claimed_at = NULL, updated_at = ? WHERE device_id = ? AND status = 'CLAIMED' AND claimed_at <= ? AND expires_at > ?").run(nowMs, deviceId, nowMs - OUTBOUND_COMMAND_LEASE_MS, nowMs);
 
@@ -217,6 +220,39 @@ export class OutboundRepository {
     const normalizedError = errorDetail == null ? null : errorDetail.trim().slice(0, 256);
     this.db.prepare('UPDATE outbound_commands SET status = ?, updated_at = ?, last_result_code = ?, error_detail = ? WHERE command_id = ? AND device_id = ?').run(status, nowMs, resultCode ?? null, normalizedError, commandId, deviceId);
     return true;
+  }
+
+  /**
+   * CREATED means the device persisted the command but did not confirm modem
+   * dispatch. DISPATCHING straddles the non-transactional SmsManager call, so
+   * replay could duplicate a real SMS. Both states therefore converge to a
+   * terminal failure after a short window instead of remaining in progress or
+   * being automatically requeued.
+   */
+  private settleInterruptedDispatches(nowMs: number, deviceId?: string): void {
+    const cutoff = nowMs - OUTBOUND_DISPATCH_SETTLE_MS;
+    if (deviceId === undefined) {
+      this.db.prepare(`
+        UPDATE outbound_commands
+        SET status = 'FAILED', updated_at = ?,
+            error_detail = CASE status
+              WHEN 'CREATED' THEN 'Interrupted before SMS dispatch'
+              ELSE 'SMS dispatch outcome unknown'
+            END
+        WHERE status IN ('CREATED', 'DISPATCHING') AND updated_at <= ?
+      `).run(nowMs, cutoff);
+    } else {
+      this.db.prepare(`
+        UPDATE outbound_commands
+        SET status = 'FAILED', updated_at = ?,
+            error_detail = CASE status
+              WHEN 'CREATED' THEN 'Interrupted before SMS dispatch'
+              ELSE 'SMS dispatch outcome unknown'
+            END
+        WHERE device_id = ? AND status IN ('CREATED', 'DISPATCHING')
+          AND updated_at <= ?
+      `).run(nowMs, deviceId, cutoff);
+    }
   }
 
   /**

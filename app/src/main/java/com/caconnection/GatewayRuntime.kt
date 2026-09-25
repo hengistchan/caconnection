@@ -3,6 +3,7 @@ package com.caconnection
 import android.content.Context
 import com.caconnection.notifications.GatewayForegroundService
 import com.caconnection.notifications.NotificationAllowlist
+import com.caconnection.data.poc.PocEventStore
 import com.caconnection.telephony.call.CallStateMonitor
 import com.caconnection.telephony.inbound.RuntimeSmsReceiverFallback
 import com.caconnection.telephony.inbound.SmsSpoolRecovery
@@ -17,6 +18,7 @@ object GatewayRuntime {
         val applicationContext = context.applicationContext
         GatewayForegroundService.start(applicationContext)
         SmsSpoolRecovery.recover(applicationContext)
+        PocEventStore.get(applicationContext).recoverInterruptedOutgoing()
         OutboxScheduler.reconcileLegacyWork(applicationContext)
         NotificationAllowlist.ensureRecommendedDefaults(applicationContext)
         DeviceStateReporter.enqueue(applicationContext)
