@@ -16,10 +16,10 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
    * POST /v1/devices
    *
    * Add a gateway device.
-   * Requires pairing:create scope.
+   * Requires devices:write scope.
    */
   app.post('/v1/devices', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const body = jsonObject(request.body);
     if (!body) return reply.status(400).send({ error: 'invalid request' });
 
@@ -76,10 +76,10 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
    * PUT /v1/devices/:deviceId
    *
    * Update a device description or rotate its shared secret.
-   * Requires pairing:create scope.
+   * Requires devices:write scope.
    */
   app.put('/v1/devices/:deviceId', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const { deviceId } = request.params as { deviceId: string };
 
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(deviceId)) {
@@ -142,10 +142,10 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
    * DELETE /v1/devices/:deviceId
    *
    * Retire a gateway device.
-   * Requires pairing:create scope.
+   * Requires devices:write scope.
    */
   app.delete('/v1/devices/:deviceId', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const { deviceId } = request.params as { deviceId: string };
 
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(deviceId)) {
@@ -171,10 +171,10 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
    * POST /v1/devices/:deviceId/restore
    *
    * Restore a retired gateway device.
-   * Requires pairing:create scope.
+   * Requires devices:write scope.
    */
   app.post('/v1/devices/:deviceId/restore', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const { deviceId } = request.params as { deviceId: string };
 
     if (!app.verifyDeviceAccess(clientId, deviceId)) {
@@ -202,10 +202,10 @@ export async function deviceCommandRoutes(app: FastifyInstance) {
    * POST /v1/devices/:deviceId/purge
    *
    * Irreversibly purge a gateway and all associated data.
-   * Requires pairing:create scope.
+   * Requires devices:write scope.
    */
   app.post('/v1/devices/:deviceId/purge', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:write');
     const { deviceId } = request.params as { deviceId: string };
 
     if (!app.verifyDeviceAccess(clientId, deviceId)) {

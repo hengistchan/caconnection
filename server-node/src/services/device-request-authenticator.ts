@@ -24,10 +24,17 @@ export class DeviceRequestAuthenticator {
     private readonly settings: ServerSettings,
   ) {}
 
+  /**
+   * @param options.deferNonceRecording when true the caller records the nonce
+   *   itself inside a larger transaction (event ingestion commits the nonce
+   *   and the event atomically). Every other endpoint gets replay protection
+   *   here by default — a future handler must not be able to forget it.
+   */
   authenticate(
     request: FastifyRequest,
     ipBucket: 'ingest-ip' | 'device-auth-ip',
     deviceBucket: 'ingest-device' | 'device',
+    options: { deferNonceRecording?: boolean } = {},
   ): AuthenticatedDeviceRequest {
     const initialNow = Date.now();
     const ipLimit = this.rateLimiter.allow(
@@ -87,6 +94,12 @@ export class DeviceRequestAuthenticator {
     );
     if (!deviceLimit.allowed) {
       throw new RateLimitError(deviceLimit.retryAfterMs);
+    }
+
+    // Replay protection by default. Recorded only after the signature
+    // verifies so unsigned garbage cannot burn a legitimate in-flight nonce.
+    if (!options.deferNonceRecording) {
+      this.deviceRepo.recordNonce(deviceId, nonce, nowMs);
     }
 
     return { deviceId, secret, nonce, idempotencyKey, timestampMs, nowMs, body };

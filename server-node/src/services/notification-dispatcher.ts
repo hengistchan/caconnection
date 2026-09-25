@@ -83,6 +83,10 @@ export class NotificationDispatcher {
   }
 
   async deliverOnce(nowMs = Date.now()): Promise<boolean> {
+    // claimDue may throw (SQLITE_FULL / SQLITE_BUSY past busy_timeout). The
+    // caller (process()) converts that into a backed-off reschedule — it must
+    // never become an unhandled rejection, which terminates the whole gateway
+    // under Node's default --unhandled-rejections=throw.
     const delivery = this.repository.claimDue(nowMs);
     if (!delivery) return false;
     try {
@@ -125,30 +129,66 @@ export class NotificationDispatcher {
       }
       const event = normalizeGatewayEvent(renderable);
       if (event === null) {
-        this.repository.finish(delivery.id, Date.now(), true);
+        this.finishQuietly(delivery.id, true);
       } else {
         event.legacyText = renderFeishuNotification(renderable) ?? undefined;
         await this.providers.get(channel.type).send(channel, event);
-        this.repository.finish(delivery.id, Date.now());
+        // The send succeeded. A finish() failure here must NOT be classified
+        // as a delivery failure — retry() would requeue and duplicate the
+        // notification. Leave the row leased; lease recovery re-delivers only
+        // as the documented at-least-once fallback.
+        this.finishQuietly(delivery.id, false);
       }
     } catch (error) {
       const message = safeErrorMessage(error);
       const retryable = error instanceof NotificationTransportError
         ? error.retryable
         : !NON_RETRYABLE_LOCAL_ERRORS.has(message);
-      if (!retryable || delivery.attemptCount >= MAX_NOTIFICATION_DELIVERY_ATTEMPTS) {
-        this.repository.fail(delivery.id, Date.now(), message);
-      } else {
-        this.repository.retry(delivery.id, delivery.attemptCount, Date.now(), message);
+      try {
+        if (!retryable || delivery.attemptCount >= MAX_NOTIFICATION_DELIVERY_ATTEMPTS) {
+          this.repository.fail(delivery.id, Date.now(), message);
+        } else {
+          this.repository.retry(delivery.id, delivery.attemptCount, Date.now(), message);
+        }
+      } catch (bookkeepingError) {
+        // Keep the row leased instead of crashing over bookkeeping.
+        console.error(
+          'notification delivery bookkeeping failed',
+          safeErrorMessage(bookkeepingError),
+        );
       }
     }
     return true;
+  }
+
+  /**
+   * Record the delivery outcome without letting a bookkeeping error escape.
+   * The row keeps its lease if the write fails, so it is retried later rather
+   * than requeued as a failed send.
+   */
+  private finishQuietly(deliveryId: number, skipNotify: boolean): void {
+    try {
+      this.repository.finish(deliveryId, Date.now(), skipNotify);
+    } catch (error) {
+      console.error(
+        'notification delivery finish failed',
+        safeErrorMessage(error),
+      );
+    }
   }
 
   private schedule(delayMs: number): void {
     this.timer = setTimeout(() => {
       this.timer = undefined;
       this.processing = this.process()
+        .catch((error: unknown) => {
+          // Defense in depth: nothing above should reject anymore, but an
+          // unhandled rejection here would take the whole gateway down.
+          console.error(
+            'notification dispatcher pass failed',
+            safeErrorMessage(error),
+          );
+        })
         .finally(() => {
           this.processing = undefined;
           if (!this.stopped) this.schedule(1_000);
@@ -159,7 +199,17 @@ export class NotificationDispatcher {
 
   private async process(): Promise<void> {
     for (let index = 0; index < 20 && !this.stopped; index += 1) {
-      if (!await this.deliverOnce()) return;
+      try {
+        if (!await this.deliverOnce()) return;
+      } catch (error) {
+        // Repository errors (SQLITE_FULL / SQLITE_BUSY) abort this pass; the
+        // 1s reschedule retries with natural backoff instead of crashing.
+        console.error(
+          'notification dispatcher delivery pass failed',
+          safeErrorMessage(error),
+        );
+        return;
+      }
     }
   }
 }

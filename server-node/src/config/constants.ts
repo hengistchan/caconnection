@@ -20,6 +20,14 @@ export const DEFAULT_PAIRING_CREATE_REQUESTS_PER_MINUTE = 20;
 export const DEFAULT_PAIRING_CLAIM_REQUESTS_PER_MINUTE = 20;
 export const DEFAULT_MAX_CONCURRENT_REQUESTS = 32;
 export const DEFAULT_OUTBOUND_COMMAND_EXPIRES_SECONDS = 300;
+// Command lease must be well below MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS:
+// requeue requires expires_at > now, so a lease >= TTL leaves no recovery
+// window at all and a crashed client strands the command until expiry.
+export const OUTBOUND_COMMAND_LEASE_MS = 30 * 1000;
+// A command in SENT_TO_MODEM with no delivery report settles as EXPIRED after
+// this idle period — otherwise it stays "in progress" forever when the
+// operator never reports delivery.
+export const OUTBOUND_SENT_SETTLE_MS = 10 * 60 * 1000;
 export const DEFAULT_NOTIFICATION_RETRY_SECONDS = 5;
 export const MAX_NOTIFICATION_RETRY_SECONDS = 15 * 60;
 export const MAX_NOTIFICATION_DELIVERY_ATTEMPTS = 4;
@@ -34,7 +42,6 @@ export const DEVICE_STALE_WINDOW_MS = 15 * 60 * 1000;
 // Outbound
 export const MIN_OUTBOUND_COMMAND_EXPIRES_SECONDS = 60;
 export const MAX_OUTBOUND_COMMAND_EXPIRES_SECONDS = 3600;
-export const OUTBOUND_COMMAND_LEASE_MS = 5 * 60 * 1000;
 
 // Pairing
 export const MIN_PAIRING_EXPIRES_SECONDS = 60;
@@ -84,6 +91,8 @@ export const VALID_SCOPES = new Set([
   'messages:send',
   'otp:claim',
   'pairing:create',
+  'devices:read',
+  'devices:write',
   'notifications:manage',
   '*',
 ]);

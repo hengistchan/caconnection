@@ -84,8 +84,8 @@ describe('DeviceRepository', () => {
       expect(repo.isActive('test-device')).toBe(true);
     });
 
-    it('should return true for non-existent device (legacy behavior)', () => {
-      expect(repo.isActive('non-existent')).toBe(true);
+    it('should return false for non-existent device', () => {
+      expect(repo.isActive('non-existent')).toBe(false);
     });
 
     it('should return false for retired device', () => {

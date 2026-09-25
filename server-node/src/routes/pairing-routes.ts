@@ -42,15 +42,16 @@ export async function pairingRoutes(app: FastifyInstance) {
     const deviceId = body.deviceId;
     const expiresInSeconds = body.expiresInSeconds ?? 300;
 
-    if (typeof deviceId !== 'string' || !app.deviceSecrets.has(deviceId) || !app.deviceRepo.isActive(deviceId)) {
+    // Access check first: distinguishing "not yours" (403) from "not found"
+    // (400) would let scoped clients enumerate global device ids.
+    if (typeof deviceId !== 'string' || !app.verifyDeviceAccess(clientId, deviceId)) {
+      return reply.status(403).send({ error: 'device access denied' });
+    }
+    if (!app.deviceSecrets.has(deviceId) || !app.deviceRepo.isActive(deviceId)) {
       return reply.status(400).send({ error: 'invalid deviceId' });
     }
     if (typeof expiresInSeconds !== 'number' || !Number.isInteger(expiresInSeconds) || expiresInSeconds < MIN_PAIRING_EXPIRES_SECONDS || expiresInSeconds > MAX_PAIRING_EXPIRES_SECONDS) {
       return reply.status(400).send({ error: 'invalid expiresInSeconds' });
-    }
-
-    if (!app.verifyDeviceAccess(clientId, deviceId)) {
-      return reply.status(403).send({ error: 'device access denied' });
     }
 
     // Check pairing is configured

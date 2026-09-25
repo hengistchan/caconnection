@@ -12,10 +12,10 @@ export async function auditRoutes(app: FastifyInstance) {
    * GET /v1/audit-log
    *
    * List administrative actions without message or OTP content.
-   * Requires pairing:create scope.
+   * Requires devices:read scope.
    */
   app.get('/v1/audit-log', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:read');
     const query = request.query as Record<string, unknown>;
     let limit: number;
     let beforeId: number | undefined;

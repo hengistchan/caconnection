@@ -49,10 +49,14 @@ export function payloadKey(secret: Buffer, deviceId: string): Buffer {
 /**
  * Build the AAD (Additional Authenticated Data) for AES-GCM.
  * Format: newline-joined fields in exact order matching Python.
+ *
+ * The schemaVersion is bound into the AAD so it cannot be flipped after
+ * encryption without failing the GCM tag check. For version-2 envelopes this
+ * is byte-identical to the historical literal '2'.
  */
 export function encryptionAad(envelope: Envelope, deviceId: string): Buffer {
   const parts = [
-    '2',
+    String(envelope.schemaVersion),
     String(envelope.deliveryId),
     String(envelope.sourceEventId),
     String(envelope.eventType),
@@ -64,16 +68,29 @@ export function encryptionAad(envelope: Envelope, deviceId: string): Buffer {
   return Buffer.from(parts.join('\n'), 'utf-8');
 }
 
+function isEncryptedPayload(
+  payload: Envelope['payload'],
+): payload is EncryptedPayload {
+  return (
+    typeof payload === 'object'
+    && payload !== null
+    && 'algorithm' in payload
+    && (payload as EncryptedPayload).algorithm === 'AES-256-GCM'
+  );
+}
+
 /**
  * Encrypt a plaintext payload. Returns a new envelope with schemaVersion=2
- * and an encrypted payload block.
+ * and an encrypted payload block. Idempotent: an already-encrypted payload is
+ * returned unchanged. A schemaVersion-2 envelope with a plaintext payload is
+ * still encrypted — the version alone must never silently skip encryption.
  */
 export function encryptPayload(
   envelope: Envelope,
   deviceId: string,
   secret: Buffer,
 ): Envelope {
-  if (envelope.schemaVersion === 2) {
+  if (isEncryptedPayload(envelope.payload)) {
     return envelope;
   }
 
@@ -121,7 +138,15 @@ export function decryptPayload(
   secret: Buffer,
 ): Envelope {
   if (envelope.schemaVersion === 1) {
+    // Legacy plaintext envelope. A v1 marker on an encrypted payload block is
+    // version tampering — decrypting it would render the ciphertext as data.
+    if (isEncryptedPayload(envelope.payload)) {
+      throw new Error('payload is encrypted but schemaVersion is 1');
+    }
     return envelope;
+  }
+  if (envelope.schemaVersion !== 2) {
+    throw new Error(`unsupported schemaVersion ${envelope.schemaVersion}`);
   }
 
   const encrypted = envelope.payload as EncryptedPayload;

@@ -83,7 +83,7 @@ export function initializeDatabase(db: DatabaseSync): void {
     CREATE TABLE IF NOT EXISTS outbound_commands (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       command_id TEXT NOT NULL UNIQUE,
-      idempotency_key TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL,
       device_id TEXT NOT NULL,
       slot_index INTEGER NOT NULL,
       envelope_json TEXT NOT NULL,
@@ -93,7 +93,8 @@ export function initializeDatabase(db: DatabaseSync): void {
       claimed_at INTEGER,
       updated_at INTEGER NOT NULL,
       last_result_code INTEGER,
-      error_detail TEXT
+      error_detail TEXT,
+      UNIQUE(device_id, idempotency_key)
     );
 
     CREATE INDEX IF NOT EXISTS index_events_type_received
@@ -301,5 +302,61 @@ export function initializeDatabase(db: DatabaseSync): void {
   }
   if (!notificationOutboxColumns.has('alert_payload_json')) {
     db.exec('ALTER TABLE notification_outbox ADD COLUMN alert_payload_json TEXT');
+  }
+
+  // outbound_commands.idempotency_key used to be globally unique, which broke
+  // multi-device fan-out sharing one logical key. Rebuild the table with
+  // UNIQUE(device_id, idempotency_key) when the old constraint is detected.
+  const outboundUniqueColumns = db
+    .prepare("PRAGMA index_list('outbound_commands')")
+    .all()
+    .filter((row: any) => row.unique === 1 && row.origin === 'u')
+    .map((row: any) =>
+      db
+        .prepare(`PRAGMA index_info('${row.name}')`)
+        .all()
+        .map((col: any) => col.name)
+        .join(','),
+    );
+  const hasGlobalKeyUnique = outboundUniqueColumns.includes('idempotency_key');
+  const hasPerDeviceKeyUnique = outboundUniqueColumns.includes('device_id,idempotency_key');
+  if (hasGlobalKeyUnique && !hasPerDeviceKeyUnique) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`
+        CREATE TABLE outbound_commands_migrated (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          command_id TEXT NOT NULL UNIQUE,
+          idempotency_key TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          slot_index INTEGER NOT NULL,
+          envelope_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          claimed_at INTEGER,
+          updated_at INTEGER NOT NULL,
+          last_result_code INTEGER,
+          error_detail TEXT,
+          UNIQUE(device_id, idempotency_key)
+        );
+        INSERT INTO outbound_commands_migrated(
+          id, command_id, idempotency_key, device_id, slot_index, envelope_json,
+          status, created_at, expires_at, claimed_at, updated_at,
+          last_result_code, error_detail
+        )
+        SELECT
+          id, command_id, idempotency_key, device_id, slot_index, envelope_json,
+          status, created_at, expires_at, claimed_at, updated_at,
+          last_result_code, error_detail
+        FROM outbound_commands;
+        DROP TABLE outbound_commands;
+        ALTER TABLE outbound_commands_migrated RENAME TO outbound_commands;
+      `);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
   }
 }

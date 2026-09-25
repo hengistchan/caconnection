@@ -9,6 +9,7 @@ import { transaction } from '../database/transaction.js';
 import { queryAll } from '../database/helpers.js';
 import { decryptPayload } from '../crypto/payload-crypto.js';
 import { extractOtpCandidates } from '../crypto/otp-extraction.js';
+import { ReplayedNonceError } from '../auth/auth-errors.js';
 
 export interface EventRow {
   id: number;
@@ -95,7 +96,7 @@ export class EventRepository {
       this.db.prepare('INSERT INTO request_nonces(device_id, nonce, seen_at) VALUES (?, ?, ?)').run(deviceId, nonce, nowMs);
     } catch (error: any) {
       if (error?.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error?.errcode === 1555) {
-        throw new Error('replayed nonce');
+        throw new ReplayedNonceError();
       }
       throw error;
     }

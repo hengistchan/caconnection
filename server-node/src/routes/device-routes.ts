@@ -11,10 +11,10 @@ export async function deviceRoutes(app: FastifyInstance) {
    * GET /v1/devices
    *
    * List configured device IDs available for pairing.
-   * Requires pairing:create scope.
+   * Requires devices:read scope.
    */
   app.get('/v1/devices', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:read');
     const secrets = app.getClientSecrets(clientId);
 
     const devices = [...secrets.keys()]
@@ -28,10 +28,10 @@ export async function deviceRoutes(app: FastifyInstance) {
    * GET /v1/devices/detail
    *
    * List gateway device metadata without exposing secrets.
-   * Requires pairing:create scope.
+   * Requires devices:read scope.
    */
   app.get('/v1/devices/detail', async (request, reply) => {
-    const clientId = app.verifyApi(request, 'pairing:create');
+    const clientId = app.verifyApi(request, 'devices:read');
     const allowed = app.getAllowedDeviceIds(clientId);
 
     const allDevices = app.deviceRepo.getAll();

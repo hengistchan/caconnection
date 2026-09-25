@@ -58,7 +58,9 @@ read-filtering constructs only.
 Each bearer-token client has:
 
 - one or more scopes, such as `messages:read`, `messages:send`, `otp:claim`,
-  and `pairing:create`;
+  `pairing:create`, `devices:read`, and `devices:write` (device lifecycle
+  mutations — create, rotate, retire, restore, purge — and group mutations
+  require `devices:write`; `pairing:create` only mints pairing sessions);
 - an optional `allowedDeviceIds` list.
 
 If `allowedDeviceIds` is present, reads and mutations are limited to those

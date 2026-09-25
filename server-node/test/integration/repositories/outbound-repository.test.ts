@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { OutboundRepository } from '../../../src/repositories/outbound-repository.js';
 import { DeviceRepository } from '../../../src/repositories/device-repository.js';
 import { initializeDatabase } from '../../../src/database/database.js';
+import { OUTBOUND_COMMAND_LEASE_MS, OUTBOUND_SENT_SETTLE_MS } from '../../../src/config/constants.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -124,6 +125,31 @@ describe('OutboundRepository', () => {
         1000001,
         300,
       )).toThrow('idempotency key conflict');
+    });
+
+    it('should allow one logical key to fan out to several devices', () => {
+      const first = outboundRepo.create(
+        'test-device',
+        secret,
+        0,
+        '+1234567890',
+        'Fan-out message',
+        'shared-logical-key',
+        1000000,
+        300,
+      );
+      const second = outboundRepo.create(
+        'other-device',
+        secret,
+        0,
+        '+1234567890',
+        'Fan-out message',
+        'shared-logical-key',
+        1000001,
+        300,
+      );
+
+      expect(second.commandId).not.toBe(first.commandId);
     });
 
     it('should encrypt the payload', () => {
@@ -275,8 +301,9 @@ describe('OutboundRepository', () => {
       // First claim
       outboundRepo.claim('test-device', secret, 10, 1000001);
 
-      // Claim again after lease expires (5 minutes = 300,000 ms)
-      const reclaimed = outboundRepo.claim('test-device', secret, 10, 1000001 + 5 * 60 * 1000 + 1);
+      // Claim again after the lease window closes (lease must stay well
+      // below the expiry or this recovery path is dead)
+      const reclaimed = outboundRepo.claim('test-device', secret, 10, 1000001 + OUTBOUND_COMMAND_LEASE_MS + 1);
 
       expect(reclaimed).toHaveLength(1);
     });
@@ -290,8 +317,11 @@ describe('OutboundRepository', () => {
 
   describe('updateStatus', () => {
     it('should update command status', () => {
-      outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', 1000000, 300);
-      const claimed = outboundRepo.claim('test-device', secret, 10, 1000001);
+      // list() sweeps with the real clock (expiry + unconfirmed-send settle),
+      // so the fixture must use realistic timestamps.
+      const now = Date.now();
+      outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', now, 300);
+      const claimed = outboundRepo.claim('test-device', secret, 10, now + 1);
       const commandId = claimed[0].commandId;
 
       const updated = outboundRepo.updateStatus('test-device', {
@@ -299,7 +329,7 @@ describe('OutboundRepository', () => {
         status: 'SENT_TO_MODEM',
         resultCode: 0,
         errorDetail: null,
-      }, 1000002);
+      }, now + 2);
 
       expect(updated).toBe(true);
 
@@ -307,6 +337,32 @@ describe('OutboundRepository', () => {
       const secrets = deviceRepo.loadSecrets();
       const commands = outboundRepo.list(secrets, 100);
       expect(commands[0].status).toBe('SENT_TO_MODEM');
+    });
+
+    it('should settle unconfirmed sends after the confirmation window', () => {
+      const now = Date.now();
+      outboundRepo.create('test-device', secret, 0, '+111', 'Msg', 'key-1', now, 3600);
+      const claimed = outboundRepo.claim('test-device', secret, 10, now + 1);
+      const commandId = claimed[0].commandId;
+
+      outboundRepo.updateStatus('test-device', {
+        commandId,
+        status: 'SENT_TO_MODEM',
+        resultCode: 0,
+        errorDetail: null,
+      }, now + 2);
+
+      // First list: still inside the confirmation window.
+      const secrets = deviceRepo.loadSecrets();
+      expect(outboundRepo.list(secrets, 100)[0].status).toBe('SENT_TO_MODEM');
+
+      // Simulate the confirmation window elapsing.
+      db.prepare('UPDATE outbound_commands SET updated_at = ? WHERE command_id = ?')
+        .run(now - OUTBOUND_SENT_SETTLE_MS - 1, commandId);
+
+      const settled = outboundRepo.list(secrets, 100)[0];
+      expect(settled.status).toBe('EXPIRED');
+      expect(settled.errorDetail).toBe('Delivery unconfirmed');
     });
 
     it('should not downgrade status', () => {
