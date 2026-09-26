@@ -1185,7 +1185,7 @@ class MainActivity : AppCompatActivity() {
     private fun renderMessages() {
         incomingMetric.text = formatCount(incomingEvents.size)
         outgoingMetric.text = formatCount(outgoingEvents.size)
-        otpMetric.text = formatCount(incomingEvents.count { extractOtp(it.body) != null })
+        otpMetric.text = formatCount(incomingEvents.count { extractOtp(it.body.orEmpty()) != null })
         messageList.removeAllViews()
 
         val cards = buildList {
@@ -1194,7 +1194,10 @@ class MainActivity : AppCompatActivity() {
                 messageFilter == MessageFilter.OTP
             ) {
                 incomingEvents
-                    .filter { messageFilter != MessageFilter.OTP || extractOtp(it.body) != null }
+                    .filter {
+                        messageFilter != MessageFilter.OTP ||
+                            extractOtp(it.body.orEmpty()) != null
+                    }
                     .forEach { add(MessageItem.Incoming(it)) }
             }
             if (messageFilter == MessageFilter.ALL || messageFilter == MessageFilter.OUTGOING) {
@@ -1367,11 +1370,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildLogEntries(): List<UiLogEntry> = buildList {
         incomingEvents.forEach { event ->
+            val resolutionConfidence = displayStatus(event.resolutionConfidence)
             add(
                 UiLogEntry(
                     time = event.receivedAt,
                     category = LogCategory.SMS,
-                    tone = if (event.resolutionConfidence == "HIGH") Tone.SUCCESS else Tone.WARNING,
+                    tone = if (resolutionConfidence == "HIGH") Tone.SUCCESS else Tone.WARNING,
                     title = getString(R.string.log_incoming_sms),
                     detail = getString(
                         R.string.log_sim_detail,
@@ -1380,14 +1384,15 @@ class MainActivity : AppCompatActivity() {
                             event.resolvedSlotIndex?.plus(1) ?: 0
                         ),
                         event.resolutionMethod,
-                        event.resolutionConfidence
+                        resolutionConfidence
                     ),
-                    status = event.providerWriteStatus
+                    status = displayStatus(event.providerWriteStatus)
                 )
             )
         }
         outgoingEvents.forEach { event ->
-            val tone = when (event.status) {
+            val status = displayStatus(event.status)
+            val tone = when (status) {
                 "FAILED" -> Tone.ERROR
                 "OUTCOME_UNKNOWN" -> Tone.WARNING
                 "DELIVERED", "SENT_TO_MODEM" -> Tone.SUCCESS
@@ -1398,7 +1403,7 @@ class MainActivity : AppCompatActivity() {
                     time = event.updatedAt,
                     category = LogCategory.SMS,
                     tone = tone,
-                    title = getString(R.string.log_outgoing_sms, event.status),
+                    title = getString(R.string.log_outgoing_sms, status),
                     detail = getString(
                         R.string.outgoing_metadata,
                         getString(R.string.sim_number, event.requestedSlotIndex + 1),
@@ -1406,7 +1411,7 @@ class MainActivity : AppCompatActivity() {
                         event.sentPartCount,
                         event.partCount
                     ),
-                    status = event.status
+                    status = status
                 )
             )
         }
@@ -1421,7 +1426,7 @@ class MainActivity : AppCompatActivity() {
                         R.string.log_notification_detail,
                         event.sourcePackage
                     ),
-                    status = event.redactionPolicy
+                    status = displayStatus(event.redactionPolicy)
                 )
             )
         }
@@ -1437,7 +1442,7 @@ class MainActivity : AppCompatActivity() {
                         event.slotIndex + 1,
                         event.subscriptionId
                     ),
-                    status = event.state
+                    status = displayStatus(event.state)
                 )
             )
         }
@@ -1450,12 +1455,13 @@ class MainActivity : AppCompatActivity() {
                     title = getString(R.string.log_caller_identity),
                     detail = "${getString(R.string.sim_number, event.resolvedSlotIndex?.plus(1) ?: 0)} · " +
                         maskAddress(event.callerAddress.orEmpty()),
-                    status = event.decision
+                    status = displayStatus(event.decision)
                 )
             )
         }
         outboxEvents.forEach { event ->
-            val tone = when (event.status) {
+            val status = displayStatus(event.status)
+            val tone = when (status) {
                 "FAILED" -> Tone.ERROR
                 "RETRY" -> Tone.WARNING
                 "SUCCESS" -> Tone.SUCCESS
@@ -1471,14 +1477,14 @@ class MainActivity : AppCompatActivity() {
                     time = event.updatedAt,
                     category = LogCategory.TRANSPORT,
                     tone = tone,
-                    title = getString(R.string.log_outbox, event.status),
+                    title = getString(R.string.log_outbox, status),
                     detail = getString(
                         R.string.log_outbox_detail,
                         event.payloadType ?: "EVENT",
                         event.retryCount,
                         error
                     ),
-                    status = event.status
+                    status = status
                 )
             )
         }
@@ -1541,7 +1547,7 @@ class MainActivity : AppCompatActivity() {
         incomingEvents.firstOrNull()?.let {
             appendLine()
             appendLine("LATEST RAW INBOUND EXTRAS")
-            append(it.rawExtras.ifBlank { "(none)" })
+            append(it.rawExtras?.takeIf(String::isNotBlank) ?: "(none)")
         }
     }
 
@@ -1597,7 +1603,9 @@ class MainActivity : AppCompatActivity() {
             val event = item.event
             title = getString(
                 R.string.from_sender,
-                event.originatingAddress.ifBlank { getString(R.string.unknown_sender) }
+                event.originatingAddress
+                    ?.takeIf(String::isNotBlank)
+                    ?: getString(R.string.unknown_sender)
             )
             metadata = getString(
                 R.string.message_metadata,
@@ -1605,11 +1613,11 @@ class MainActivity : AppCompatActivity() {
                 relativeTime(event.receivedAt),
                 event.partCount
             )
-            content = event.body
-            otp = extractOtp(event.body)
+            content = event.body.orEmpty()
+            otp = extractOtp(content)
         } else {
             val event = (item as MessageItem.Outgoing).event
-            title = getString(R.string.to_recipient, event.recipient)
+            title = getString(R.string.to_recipient, event.recipient.orEmpty())
             metadata = getString(
                 R.string.outgoing_metadata,
                 getString(R.string.sim_number, event.requestedSlotIndex + 1),
@@ -1617,16 +1625,16 @@ class MainActivity : AppCompatActivity() {
                 event.sentPartCount,
                 event.partCount
             )
-            content = event.body
+            content = event.body.orEmpty()
             otp = null
         }
         text.addView(primaryText(title, 16, true))
         text.addView(secondaryText(metadata, 12), topMarginParams(2))
         header.addView(text, weightedParams(marginStart = 12))
         val status = if (item is MessageItem.Incoming) {
-            item.event.resolutionConfidence
+            displayStatus(item.event.resolutionConfidence)
         } else {
-            (item as MessageItem.Outgoing).event.status
+            displayStatus((item as MessageItem.Outgoing).event.status)
         }
         header.addView(
             statusPill(
@@ -2729,6 +2737,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun dp(value: Int): Int =
         (value * resources.displayMetrics.density).toInt()
+
+    private fun displayStatus(value: String?): String =
+        value?.takeIf(String::isNotBlank) ?: getString(R.string.health_status_unknown)
 
     private data class TextField(
         val layout: TextInputLayout,
