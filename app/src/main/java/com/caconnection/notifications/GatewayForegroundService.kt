@@ -18,6 +18,7 @@ import com.caconnection.transport.CommandStreamClient
 import com.caconnection.transport.ConnectionHealth
 import com.caconnection.transport.ConnectionStateStore
 import com.caconnection.transport.DeviceStateReporter
+import com.caconnection.transport.GatewayHealthStore
 import com.caconnection.transport.GatewayTransportConfig
 import com.caconnection.worker.OutboxScheduler
 import com.caconnection.worker.RemoteCommandScheduler
@@ -25,6 +26,7 @@ import java.text.DateFormat
 import java.util.Date
 
 class GatewayForegroundService : Service() {
+    private var healthWatchdog: GatewayHealthWatchdog? = null
 
     companion object {
         private const val TAG = "GatewayForeground"
@@ -62,6 +64,26 @@ class GatewayForegroundService : Service() {
             RemoteCommandScheduler.enqueueNow(applicationContext)
         }
 
+        /** Opens the diagnostics surface; used by watchdog backlog alerts. */
+        fun openDiagnosticsPendingIntent(context: Context): PendingIntent =
+            PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java)
+                    .putExtra(MainActivity.EXTRA_OPEN_PAGE, MainActivity.PAGE_DIAGNOSTICS)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+        /** Asks the foreground service to run its recovery path. */
+        fun recoveryPendingIntent(context: Context): PendingIntent =
+            PendingIntent.getService(
+                context,
+                1,
+                Intent(context, GatewayForegroundService::class.java).setAction(ACTION_RECOVER),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
         /**
          * @return true when the system accepted the start request.  A return
          * value of false means the caller should fall back to durable
@@ -85,9 +107,12 @@ class GatewayForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         runningSince = System.currentTimeMillis()
+        GatewayHealthStore.markForegroundServiceStarted(this, runningSince)
+        Log.i(TAG, "Foreground gateway service created")
         NotificationHelper.createForegroundChannel(this)
         startAsForeground()
         ensureCommandStream()
+        healthWatchdog = GatewayHealthWatchdog(applicationContext).also { it.start() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -109,7 +134,10 @@ class GatewayForegroundService : Service() {
     }
 
     override fun onDestroy() {
+        Log.w(TAG, "Foreground gateway service destroyed")
         runningSince = 0L
+        healthWatchdog?.stop()
+        healthWatchdog = null
         CommandStreamClient.stop()
         super.onDestroy()
     }
@@ -126,8 +154,16 @@ class GatewayForegroundService : Service() {
             return
         }
         CommandStreamClient.start(
+            context = this,
             settings = settings,
             onConnectionChanged = { connected ->
+                if (connected) {
+                    GatewayHealthStore.markStreamConnected(this)
+                    Log.i(TAG, "Command stream connected")
+                } else {
+                    GatewayHealthStore.markStreamDisconnected(this)
+                    Log.w(TAG, "Command stream disconnected; fast polling restored")
+                }
                 RemoteCommandScheduler.reschedulePolling(
                     this,
                     if (connected) {
@@ -142,6 +178,9 @@ class GatewayForegroundService : Service() {
                 // The stream only says work exists; claim/lease stays the
                 // single place commands are taken and content leaves.
                 RemoteCommandScheduler.nudge(this)
+            },
+            onHeartbeat = {
+                GatewayHealthStore.markStreamHeartbeat(this)
             }
         )
     }
@@ -214,20 +253,8 @@ class GatewayForegroundService : Service() {
     }
 
     private fun openDiagnosticsIntent(): PendingIntent =
-        PendingIntent.getActivity(
-            this,
-            0,
-            Intent(this, MainActivity::class.java)
-                .putExtra(MainActivity.EXTRA_OPEN_PAGE, MainActivity.PAGE_DIAGNOSTICS)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        openDiagnosticsPendingIntent(this)
 
     private fun reconnectIntent(): PendingIntent =
-        PendingIntent.getService(
-            this,
-            1,
-            Intent(this, GatewayForegroundService::class.java).setAction(ACTION_RECOVER),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        recoveryPendingIntent(this)
 }

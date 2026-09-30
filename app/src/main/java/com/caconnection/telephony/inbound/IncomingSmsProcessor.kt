@@ -117,6 +117,11 @@ object IncomingSmsProcessor {
         var persistedViaRoom = false
         try {
             SmsSpoolStore.stage(applicationContext, staged, idempotencyKey)
+            Log.i(
+                TAG,
+                "SMS durable spool staged action=$action parts=${parsed.partCount} " +
+                    "receiveLagMs=${(invokedAt - parsed.receivedAt).coerceAtLeast(0L)}"
+            )
         } catch (error: Exception) {
             Log.e(TAG, "Unable to stage SMS spool entry action=$action", error)
             persistedViaRoom = try {
@@ -205,15 +210,19 @@ object IncomingSmsProcessor {
                 event.resolutionNotes = resolution.notes
                 event.rawExtras = IntentExtrasInspector.describe(extras)
                 updateSpool(applicationContext, event, idempotencyKey)
-                if (isDefaultDelivery) {
-                    val provider = DefaultSmsProviderWriter.saveIncoming(
+            if (isDefaultDelivery) {
+                val provider = DefaultSmsProviderWriter.saveIncoming(
                         applicationContext,
                         event
                     )
                     event.providerWriteStatus = provider.status
                     event.providerUri = provider.uri
-                    event.providerWriteError = provider.error
-                    updateSpool(applicationContext, event, idempotencyKey)
+                event.providerWriteError = provider.error
+                Log.i(
+                    TAG,
+                    "Default SMS provider write action=$action status=${provider.status}"
+                )
+                updateSpool(applicationContext, event, idempotencyKey)
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "SMS resolution failed action=$action", error)
@@ -325,7 +334,8 @@ object IncomingSmsProcessor {
         if (inserted) {
             Log.i(
                 TAG,
-                "Incoming SMS persisted and queued action=$action"
+                "Incoming SMS persisted and queued action=$action " +
+                    "providerStatus=${event.providerWriteStatus}"
             )
             if (isDefaultDelivery) {
                 NotificationHelper.notifyIncoming(

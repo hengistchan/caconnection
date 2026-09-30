@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.caconnection.notifications.GatewayForegroundService
 
 /**
  * AlarmManager backup that fires even under Doze / HyperOS deep sleep.
@@ -12,7 +13,9 @@ import android.util.Log
  */
 class OutboxAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
-        Log.i("OutboxAlarm", "Alarm wake — triggering Outbox drain")
-        OutboxScheduler.enqueueNow(context)
+        OutboxScheduler.markAlarmFired(context)
+        Log.w("OutboxAlarm", "Alarm wake — forcing foreground recovery and Outbox drain")
+        GatewayForegroundService.requestRecovery(context)
+        OutboxScheduler.enqueueRecoveryNow(context, "alarm")
     }
 }

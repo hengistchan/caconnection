@@ -13,6 +13,7 @@ import com.caconnection.data.poc.PocEventStore
 import com.caconnection.telephony.outbound.SmsGatewaySender
 import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.transport.GatewayTransportConfig
+import com.caconnection.transport.GatewayRateLimitStore
 import com.caconnection.transport.RemoteCommandClaimResult
 import com.caconnection.transport.RemoteCommandClient
 import com.caconnection.transport.RemoteSmsCommand
@@ -34,6 +35,21 @@ class RemoteCommandWorker(
                 applicationContext,
                 RemoteCommandScheduler.UNCONFIGURED_POLL_DELAY_MS
             )
+            return Result.success()
+        }
+        val gateDelayMs = GatewayRateLimitStore.acquireRequestSlot(
+            applicationContext,
+            "remote-command"
+        )
+        if (gateDelayMs > 0L) {
+            Log.w(
+                TAG,
+                "Skipping remote command request while Gateway gate is closed " +
+                    "remainingMs=$gateDelayMs source=${GatewayRateLimitStore.lastSource(applicationContext)}"
+            )
+            if (!isNudgeRun()) {
+                RemoteCommandScheduler.reschedulePolling(applicationContext, gateDelayMs)
+            }
             return Result.success()
         }
         return when (
@@ -58,13 +74,46 @@ class RemoteCommandWorker(
             }
 
             is RemoteCommandClaimResult.RetryableFailure -> {
+                if (result.statusCode == 429) {
+                    val delay = GatewayRateLimitStore.recordRateLimit(
+                        context = applicationContext,
+                        source = "remote-command",
+                        retryAfterMillis = result.retryAfterMillis
+                    ) - System.currentTimeMillis()
+                    if (!isNudgeRun()) {
+                        RemoteCommandScheduler.reschedulePolling(
+                            applicationContext,
+                            delay.coerceAtLeast(1L)
+                        )
+                    }
+                    return Result.success()
+                }
                 if (isNudgeRun()) {
                     // Leave retry pacing to WorkManager; the poll chain
                     // remains the fallback either way.
                     return Result.retry()
                 }
+                if (result.retryAfterMillis == null) {
+                    val delay = GatewayRateLimitStore.recordTransientFailure(
+                        context = applicationContext,
+                        source = "remote-command-transport"
+                    ) - System.currentTimeMillis()
+                    RemoteCommandScheduler.reschedulePolling(
+                        applicationContext,
+                        delay.coerceAtLeast(1L)
+                    )
+                    return Result.success()
+                }
                 result.retryAfterMillis?.let {
-                    RemoteCommandScheduler.enqueue(applicationContext, it)
+                    val delay = it.coerceAtLeast(
+                        RemoteCommandScheduler.NORMAL_POLL_DELAY_MS
+                    )
+                    Log.w(
+                        TAG,
+                        "Remote command request rate-limited/retryable; " +
+                            "serverDelayMs=$it effectiveDelayMs=$delay"
+                    )
+                    RemoteCommandScheduler.enqueue(applicationContext, delay)
                     return Result.success()
                 }
                 Result.retry()

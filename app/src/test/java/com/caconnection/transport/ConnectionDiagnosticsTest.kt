@@ -49,6 +49,20 @@ class ConnectionDiagnosticsTest {
     }
 
     @Test
+    fun healthFailureReportsHttpStatusInsteadOfIllegalArgumentException() = runTest {
+        val report = ConnectionDiagnostics(
+            resolve = {},
+            tcpConnect = { _, _ -> },
+            tlsHandshake = { _, _, _ -> },
+            getStatus = { url, _ -> if (url.endsWith("/health")) 503 else 200 }
+        ).run(settings)
+
+        assertFalse(report.passed)
+        assertEquals(DiagnosticStage.HEALTH, report.steps.last().stage)
+        assertEquals("HTTP 503", report.steps.last().detail)
+    }
+
+    @Test
     fun reportSanitizerRedactsUrlsTokensAndPhoneNumbers() {
         val sanitized = ConnectionDiagnosticReport.sanitize(
             "https://gateway.example token=abcdef phone +86 138-1234-5678"

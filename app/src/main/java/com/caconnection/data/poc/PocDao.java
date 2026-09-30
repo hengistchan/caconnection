@@ -25,6 +25,9 @@ public interface PocDao {
     @Query("SELECT * FROM incoming_sms_events ORDER BY persistedAt DESC LIMIT :limit")
     List<IncomingSmsEventEntity> getLatestIncoming(int limit);
 
+    @Query("SELECT i.* FROM incoming_sms_events i INNER JOIN outbox_events o ON o.incomingEventId = i.eventId WHERE (i.resolvedSubscriptionId IS NULL OR i.resolvedSlotIndex IS NULL) AND o.status IN ('PENDING', 'RETRY') AND o.payloadType = 'INCOMING_SMS' ORDER BY i.persistedAt DESC LIMIT :limit")
+    List<IncomingSmsEventEntity> getUnresolvedPendingIncoming(int limit);
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void insertOutgoing(OutgoingSmsEventEntity event);
 
@@ -103,6 +106,9 @@ public interface PocDao {
     @Query("SELECT * FROM outbox_events WHERE idempotencyKey = :idempotencyKey LIMIT 1")
     OutboxEventEntity findOutboxByIdempotencyKey(String idempotencyKey);
 
+    @Query("SELECT * FROM outbox_events WHERE incomingEventId = :incomingEventId AND payloadType = 'INCOMING_SMS' LIMIT 1")
+    OutboxEventEntity findIncomingOutbox(String incomingEventId);
+
     @Query("SELECT * FROM outbox_events WHERE status = 'PENDING' OR status = 'RETRY'")
     List<OutboxEventEntity> getAllPendingOutboxEvents();
 
@@ -111,6 +117,12 @@ public interface PocDao {
 
     @Query("SELECT MIN(nextRetryAt) FROM outbox_events WHERE status IN ('PENDING', 'RETRY')")
     Long getEarliestScheduledOutboxAt();
+
+    @Query("SELECT MIN(createdAt) FROM outbox_events WHERE status IN ('PENDING', 'RETRY', 'IN_PROGRESS')")
+    Long getOldestActiveOutboxCreatedAt();
+
+    @Query("SELECT COUNT(*) FROM outbox_events WHERE status IN ('PENDING', 'RETRY', 'IN_PROGRESS')")
+    int countActiveOutboxEvents();
 
     @Query("UPDATE outbox_events SET status = 'RETRY', nextRetryAt = :now, updatedAt = :now, lastError = 'Recovered interrupted delivery attempt' WHERE status = 'IN_PROGRESS' AND updatedAt <= :staleBefore")
     int recoverStaleInProgress(long staleBefore, long now);

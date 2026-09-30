@@ -62,6 +62,7 @@ import com.caconnection.transport.ConnectionDiagnostics
 import com.caconnection.transport.DiagnosticStage
 import com.caconnection.transport.GatewayPairing
 import com.caconnection.transport.GatewayPairingClaimer
+import com.caconnection.transport.GatewayHealthStore
 import com.caconnection.transport.GatewayPairingException
 import com.caconnection.transport.PairingFailure
 import com.caconnection.ui.UiPrivacy
@@ -1155,6 +1156,10 @@ class MainActivity : AppCompatActivity() {
             .filter { it.payloadType == "DEVICE_STATE" }
             .maxOfOrNull { it.createdAt } ?: 0L
 
+        // Per-link last success times, persisted outside the process so a
+        // killed gateway still shows what actually worked before it died.
+        val linkHealth = GatewayHealthStore.snapshot(this)
+
         return listOf(
             HealthGroup(
                 getString(R.string.health_group_passive),
@@ -1167,6 +1172,35 @@ class MainActivity : AppCompatActivity() {
             HealthGroup(
                 getString(R.string.health_group_environment),
                 listOf(battery, autoStart)
+            ),
+            HealthGroup(
+                getString(R.string.health_group_links),
+                listOf(
+                    timestampRow(
+                        getString(R.string.health_last_stream_connect),
+                        linkHealth.lastStreamConnectedAt
+                    ),
+                    timestampRow(
+                        getString(R.string.health_last_stream_heartbeat),
+                        linkHealth.lastStreamHeartbeatAt
+                    ),
+                    timestampRow(
+                        getString(R.string.health_last_listener_connect),
+                        linkHealth.lastNotificationListenerConnectedAt
+                    ),
+                    timestampRow(
+                        getString(R.string.health_last_notification_observed),
+                        linkHealth.lastNotificationObservedAt
+                    ),
+                    timestampRow(
+                        getString(R.string.health_last_outbox_drain),
+                        linkHealth.lastOutboxDrainSucceededAt
+                    ),
+                    timestampRow(
+                        getString(R.string.health_last_network_available),
+                        linkHealth.lastNetworkAvailableAt
+                    )
+                )
             ),
             HealthGroup(
                 getString(R.string.health_group_recent),
@@ -1492,6 +1526,55 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildTechnicalReport(): String = buildString {
         append(TelephonyDiagnostics(this@MainActivity).report())
+        appendLine()
+        appendLine("GATEWAY HEALTH")
+        val linkHealth = GatewayHealthStore.snapshot(this@MainActivity)
+        fun healthTime(time: Long): String =
+            if (time > 0L) formatTime(time) else "(never)"
+        appendLine("process started: ${healthTime(linkHealth.processStartedAt)}")
+        appendLine("foreground service started: ${healthTime(linkHealth.foregroundServiceStartedAt)}")
+        appendLine("last watchdog tick: ${healthTime(linkHealth.lastWatchdogTickAt)}")
+        appendLine("last watchdog recovery: ${healthTime(linkHealth.lastWatchdogRecoveryAt)}")
+        appendLine("last network available: ${healthTime(linkHealth.lastNetworkAvailableAt)}")
+        appendLine("last stream connect: ${healthTime(linkHealth.lastStreamConnectedAt)}")
+        appendLine("last stream heartbeat: ${healthTime(linkHealth.lastStreamHeartbeatAt)}")
+        appendLine("last stream disconnect: ${healthTime(linkHealth.lastStreamDisconnectedAt)}")
+        appendLine(
+            "last notification listener connect: " +
+                healthTime(linkHealth.lastNotificationListenerConnectedAt)
+        )
+        appendLine(
+            "last notification listener disconnect: " +
+                healthTime(linkHealth.lastNotificationListenerDisconnectedAt)
+        )
+        appendLine("last notification observed: ${healthTime(linkHealth.lastNotificationObservedAt)}")
+        appendLine(
+            "last notification rebind request: " +
+                healthTime(linkHealth.lastNotificationRebindRequestedAt)
+        )
+        appendLine("notification rebind attempts: ${linkHealth.notificationRebindAttempts}")
+        appendLine(
+            "notification rebind pending until: " +
+                healthTime(linkHealth.notificationRebindPendingUntil)
+        )
+        appendLine(
+            "last notification rebind reason: " +
+                linkHealth.lastNotificationRebindReason.ifBlank { "(none)" }
+        )
+        appendLine("last outbox drain started: ${healthTime(linkHealth.lastOutboxDrainStartedAt)}")
+        appendLine(
+            "last outbox drain succeeded: " +
+                healthTime(linkHealth.lastOutboxDrainSucceededAt)
+        )
+        appendLine("last outbox drain failed: ${healthTime(linkHealth.lastOutboxDrainFailedAt)}")
+        val outboxSchedule = OutboxScheduler.snapshot(this@MainActivity)
+        appendLine("next outbox wake: ${healthTime(outboxSchedule.nextWakeAt)}")
+        appendLine("last outbox scheduled: ${healthTime(outboxSchedule.lastScheduledAt)}")
+        appendLine(
+            "last outbox schedule source: " +
+                outboxSchedule.lastScheduleSource.ifBlank { "(none)" }
+        )
+        appendLine("last outbox alarm fired: ${healthTime(outboxSchedule.lastAlarmFiredAt)}")
         appendLine()
         appendLine("TRANSPORT")
         val transport = GatewayTransportConfig.load(this@MainActivity)

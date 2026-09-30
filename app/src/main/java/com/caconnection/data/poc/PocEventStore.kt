@@ -6,6 +6,7 @@ import android.content.Context
 import android.telephony.SmsManager
 import android.util.Log
 import com.caconnection.telephony.inbound.DefaultSmsProviderWriter
+import com.caconnection.telephony.subscription.SubscriptionRepository
 import com.caconnection.worker.OutboxScheduler
 import java.util.concurrent.Executors
 
@@ -30,6 +31,55 @@ class PocEventStore private constructor(private val context: Context) {
             dao.insertIncoming(event)
             notifyChanged()
             onComplete?.invoke()
+        }
+    }
+
+    /**
+     * Best-effort metadata repair for SMS rows persisted while the telephony
+     * subscription service was temporarily unavailable. Attribution is only
+     * automatic when exactly one active subscription exists; dual-SIM
+     * ambiguity is intentionally left unresolved rather than guessed.
+     */
+    fun reconcileUnresolvedIncomingMetadata(source: String) {
+        executor.execute {
+            runCatching {
+                val subscriptions = SubscriptionRepository(context).getActiveSubscriptions()
+                if (subscriptions.size != 1) {
+                    Log.i(
+                        TAG,
+                        "Incoming SIM enrichment skipped source=$source " +
+                            "activeSubscriptions=${subscriptions.size}"
+                    )
+                    return@runCatching
+                }
+                val subscription = subscriptions.single()
+                var enriched = 0
+                database.runInTransaction {
+                    dao.getUnresolvedPendingIncoming(50).forEach { event ->
+                        val outbox = dao.findIncomingOutbox(event.eventId) ?: return@forEach
+                        if (
+                            outbox.status != OutboxStatus.PENDING.name &&
+                            outbox.status != OutboxStatus.RETRY.name
+                        ) return@forEach
+                        event.resolvedSubscriptionId = subscription.subscriptionId
+                        event.resolvedSlotIndex = subscription.slotIndex
+                        event.resolutionMethod = "SINGLE_ACTIVE_SUBSCRIPTION_REPAIR"
+                        event.resolutionConfidence = "MEDIUM"
+                        event.resolutionNotes = "Repaired after telephony subscription recovery"
+                        dao.insertIncoming(event)
+                        OutboxHelper.applyIncomingEnrichment(outbox, event)
+                        dao.updateOutbox(outbox)
+                        enriched += 1
+                    }
+                }
+                if (enriched > 0) {
+                    Log.i(TAG, "Incoming SIM metadata enriched source=$source count=$enriched")
+                    OutboxScheduler.enqueueRecoveryNow(context, "sms_metadata_enriched")
+                    notifyChanged()
+                }
+            }.onFailure { error ->
+                Log.e(TAG, "Incoming SIM metadata enrichment failed source=$source", error)
+            }
         }
     }
 

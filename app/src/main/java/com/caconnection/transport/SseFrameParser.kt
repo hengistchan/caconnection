@@ -7,7 +7,9 @@ package com.caconnection.transport
  * comment/heartbeat lines. One [Event] per blank-line-terminated frame;
  * data is joined across `data:` lines per the SSE spec.
  */
-class SseFrameParser {
+class SseFrameParser(
+    private val onHeartbeat: () -> Unit = {}
+) {
     data class Event(val event: String?, val data: String)
 
     private val dataLines = mutableListOf<String>()
@@ -21,7 +23,10 @@ class SseFrameParser {
     fun onLine(line: String): Event? {
         val trimmed = line.removeSuffix("\r")
         if (trimmed.isEmpty()) return flush()
-        if (trimmed.startsWith(":")) return null
+        if (trimmed.startsWith(":")) {
+            onHeartbeat()
+            return null
+        }
         when {
             trimmed.startsWith("event:") ->
                 eventName = trimmed.removePrefix("event:").trim()

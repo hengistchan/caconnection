@@ -145,6 +145,10 @@
             android:name=".worker.OutboxAlarmReceiver"
             android:exported="false" />
 
+        <receiver
+            android:name=".worker.GatewayWatchdogReceiver"
+            android:exported="false" />
+
         <service
             android:name=".telephony.smsrole.RespondViaMessageService"
             android:exported="true"

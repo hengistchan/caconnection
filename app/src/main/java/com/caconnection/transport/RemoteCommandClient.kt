@@ -33,7 +33,10 @@ sealed class RemoteCommandClaimResult {
         val reason: String
     )
 
-    data class RetryableFailure(val retryAfterMillis: Long? = null) :
+    data class RetryableFailure(
+        val retryAfterMillis: Long? = null,
+        val statusCode: Int? = null
+    ) :
         RemoteCommandClaimResult()
 
     data class PermanentFailure(val statusCode: Int) :
@@ -97,7 +100,8 @@ class RemoteCommandClient(
                     response.statusCode == 429 ||
                     response.statusCode >= 500 ->
                     RemoteCommandClaimResult.RetryableFailure(
-                        response.retryAfterMillis
+                        response.retryAfterMillis,
+                        response.statusCode
                     )
                 else -> RemoteCommandClaimResult.PermanentFailure(
                     response.statusCode

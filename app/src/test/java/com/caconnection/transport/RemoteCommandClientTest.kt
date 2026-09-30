@@ -81,7 +81,7 @@ class RemoteCommandClientTest {
         ).claim()
 
         assertEquals(
-            RemoteCommandClaimResult.RetryableFailure(5_000L),
+            RemoteCommandClaimResult.RetryableFailure(5_000L, 429),
             retry
         )
         // A malformed entry rejects exactly that command — the claim itself

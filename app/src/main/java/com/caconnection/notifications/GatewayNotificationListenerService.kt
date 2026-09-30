@@ -4,17 +4,21 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.util.Log
 import com.caconnection.data.poc.PocEventStore
+import com.caconnection.transport.GatewayHealthStore
 
 class GatewayNotificationListenerService : NotificationListenerService() {
     private val lifecycleGate = NotificationLifecycleGate()
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        Log.i(TAG, "Notification listener connected")
+        GatewayHealthStore.markNotificationListenerConnected(this)
+        Log.i(TAG, "Notification listener connected and ready")
     }
 
     override fun onListenerDisconnected() {
-        Log.w(TAG, "Notification listener disconnected")
+        GatewayHealthStore.markNotificationListenerDisconnected(this)
+        Log.w(TAG, "Notification listener disconnected; requesting rebind")
+        NotificationAccess.requestRebindIfEnabled(this, "listener_disconnected")
         super.onListenerDisconnected()
     }
 
@@ -36,6 +40,7 @@ class GatewayNotificationListenerService : NotificationListenerService() {
         removalReason: Int? = null
     ) {
         sbn ?: return
+        GatewayHealthStore.markNotificationObserved(this)
         if (!NotificationAllowlist.isAllowed(this, sbn.packageName)) return
         if (eventType == EVENT_POSTED &&
             !NotificationCapturePolicy.isUserFacing(sbn.notification.flags)

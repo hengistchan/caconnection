@@ -1,5 +1,6 @@
 package com.caconnection.transport
 
+import android.util.Log
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -94,25 +95,38 @@ class ConnectionDiagnostics(
         )
     }
 ) {
+    private companion object {
+        const val TAG = "ConnectionDiagnostics"
+    }
+
     suspend fun run(settings: GatewayTransportSettings): ConnectionDiagnosticReport {
         val steps = mutableListOf<DiagnosticStep>()
         fun execute(stage: DiagnosticStage, action: () -> String): Boolean {
             val started = nowNanos()
             return try {
                 val detail = action()
+                val durationMillis = (nowNanos() - started) / 1_000_000
                 steps += DiagnosticStep(
                     stage,
                     true,
-                    (nowNanos() - started) / 1_000_000,
+                    durationMillis,
                     detail
                 )
+                Log.i(TAG, "Diagnostic stage=$stage passed durationMs=$durationMillis detail=$detail")
                 true
             } catch (error: Exception) {
+                val durationMillis = (nowNanos() - started) / 1_000_000
+                val detail = diagnosticErrorDetail(error)
                 steps += DiagnosticStep(
                     stage,
                     false,
-                    (nowNanos() - started) / 1_000_000,
-                    error.javaClass.simpleName
+                    durationMillis,
+                    detail
+                )
+                Log.w(
+                    TAG,
+                    "Diagnostic stage=$stage failed durationMs=$durationMillis detail=$detail",
+                    error
                 )
                 false
             }
@@ -125,7 +139,8 @@ class ConnectionDiagnostics(
                     settings.sharedSecretBase64,
                     settings.certificatePinSha256Base64
                 )
-                require(settings.enabled && settings.configured)
+                check(settings.enabled) { "Gateway is disabled" }
+                check(settings.configured) { "Gateway configuration is incomplete" }
                 "valid"
             }
         ) return ConnectionDiagnosticReport(steps)
@@ -149,13 +164,19 @@ class ConnectionDiagnostics(
             }
         ) return ConnectionDiagnosticReport(steps)
         if (!execute(DiagnosticStage.HEALTH) {
-                require(getStatus("${settings.endpoint}/health", settings.certificatePinSha256Base64) == 200)
-                "HTTP 200"
+                val status = getStatus(
+                    "${settings.endpoint}/health",
+                    settings.certificatePinSha256Base64
+                )
+                checkHttpStatus(status)
             }
         ) return ConnectionDiagnosticReport(steps)
         if (!execute(DiagnosticStage.READY) {
-                require(getStatus("${settings.endpoint}/ready", settings.certificatePinSha256Base64) == 200)
-                "HTTP 200"
+                val status = getStatus(
+                    "${settings.endpoint}/ready",
+                    settings.certificatePinSha256Base64
+                )
+                checkHttpStatus(status)
             }
         ) return ConnectionDiagnosticReport(steps)
 
@@ -175,4 +196,22 @@ class ConnectionDiagnostics(
         )
         return ConnectionDiagnosticReport(steps)
     }
+
+    private fun checkHttpStatus(status: Int): String {
+        if (status != 200) throw DiagnosticHttpStatusException(status)
+        return "HTTP 200"
+    }
+
+    private fun diagnosticErrorDetail(error: Exception): String {
+        if (error is DiagnosticHttpStatusException) return "HTTP ${error.statusCode}"
+        val message = error.message.orEmpty().trim()
+        return if (message.isBlank()) {
+            error.javaClass.simpleName
+        } else {
+            "${error.javaClass.simpleName}: $message"
+        }
+    }
 }
+
+private class DiagnosticHttpStatusException(val statusCode: Int) :
+    Exception("HTTP $statusCode")

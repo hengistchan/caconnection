@@ -21,10 +21,12 @@ class SseFrameParserTest {
 
     @Test
     fun heartbeatsProduceNoEvents() {
-        val parser = SseFrameParser()
+        var heartbeats = 0
+        val parser = SseFrameParser { heartbeats += 1 }
 
         assertNull(parser.onLine(": ping"))
         assertNull(parser.onLine(""))
+        assertEquals(1, heartbeats)
     }
 
     @Test

@@ -121,6 +121,24 @@ object GatewayTransportFactory {
                 settings = settings,
                 resultObserver = { result ->
                     ConnectionStateStore.record(context.applicationContext, result)
+                    if (
+                        result is TransportResult.RetryableFailure &&
+                        result.error == "HTTP 429"
+                    ) {
+                        GatewayRateLimitStore.recordRateLimit(
+                            context = context.applicationContext,
+                            source = "outbox",
+                            retryAfterMillis = result.retryAfterMillis
+                        )
+                    } else if (
+                        result is TransportResult.RetryableFailure &&
+                        result.error.startsWith("Transport exception:")
+                    ) {
+                        GatewayRateLimitStore.recordTransientFailure(
+                            context = context.applicationContext,
+                            source = "outbox-transport"
+                        )
+                    }
                 }
             )
         } else {

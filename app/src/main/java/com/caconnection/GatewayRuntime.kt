@@ -7,8 +7,10 @@ import com.caconnection.telephony.call.CallStateMonitor
 import com.caconnection.telephony.inbound.RuntimeSmsReceiverFallback
 import com.caconnection.telephony.inbound.SmsSpoolRecovery
 import com.caconnection.telephony.outbound.SmsGatewaySender
+import com.caconnection.data.poc.PocEventStore
 import com.caconnection.transport.DeviceStateReporter
 import com.caconnection.worker.DeviceStateScheduler
+import com.caconnection.worker.GatewayWatchdogScheduler
 import com.caconnection.worker.NetworkRecoveryMonitor
 import com.caconnection.worker.OutboxScheduler
 import com.caconnection.worker.RemoteCommandScheduler
@@ -18,11 +20,14 @@ object GatewayRuntime {
         val applicationContext = context.applicationContext
         GatewayForegroundService.start(applicationContext)
         SmsSpoolRecovery.recover(applicationContext)
+        PocEventStore.get(applicationContext)
+            .reconcileUnresolvedIncomingMetadata("startup")
         SmsGatewaySender(applicationContext).recoverInterrupted()
         OutboxScheduler.reconcileLegacyWork(applicationContext)
         NotificationAllowlist.ensureRecommendedDefaults(applicationContext)
         DeviceStateReporter.enqueue(applicationContext)
         DeviceStateScheduler.schedule(applicationContext)
+        GatewayWatchdogScheduler.schedule(applicationContext)
         RemoteCommandScheduler.enqueueNow(applicationContext)
         RuntimeSmsReceiverFallback.start(applicationContext)
         CallStateMonitor.start(applicationContext)

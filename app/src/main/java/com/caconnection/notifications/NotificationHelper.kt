@@ -19,6 +19,7 @@ object NotificationHelper {
     private const val CHANNEL_ID = "incoming_sms_poc"
     private const val CONNECTION_ALERT_CHANNEL_ID = "gateway_connection_alert"
     private const val CONNECTION_ALERT_NOTIFICATION_ID = 1002
+    private const val OUTBOX_ALERT_NOTIFICATION_ID = 1003
     const val FOREGROUND_CHANNEL_ID = "gateway_foreground"
 
     fun createForegroundChannel(context: Context) {
@@ -101,6 +102,57 @@ object NotificationHelper {
 
     fun cancelConnectionAlert(context: Context) {
         NotificationManagerCompat.from(context).cancel(CONNECTION_ALERT_NOTIFICATION_ID)
+    }
+
+    /**
+     * Critical outbox backlog alert. It uses its own notification id so it
+     * never fights with [notifyConnectionAlert] cancelling itself when the
+     * transport recovers while the queue is still stuck.
+     */
+    fun notifyOutboxBacklogAlert(
+        context: Context,
+        reconnectIntent: PendingIntent,
+        openDiagnosticsIntent: PendingIntent,
+        pendingCount: Int,
+        oldestAgeMinutes: Long
+    ) {
+        createConnectionAlertChannel(context)
+        if (!canPostNotifications(context)) return
+        val text = context.getString(
+            R.string.outbox_alert_text,
+            pendingCount,
+            oldestAgeMinutes.coerceAtLeast(1L)
+        )
+        val notification = NotificationCompat.Builder(context, CONNECTION_ALERT_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.outbox_alert_title))
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setContentIntent(openDiagnosticsIntent)
+            .addAction(
+                0,
+                context.getString(R.string.connection_alert_reconnect),
+                reconnectIntent
+            )
+            .addAction(
+                0,
+                context.getString(R.string.connection_alert_diagnostics),
+                openDiagnosticsIntent
+            )
+            .setAutoCancel(false)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ERROR)
+            .build()
+        try {
+            NotificationManagerCompat.from(context)
+                .notify(OUTBOX_ALERT_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // Permission can be revoked between the explicit check and notify().
+        }
+    }
+
+    fun cancelOutboxBacklogAlert(context: Context) {
+        NotificationManagerCompat.from(context).cancel(OUTBOX_ALERT_NOTIFICATION_ID)
     }
 
     fun notifyIncoming(context: Context, event: IncomingSmsEventEntity) {

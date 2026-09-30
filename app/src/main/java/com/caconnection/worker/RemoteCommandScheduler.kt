@@ -112,7 +112,7 @@ object RemoteCommandScheduler {
         )
         .setBackoffCriteria(
             BackoffPolicy.EXPONENTIAL,
-            5,
+            10,
             TimeUnit.SECONDS
         )
         .build()

@@ -84,6 +84,13 @@
     <string name="health_group_active">Active capability · needs the process alive</string>
     <string name="health_group_environment">Environment</string>
     <string name="health_group_recent">Recent activity</string>
+    <string name="health_group_links">Link health · last success</string>
+    <string name="health_last_stream_connect">Last command stream connect</string>
+    <string name="health_last_stream_heartbeat">Last command stream heartbeat</string>
+    <string name="health_last_listener_connect">Last notification listener connect</string>
+    <string name="health_last_notification_observed">Last notification observed</string>
+    <string name="health_last_outbox_drain">Last outbox drain</string>
+    <string name="health_last_network_available">Last network available</string>
     <string name="health_sms_receiving">SMS receiving</string>
     <string name="health_call_monitoring">Call monitoring</string>
     <string name="health_notification_relay">Notification relay</string>
@@ -266,6 +273,8 @@
     <string name="connection_alert_text">The phone has repeatedly failed to reach the gateway. SMS remains queued locally; tap to diagnose or reconnect.</string>
     <string name="connection_alert_reconnect">Reconnect</string>
     <string name="connection_alert_diagnostics">Diagnostics</string>
+    <string name="outbox_alert_title">Messages are stuck in the queue</string>
+    <string name="outbox_alert_text">%1$d message(s) have been waiting over %2$d minutes to reach the gateway. Nothing is lost — tap to diagnose or reconnect.</string>
     <string name="dashboard">Dashboard</string>
     <string name="send">Send</string>
     <string name="diagnostics">Diagnostics</string>

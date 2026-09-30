@@ -320,6 +320,11 @@ function registerConcurrencyLimit(app: FastifyInstance, maximum: number): void {
   let active = 0;
   const admitted = new Set<string>();
   app.addHook('onRequest', async (request, reply) => {
+    // The authenticated command SSE is intentionally long-lived. Counting it
+    // against the short-request ceiling can permanently consume the only slot
+    // when max_concurrent_requests=1, causing event ingestion and command
+    // claims to receive HTTP 429 until the stream disconnects.
+    if (isLongLivedRequest(request)) return;
     if (active >= maximum) {
       throw new RateLimitError(1_000);
     }
@@ -332,4 +337,9 @@ function registerConcurrencyLimit(app: FastifyInstance, maximum: number): void {
   };
   app.addHook('onResponse', async request => release(request));
   app.addHook('onError', async request => release(request));
+}
+
+export function isLongLivedRequest(request: FastifyRequest): boolean {
+  return request.method === 'POST'
+    && request.routeOptions.url === '/v1/device-commands/stream';
 }

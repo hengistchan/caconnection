@@ -9,6 +9,8 @@ import com.caconnection.data.poc.PocEventChangeNotifier
 import com.caconnection.data.poc.PocDatabase
 import com.caconnection.data.poc.OutboxStatus
 import com.caconnection.transport.GatewayTransportFactory
+import com.caconnection.transport.GatewayHealthStore
+import com.caconnection.transport.GatewayRateLimitStore
 import com.caconnection.transport.Transport
 import kotlinx.coroutines.CancellationException
 import kotlin.math.max
@@ -30,7 +32,22 @@ class OutboxWorker(
 
     override suspend fun doWork(): Result {
         if (inputData.getBoolean(KEY_RETRY_WAKE, false)) {
-            OutboxScheduler.enqueueNow(applicationContext)
+            Log.i(TAG, "Retry wake fired; handing off to immediate drain")
+            OutboxScheduler.markRetryWakeConsumed(applicationContext)
+            OutboxScheduler.enqueueRecoveryNow(applicationContext, "retry_wake")
+            return Result.success()
+        }
+        val gateDelayMs = GatewayRateLimitStore.acquireRequestSlot(
+            applicationContext,
+            "outbox"
+        )
+        if (gateDelayMs > 0L) {
+            Log.w(
+                TAG,
+                "Skipping outbox network attempt while Gateway gate is closed " +
+                    "remainingMs=$gateDelayMs source=${GatewayRateLimitStore.lastSource(applicationContext)}"
+            )
+            OutboxScheduler.scheduleRetryWake(applicationContext, gateDelayMs)
             return Result.success()
         }
 
@@ -53,6 +70,13 @@ class OutboxWorker(
         var failed = 0
         return try {
             val startedAt = System.currentTimeMillis()
+            GatewayHealthStore.markOutboxDrainStarted(applicationContext, startedAt)
+            val oldestAt = dao.getOldestActiveOutboxCreatedAt()
+            Log.i(
+                TAG,
+                "Outbox drain started pending=${dao.countActiveOutboxEvents()} " +
+                    "oldestAgeMs=${oldestAt?.let { startedAt - it } ?: 0L}"
+            )
             recoveredStale = dao.recoverStaleInProgress(
                 startedAt - IN_PROGRESS_LEASE_MS,
                 startedAt
@@ -71,19 +95,35 @@ class OutboxWorker(
                 if (ready.isEmpty()) break
 
                 var claimedInBatch = 0
-                ready.forEach { event ->
+                var retryableFailureInBatch = false
+                for (event in ready) {
                     if (dao.claimReadyOutbox(event.eventId, System.currentTimeMillis()) == 1) {
                         claimedInBatch += 1
                         processed += 1
                         when (processor.process(event, dao::updateOutbox)) {
                             OutboxStatus.SUCCESS -> succeeded += 1
-                            OutboxStatus.RETRY -> retrying += 1
+                            OutboxStatus.RETRY -> {
+                                retrying += 1
+                                retryableFailureInBatch = true
+                            }
                             OutboxStatus.FAILED -> failed += 1
                             else -> Unit
                         }
                     }
+                    // A retryable transport failure (especially HTTP 429)
+                    // applies to the shared Gateway path, not just this row.
+                    // Stop the batch immediately so the remaining durable
+                    // rows do not amplify the outage or refresh rate limits.
+                    if (retryableFailureInBatch) {
+                        Log.w(
+                            TAG,
+                            "Stopping outbox batch after retryable failure " +
+                                "processed=$processed remaining=${ready.size - claimedInBatch}"
+                        )
+                        break
+                    }
                 }
-                if (claimedInBatch == 0) break
+                if (claimedInBatch == 0 || retryableFailureInBatch) break
             }
 
             scheduleRemainingWork(dao.getEarliestScheduledOutboxAt())
@@ -99,10 +139,17 @@ class OutboxWorker(
                     "retry=$retrying failed=$failed recoveredStale=$recoveredStale " +
                     "recoveredLegacy=$recoveredLegacy"
             )
+            // A worker that found no due rows, or only produced retry/failure
+            // outcomes, is not transport-success evidence. Keep the previous
+            // timestamp rather than making the diagnostics look healthy.
+            if (succeeded > 0) {
+                GatewayHealthStore.markOutboxDrainSucceeded(applicationContext)
+            }
             Result.success()
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Exception) {
+            GatewayHealthStore.markOutboxDrainFailed(applicationContext)
             Log.e(TAG, "Outbox drain failed", error)
             Result.retry()
         } finally {
@@ -119,9 +166,20 @@ class OutboxWorker(
     }
 
     private fun scheduleRemainingWork(nextAttemptAt: Long?) {
-        nextAttemptAt ?: return
-        val delay = max(0L, nextAttemptAt - System.currentTimeMillis())
-        OutboxScheduler.scheduleRetryWake(applicationContext, delay)
+        if (nextAttemptAt == null) {
+            OutboxScheduler.clearScheduledWake(applicationContext)
+            return
+        }
+        val now = System.currentTimeMillis()
+        val rowDelay = max(0L, nextAttemptAt - now)
+        val sharedDelay = GatewayRateLimitStore.remainingMillis(applicationContext, now)
+        val delay = max(rowDelay, sharedDelay)
+        Log.i(
+            TAG,
+            "Scheduling remaining outbox work rowDelayMs=$rowDelay " +
+                "sharedDelayMs=$sharedDelay effectiveDelayMs=$delay"
+        )
+        OutboxScheduler.scheduleRetryWake(applicationContext, delay, "remaining_work")
     }
 }
 

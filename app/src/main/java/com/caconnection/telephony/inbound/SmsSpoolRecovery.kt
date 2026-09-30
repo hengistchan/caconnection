@@ -23,9 +23,16 @@ object SmsSpoolRecovery {
                 Log.e(TAG, "Unable to load SMS spool", error)
                 return@execute
             }
-            if (entries.isEmpty()) return@execute
+            if (entries.isEmpty()) {
+                Log.d(TAG, "SMS spool recovery found no pending entries")
+                return@execute
+            }
 
             val holdsSmsRole = SmsRoleController(applicationContext).isRoleHeld()
+            Log.w(
+                TAG,
+                "Recovering SMS spool entries count=${entries.size} defaultRole=$holdsSmsRole"
+            )
             entries.forEach { spooled ->
                 val event = spooled.event
                 // Replays must reuse the key stored at stage time. Deriving it
@@ -54,6 +61,11 @@ object SmsSpoolRecovery {
                     idempotencyKey = idempotencyKey,
                     scheduleUpload = true,
                     onComplete = { inserted ->
+                        Log.i(
+                            TAG,
+                            "Recovered SMS spool entry inserted=$inserted " +
+                                "providerStatus=${event.providerWriteStatus}"
+                        )
                         if (!inserted) {
                             // The durable copy already exists — typically the
                             // degraded synchronous persist from the broadcast

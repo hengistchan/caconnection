@@ -84,6 +84,13 @@
     <string name="health_group_active">主动能力 · 依赖进程存活</string>
     <string name="health_group_environment">运行环境</string>
     <string name="health_group_recent">最近活动</string>
+    <string name="health_group_links">链路健康 · 最近成功</string>
+    <string name="health_last_stream_connect">最近指令流连接</string>
+    <string name="health_last_stream_heartbeat">最近指令流心跳</string>
+    <string name="health_last_listener_connect">最近通知监听连接</string>
+    <string name="health_last_notification_observed">最近通知到达</string>
+    <string name="health_last_outbox_drain">最近队列排空</string>
+    <string name="health_last_network_available">最近网络可用</string>
     <string name="health_sms_receiving">短信接收</string>
     <string name="health_call_monitoring">来电监测</string>
     <string name="health_notification_relay">通知转发</string>
@@ -266,6 +273,8 @@
     <string name="connection_alert_text">手机已连续多次无法连接网关。短信仍保存在本地队列中；点击可诊断或重连。</string>
     <string name="connection_alert_reconnect">立即重连</string>
     <string name="connection_alert_diagnostics">打开诊断</string>
+    <string name="outbox_alert_title">消息积压未发送</string>
+    <string name="outbox_alert_text">已有 %1$d 条消息等待发送超过 %2$d 分钟。消息仍保存在本地；点击可诊断或重连。</string>
     <string name="dashboard">概览</string>
     <string name="send">发送</string>
     <string name="diagnostics">诊断</string>

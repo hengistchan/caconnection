@@ -1,5 +1,6 @@
 package com.caconnection.transport
 
+import android.content.Context
 import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -30,7 +31,13 @@ object CommandStreamClient {
     private val lock = Any()
     private var thread: Thread? = null
     private var activeConnection: HttpURLConnection? = null
+    private var activeContext: Context? = null
     private var activeSettings: GatewayTransportSettings? = null
+    private var activeNow: (() -> Long)? = null
+    private var activeNonce: (() -> String)? = null
+    private var activeConnectionCallback: ((Boolean) -> Unit)? = null
+    private var activeCommandCallback: (() -> Unit)? = null
+    private var activeHeartbeatCallback: (() -> Unit)? = null
 
     /**
      * Bumped on every start/stop. A loop thread exits as soon as it notices
@@ -45,11 +52,13 @@ object CommandStreamClient {
      * and reconnect under the new ones.
      */
     fun start(
+        context: Context,
         settings: GatewayTransportSettings,
         now: () -> Long = System::currentTimeMillis,
         nonce: () -> String = { UUID.randomUUID().toString() },
         onConnectionChanged: (Boolean) -> Unit = {},
-        onCommandQueued: () -> Unit
+        onCommandQueued: () -> Unit,
+        onHeartbeat: () -> Unit = {}
     ) {
         val stale: HttpURLConnection?
         val myGeneration: Int
@@ -59,16 +68,24 @@ object CommandStreamClient {
             myGeneration = generation
             stale = activeConnection.also { activeConnection = null }
             activeSettings = settings
+            activeContext = context.applicationContext
+            activeNow = now
+            activeNonce = nonce
+            activeConnectionCallback = onConnectionChanged
+            activeCommandCallback = onCommandQueued
+            activeHeartbeatCallback = onHeartbeat
             thread?.interrupt()
             thread = Thread(
                 {
                     runLoop(
                         myGeneration,
+                        context.applicationContext,
                         settings,
                         now,
                         nonce,
                         onConnectionChanged,
-                        onCommandQueued
+                        onCommandQueued,
+                        onHeartbeat
                     )
                 },
                 "command-stream"
@@ -86,6 +103,12 @@ object CommandStreamClient {
             thread?.interrupt()
             thread = null
             activeSettings = null
+            activeContext = null
+            activeNow = null
+            activeNonce = null
+            activeConnectionCallback = null
+            activeCommandCallback = null
+            activeHeartbeatCallback = null
             activeConnection.also { activeConnection = null }
         }
         // Closing the socket is what unblocks the reader thread.
@@ -93,26 +116,77 @@ object CommandStreamClient {
             .onFailure { Log.w(TAG, "Unable to tear down command stream", it) }
     }
 
+    fun forceReconnect(reason: String) {
+        synchronized(lock) {
+            val settings = activeSettings ?: return
+            val session = ReconnectSession(
+                context = activeContext ?: return,
+                settings = settings,
+                now = activeNow ?: System::currentTimeMillis,
+                nonce = activeNonce ?: { UUID.randomUUID().toString() },
+                onConnectionChanged = activeConnectionCallback ?: {},
+                onCommandQueued = activeCommandCallback ?: {},
+                onHeartbeat = activeHeartbeatCallback ?: {}
+            )
+            // Keep snapshot, stop and restart under the same re-entrant lock.
+            // Otherwise simultaneous network/watchdog recovery can stop the
+            // connection that another caller has just created.
+            Log.w(TAG, "Forcing command stream reconnect reason=$reason")
+            stop()
+            start(
+                context = session.context,
+                settings = session.settings,
+                now = session.now,
+                nonce = session.nonce,
+                onConnectionChanged = session.onConnectionChanged,
+                onCommandQueued = session.onCommandQueued,
+                onHeartbeat = session.onHeartbeat
+            )
+        }
+    }
+
     val isRunning: Boolean
         get() = synchronized(lock) { thread?.isAlive == true }
 
     private fun runLoop(
         myGeneration: Int,
+        context: Context,
         settings: GatewayTransportSettings,
         now: () -> Long,
         nonce: () -> String,
         onConnectionChanged: (Boolean) -> Unit,
-        onCommandQueued: () -> Unit
+        onCommandQueued: () -> Unit,
+        onHeartbeat: () -> Unit
     ) {
         while (isCurrent(myGeneration)) {
+            val gateDelayMs = GatewayRateLimitStore.acquireRequestSlot(
+                context,
+                "command-stream"
+            )
+            if (gateDelayMs > 0L) {
+                Log.w(
+                    TAG,
+                    "Skipping command stream reconnect while Gateway gate is closed " +
+                        "remainingMs=$gateDelayMs source=${GatewayRateLimitStore.lastSource(context)}"
+                )
+                try {
+                    Thread.sleep(gateDelayMs)
+                } catch (interrupted: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+                continue
+            }
             val failure = runCatching {
                 openAndRead(
                     myGeneration,
+                    context,
                     settings,
                     now,
                     nonce,
                     onConnectionChanged,
-                    onCommandQueued
+                    onCommandQueued,
+                    onHeartbeat
                 )
             }.exceptionOrNull()
             if (!isCurrent(myGeneration)) break
@@ -137,11 +211,13 @@ object CommandStreamClient {
      */
     private fun openAndRead(
         myGeneration: Int,
+        context: Context,
         settings: GatewayTransportSettings,
         now: () -> Long,
         nonce: () -> String,
         onConnectionChanged: (Boolean) -> Unit,
-        onCommandQueued: () -> Unit
+        onCommandQueued: () -> Unit,
+        onHeartbeat: () -> Unit
     ) {
         val body = STREAM_TOPIC.toByteArray(Charsets.UTF_8)
         val idempotencyKey = "stream-${UUID.randomUUID()}"
@@ -184,13 +260,30 @@ object CommandStreamClient {
 
             val status = connection.responseCode
             if (status != 200) {
+                if (status == 429) {
+                    val retryAfterMillis = connection.getHeaderField("Retry-After")
+                        ?.trim()
+                        ?.toLongOrNull()
+                        ?.times(1_000L)
+                    GatewayRateLimitStore.recordRateLimit(
+                        context = context,
+                        source = "command-stream",
+                        retryAfterMillis = retryAfterMillis,
+                        now = now()
+                    )
+                }
                 throw IOException("Command stream rejected with HTTP $status")
             }
             CommandStreamState.onConnected(now())
             runCatching { onConnectionChanged(true) }
                 .onFailure { Log.e(TAG, "Command stream connect handler failed", it) }
 
-            val parser = SseFrameParser()
+            val parser = SseFrameParser {
+                val heartbeatAt = now()
+                CommandStreamState.onHeartbeat(heartbeatAt)
+                runCatching { onHeartbeat() }
+                    .onFailure { Log.e(TAG, "Command stream heartbeat handler failed", it) }
+            }
             connection.inputStream.bufferedReader().use { reader ->
                 while (isCurrent(myGeneration)) {
                     val line = reader.readLine() ?: break
@@ -218,4 +311,14 @@ object CommandStreamClient {
     private fun describe(error: Throwable): String =
         "${error.javaClass.simpleName}: ${error.message.orEmpty()}"
             .take(128)
+
+    private data class ReconnectSession(
+        val context: Context,
+        val settings: GatewayTransportSettings,
+        val now: () -> Long,
+        val nonce: () -> String,
+        val onConnectionChanged: (Boolean) -> Unit,
+        val onCommandQueued: () -> Unit,
+        val onHeartbeat: () -> Unit
+    )
 }
